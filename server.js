@@ -703,7 +703,7 @@ class ChatworkBotMain {
           console.log(`ルーム処理完了: ${roomName} (ID: ${roomId})`);
 
           // ルーム間で少し待機（API制限対策）
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 2000)); // <== 2秒待機に変更
 
         } catch (error) {
           console.error(`ルーム ${roomId} (${roomName}) の処理中にエラー:`, error.message);
