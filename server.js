@@ -457,7 +457,7 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-module.exports = app;,
+module.exports = app;
 //   "dependencies": {
 //     "express": "^4.18.2",
 //     "axios": "^1.6.0",
