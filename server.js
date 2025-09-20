@@ -12,6 +12,20 @@ const port = process.env.PORT || 3000;
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
 const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983').split(',');
 
+// Chatwork APIレートリミット制御追加
+const MAX_API_CALLS_PER_10SEC = 10;
+const API_WINDOW_MS = 10000;
+let apiCallTimestamps = [];
+async function apiCallLimiter() {
+  const now = Date.now();
+  apiCallTimestamps = apiCallTimestamps.filter(ts => now - ts < API_WINDOW_MS);
+  if (apiCallTimestamps.length >= MAX_API_CALLS_PER_10SEC) {
+    const waitMs = API_WINDOW_MS - (now - apiCallTimestamps[0]) + 50;
+    await new Promise(res => setTimeout(res, waitMs));
+  }
+  apiCallTimestamps.push(Date.now());
+}
+
 // PostgreSQL接続設定
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -132,6 +146,7 @@ class ChatworkBotUtils {
 
   // 参加している全ルームを取得（キャッシュ付き）
   static async getAllParticipatingRooms() {
+    await apiCallLimiter();
     const cacheKey = 'allRooms';
     const now = Date.now();
 
@@ -177,6 +192,7 @@ class ChatworkBotUtils {
 
   // メッセージ取得
   static async getChatworkMessages(roomId, lastMessageId = null) {
+    await apiCallLimiter();
     try {
       let url = `https://api.chatwork.com/v2/rooms/${roomId}/messages?limit=100`;
       if (lastMessageId) {
@@ -197,6 +213,7 @@ class ChatworkBotUtils {
 
   // メンバー取得
   static async getChatworkMembers(roomId) {
+    await apiCallLimiter();
     try {
       const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/members`, {
         headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
@@ -216,6 +233,7 @@ class ChatworkBotUtils {
 
   // メッセージ送信
   static async sendChatworkMessage(roomId, message) {
+    await apiCallLimiter();
     try {
       await axios.post(`https://api.chatwork.com/v2/rooms/${roomId}/messages`,
         new URLSearchParams({ body: message }),
@@ -371,6 +389,7 @@ class ChatworkBotUtils {
   // Scratchプロジェクト情報取得
   static async getScratchProjectInfo(projectId) {
     try {
+      await apiCallLimiter();
       const response = await axios.get(`https://api.scratch.mit.edu/projects/${projectId}`);
       const data = response.data;
       if (!data || !data.title) {
@@ -703,7 +722,7 @@ class ChatworkBotMain {
           console.log(`ルーム処理完了: ${roomName} (ID: ${roomId})`);
 
           // ルーム間で少し待機（API制限対策）
-          await new Promise(resolve => setTimeout(resolve, 2000)); // <== 2秒待機に変更
+          await new Promise(resolve => setTimeout(resolve, 2000)); // <== 2秒待機
 
         } catch (error) {
           console.error(`ルーム ${roomId} (${roomName}) の処理中にエラー:`, error.message);
