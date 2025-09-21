@@ -1,9 +1,8 @@
-// Chatwork Bot for Render (Node.js with PostgreSQL)
+// Chatwork Bot for Render (WebHook版 - DB不使用)
 
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
-const { Pool } = require('pg');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -11,11 +10,25 @@ const port = process.env.PORT || 3000;
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
 const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983').split(',');
+const LOG_ROOM_ID = process.env.LOG_ROOM_ID || '404646956'; // ログ送信先のルームID
+const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/your-username/your-repo/main/day.json';
+
+// メモリ内データストレージ
+const memoryStorage = {
+  properties: new Map(),
+  lastSentDates: new Map(), // 日付変更通知の最終送信日
+  apiCallTimes: {
+    wikipedia: 0,
+    scratch: 0,
+    yesorno: 0
+  }
+};
 
 // Chatwork APIレートリミット制御
 const MAX_API_CALLS_PER_10SEC = 10;
 const API_WINDOW_MS = 10000;
 let apiCallTimestamps = [];
+
 async function apiCallLimiter() {
   const now = Date.now();
   apiCallTimestamps = apiCallTimestamps.filter(ts => now - ts < API_WINDOW_MS);
@@ -26,61 +39,6 @@ async function apiCallLimiter() {
   apiCallTimestamps.push(Date.now());
 }
 
-// PostgreSQL接続設定
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
-
-// ルーム設定
-const ROOM_CONFIG = {
-  '404646956': { memberSheetName: 'シート1', logSheetName: 'ログ' },
-  '406897783': { memberSheetName: 'サブリスト', logSheetName: 'サブログ' },
-  '391699365': { memberSheetName: '予備リスト', logSheetName: '予備ログ' },
-  '397972033': { memberSheetName: '反省リスト', logSheetName: '反省ログ' },
-  '407676893': { memberSheetName: 'らいとリスト', logSheetName: 'らいとログ'}
-};
-
-// テーブル作成
-async function initializeDatabase() {
-  try {
-    const client = await pool.connect();
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS properties (
-        key VARCHAR(255) PRIMARY KEY,
-        value TEXT
-      );
-      CREATE TABLE IF NOT EXISTS members (
-        room_id VARCHAR(50),
-        account_id VARCHAR(50),
-        name VARCHAR(255),
-        role VARCHAR(50),
-        join_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (room_id, account_id)
-      );
-      CREATE TABLE IF NOT EXISTS logs (
-        id SERIAL PRIMARY KEY,
-        room_id VARCHAR(50),
-        user_name VARCHAR(255),
-        user_id VARCHAR(50),
-        message_body TEXT,
-        message_id VARCHAR(50),
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE TABLE IF NOT EXISTS date_events (
-        id SERIAL PRIMARY KEY,
-        date VARCHAR(50),
-        event TEXT
-      );
-    `);
-    client.release();
-    console.log('データベース初期化完了');
-  } catch (error) {
-    console.error('データベース初期化エラー:', error.message);
-  }
-}
-initializeDatabase();
-
 // Chatwork絵文字のリスト
 const CHATWORK_EMOJI_CODES = [
   "roger", "bow", "cracker", "dance", "clap", "y", "sweat", "blush", "inlove",
@@ -90,88 +48,63 @@ const CHATWORK_EMOJI_CODES = [
 ].map(code => code.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
 const CHATWORK_EMOJI_REGEX = new RegExp(`\\((${CHATWORK_EMOJI_CODES.join('|')})\\)`, 'g');
 
-// API呼び出し制限対策（ルーム一覧はキャッシュ優先）
+// API制限対策
 const API_CACHE = new Map();
 const API_CALL_LIMITS = {
-  rooms: { lastCall: 0, interval: 300000 }, // 5分間隔
-  wikipedia: { lastCall: 0, interval: 60000 },
-  scratch: { lastCall: 0, interval: 30000 },
-  yesorno: { lastCall: 0, interval: 10000 }
+  wikipedia: { interval: 60000 },
+  scratch: { interval: 30000 },
+  yesorno: { interval: 10000 }
 };
-let roomStartIndex = 0;
-const MAX_ROOMS_PER_CYCLE = 2;
 
-// ユーティリティ関数（キャッシュ優先）
+// day.json読み込み関数
+async function loadDayEvents() {
+  try {
+    const response = await axios.get(DAY_JSON_URL);
+    return response.data;
+  } catch (error) {
+    console.error('day.json読み込みエラー:', error.message);
+    return {};
+  }
+}
+
+// 今日のイベント取得（day.json版）
+async function getTodaysEventsFromJson() {
+  try {
+    const dayEvents = await loadDayEvents();
+    const now = new Date();
+    const monthDay = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const day = String(now.getDate()).padStart(2, '0');
+    
+    const events = [];
+    
+    // MM-DD形式のイベントをチェック
+    if (dayEvents[monthDay]) {
+      if (Array.isArray(dayEvents[monthDay])) {
+        events.push(...dayEvents[monthDay]);
+      } else {
+        events.push(dayEvents[monthDay]);
+      }
+    }
+    
+    // DD形式のイベントをチェック
+    if (dayEvents[day]) {
+      if (Array.isArray(dayEvents[day])) {
+        events.push(...dayEvents[day]);
+      } else {
+        events.push(dayEvents[day]);
+      }
+    }
+    
+    return events;
+  } catch (error) {
+    console.error('今日のイベント取得エラー:', error.message);
+    return [];
+  }
+}
+
+// ユーティリティ関数
 class ChatworkBotUtils {
-  static async getProperty(key) {
-    try {
-      const client = await pool.connect();
-      const result = await client.query('SELECT value FROM properties WHERE key = $1', [key]);
-      client.release();
-      return result.rows[0] ? result.rows[0].value : null;
-    } catch (error) {
-      return null;
-    }
-  }
-  static async setProperty(key, value) {
-    try {
-      const client = await pool.connect();
-      await client.query(
-        'INSERT INTO properties (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
-        [key, value]
-      );
-      client.release();
-    } catch (error) {}
-  }
-  static async getAllParticipatingRooms() {
-    await apiCallLimiter();
-    const cacheKey = 'allRooms';
-    const now = Date.now();
-    // キャッシュから取得（有効期間内）
-    if (API_CACHE.has(cacheKey)) {
-      const cachedData = API_CACHE.get(cacheKey);
-      if (now - cachedData.timestamp < API_CALL_LIMITS.rooms.interval) {
-        return cachedData.data;
-      }
-    }
-    // レート制限チェック
-    if (now - API_CALL_LIMITS.rooms.lastCall < API_CALL_LIMITS.rooms.interval) {
-      const cachedData = API_CACHE.get(cacheKey);
-      return cachedData ? cachedData.data : [];
-    }
-    try {
-      const response = await axios.get('https://api.chatwork.com/v2/rooms', {
-        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
-      });
-      const rooms = response.data;
-      API_CACHE.set(cacheKey, { data: rooms, timestamp: now });
-      API_CALL_LIMITS.rooms.lastCall = now;
-      return rooms;
-    } catch (error) {
-      // 429や他エラー時もキャッシュ返す
-      const cachedData = API_CACHE.get(cacheKey);
-      if (cachedData) {
-        return cachedData.data;
-      }
-      return [];
-    }
-  }
-  static isDirectChat(room) {
-    return room.type === 'direct';
-  }
-  static async getChatworkMessages(roomId, lastMessageId = null) {
-    await apiCallLimiter();
-    try {
-      let url = `https://api.chatwork.com/v2/rooms/${roomId}/messages?limit=100`;
-      if (lastMessageId) url += `&since_id=${lastMessageId}`;
-      const response = await axios.get(url, {
-        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
-      });
-      return response.data;
-    } catch (error) {
-      return [];
-    }
-  }
+  
   static async getChatworkMembers(roomId) {
     await apiCallLimiter();
     try {
@@ -181,13 +114,14 @@ class ChatworkBotUtils {
       return response.data.map(member => ({
         account_id: member.account_id,
         name: member.name,
-        role: member.role,
-        icon: member.avatar_image_url || ''
+        role: member.role
       }));
     } catch (error) {
+      console.error(`メンバー取得エラー (${roomId}):`, error.message);
       return [];
     }
   }
+  
   static async sendChatworkMessage(roomId, message) {
     await apiCallLimiter();
     try {
@@ -197,13 +131,26 @@ class ChatworkBotUtils {
       );
       return true;
     } catch (error) {
+      console.error(`メッセージ送信エラー (${roomId}):`, error.message);
       return false;
     }
   }
+
+  // ログをChatworkルームに送信する関数
+  static async sendLogToChatwork(userName, messageBody, roomName = '') {
+    try {
+      const logMessage = `[info][title]${userName}[/title]${messageBody}[/info]`;
+      await this.sendChatworkMessage(LOG_ROOM_ID, logMessage);
+    } catch (error) {
+      console.error('Chatworkログ送信エラー:', error.message);
+    }
+  }
+  
   static countChatworkEmojis(text) {
     const matches = text.match(CHATWORK_EMOJI_REGEX);
     return matches ? matches.length : 0;
   }
+  
   static drawOmikuji(isAdmin) {
     const fortunes = ['大吉', '中吉', '吉', '小吉', 'null', 'undefined'];
     const specialFortune = '超町長調帳朝腸蝶大吉';
@@ -217,32 +164,39 @@ class ChatworkBotUtils {
       return fortunes[index];
     }
   }
+  
   static async getYesOrNoAnswer() {
     const now = Date.now();
-    if (now - API_CALL_LIMITS.yesorno.lastCall < API_CALL_LIMITS.yesorno.interval) {
+    if (now - memoryStorage.apiCallTimes.yesorno < API_CALL_LIMITS.yesorno.interval) {
       const answers = ['yes', 'no'];
       return answers[Math.floor(Math.random() * answers.length)];
     }
     try {
       const response = await axios.get('https://yesno.wtf/api');
-      API_CALL_LIMITS.yesorno.lastCall = now;
+      memoryStorage.apiCallTimes.yesorno = now;
       return response.data.answer || '不明';
     } catch (error) {
       return 'APIエラーにより取得できませんでした。';
     }
   }
+  
   static async getWikipediaSummary(searchTerm) {
     const now = Date.now();
     const cacheKey = `wiki_${searchTerm}`;
+    
+    // キャッシュチェック
     if (API_CACHE.has(cacheKey)) {
       const cachedData = API_CACHE.get(cacheKey);
-      if (now - cachedData.timestamp < 300000) {
+      if (now - cachedData.timestamp < 300000) { // 5分間キャッシュ
         return cachedData.data;
       }
     }
-    if (now - API_CALL_LIMITS.wikipedia.lastCall < API_CALL_LIMITS.wikipedia.interval) {
+    
+    // レート制限チェック
+    if (now - memoryStorage.apiCallTimes.wikipedia < API_CALL_LIMITS.wikipedia.interval) {
       return `「${searchTerm}」の検索は一時的に制限されています。しばらく後に再試行してください。`;
     }
+    
     try {
       const params = new URLSearchParams({
         action: 'query',
@@ -254,7 +208,8 @@ class ChatworkBotUtils {
         titles: searchTerm
       });
       const response = await axios.get(`https://ja.wikipedia.org/w/api.php?${params}`);
-      API_CALL_LIMITS.wikipedia.lastCall = now;
+      memoryStorage.apiCallTimes.wikipedia = now;
+      
       const data = response.data;
       let result;
       if (data.query && data.query.pages) {
@@ -274,20 +229,23 @@ class ChatworkBotUtils {
       } else {
         result = `「${searchTerm}」の検索結果を処理できませんでした。`;
       }
+      
+      // キャッシュに保存
       API_CACHE.set(cacheKey, { data: result, timestamp: now });
       return result;
     } catch (error) {
       return `Wikipedia検索中にエラーが発生しました。「${searchTerm}」`;
     }
   }
+  
   static async getScratchUserStats(username) {
     const now = Date.now();
-    if (now - API_CALL_LIMITS.scratch.lastCall < API_CALL_LIMITS.scratch.interval) {
+    if (now - memoryStorage.apiCallTimes.scratch < API_CALL_LIMITS.scratch.interval) {
       return `「${username}」の情報取得は一時的に制限されています。しばらく後に再試行してください。`;
     }
     try {
       const response = await axios.get(`https://api.scratch.mit.edu/users/${encodeURIComponent(username)}`);
-      API_CALL_LIMITS.scratch.lastCall = now;
+      memoryStorage.apiCallTimes.scratch = now;
       const data = response.data;
       const status = data.profile?.status ?? '情報なし';
       const userLink = `https://scratch.mit.edu/users/${encodeURIComponent(username)}/`;
@@ -299,6 +257,7 @@ class ChatworkBotUtils {
       return `Scratchユーザー情報の取得中に予期せぬエラーが発生しました。`;
     }
   }
+  
   static async getScratchProjectInfo(projectId) {
     try {
       await apiCallLimiter();
@@ -308,78 +267,65 @@ class ChatworkBotUtils {
         return 'プロジェクトが見つかりませんでした。';
       }
       const url = `https://scratch.mit.edu/projects/${projectId}/`;
-      return `[info][title]Scratchプロジェクト情報[/title]タイトル: ${data.title}\n作者: ${data.author.username}\n説明: ${data.description}\nURL: ${url}[/info]`;
+      return `[info][title]Scratchプロジェクト情報[/title]タイトル: ${data.title}\n作者: ${data.author.username}\n説明: ${data.description || '説明なし'}\nURL: ${url}[/info]`;
     } catch (error) {
       return 'Scratchプロジェクト情報の取得中にエラーが発生しました。';
     }
   }
-  static async getTodaysEvents() {
-    try {
-      const now = new Date();
-      const currentYear = now.getFullYear();
-      const currentMonth = now.getMonth() + 1;
-      const currentDay = now.getDate();
-      const todayFormats = [
-        `${currentYear}/${String(currentMonth).padStart(2, '0')}/${String(currentDay).padStart(2, '0')}`,
-        `${String(currentMonth).padStart(2, '0')}/${String(currentDay).padStart(2, '0')}`,
-        `${String(currentDay).padStart(2, '0')}`,
-        `${currentYear}/${currentMonth}/${currentDay}`,
-        `${currentMonth}/${currentDay}`,
-        `${currentDay}`
-      ];
-      const client = await pool.connect();
-      const placeholders = todayFormats.map((_, i) => `$${i+1}`).join(',');
-      const result = await client.query(
-        `SELECT event FROM date_events WHERE date IN (${placeholders})`,
-        todayFormats
-      );
-      client.release();
-      return result.rows.map(row => row.event);
-    } catch (error) {
-      return [];
-    }
-  }
-  static async addDateToList(date, event) {
-    try {
-      const client = await pool.connect();
-      await client.query('INSERT INTO date_events (date, event) VALUES ($1, $2)', [date, event]);
-      client.release();
-    } catch (error) {}
-  }
 }
 
-// メッセージ処理クラス（フル実装）
-class MessageProcessor {
-  static async processMessagesForActions(roomId, currentMembers, isDirectChat, roomName = '') {
+// WebHookメッセージ処理クラス
+class WebHookMessageProcessor {
+  static async processWebHookMessage(webhookData) {
     try {
-      const lastMessageIdKey = `lastProcessedMessageId_${roomId}`;
-      const lastMessageId = await ChatworkBotUtils.getProperty(lastMessageIdKey);
-      const messages = await ChatworkBotUtils.getChatworkMessages(roomId, lastMessageId);
-      if (messages.length === 0) return;
-      for (const message of messages) {
-        if (!message.message_id || !message.account || !message.account.account_id || !message.account.name) continue;
-        // ログ記録（設定があるルームのみ）
-        if (!isDirectChat && ROOM_CONFIG[roomId]) {
-          await this.writeToLog(roomId, message.account.name, message.account.account_id, message.body, message.message_id);
-        }
-        const isSenderAdmin = isDirectChat ? true : this.isUserAdmin(message.account.account_id, currentMembers);
-        const messageBody = message.body.trim();
-        await this.handleCommands(roomId, message, messageBody, isSenderAdmin, isDirectChat, currentMembers);
-        await ChatworkBotUtils.setProperty(lastMessageIdKey, message.message_id);
+      const { room_id: roomId, account, body: messageBody, message_id: messageId } = webhookData;
+      
+      if (!roomId || !account || !messageBody) {
+        console.log('不完全なWebHookデータ:', webhookData);
+        return;
       }
-    } catch (error) {}
-  }
-  static async handleCommands(roomId, message, messageBody, isSenderAdmin, isDirectChat, currentMembers) {
-    const accountId = message.account.account_id;
-    const messageId = message.message_id;
-    if (!isDirectChat && messageBody.includes('[toall]') && !isSenderAdmin) {
-      // 権限変更機能は実装省略
+
+      const accountId = account.account_id;
+      const userName = account.name;
+      const isDirectChat = webhookData.room_type === 'direct';
+
+      console.log(`WebHook処理開始: ルーム${roomId}, ユーザー${userName}, メッセージ: ${messageBody.substring(0, 50)}`);
+
+      // Chatworkルームにログ送信
+      await ChatworkBotUtils.sendLogToChatwork(userName, messageBody);
+
+      // メンバー情報取得（権限チェック用）
+      let currentMembers = [];
+      let isSenderAdmin = true; // ダイレクトチャットでは常にtrue
+      
+      if (!isDirectChat) {
+        currentMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
+        isSenderAdmin = this.isUserAdmin(accountId, currentMembers);
+      }
+
+      // コマンド処理
+      await this.handleCommands(roomId, messageId, accountId, messageBody.trim(), isSenderAdmin, isDirectChat, currentMembers);
+
+    } catch (error) {
+      console.error('WebHookメッセージ処理エラー:', error.message);
     }
+  }
+
+  static async handleCommands(roomId, messageId, accountId, messageBody, isSenderAdmin, isDirectChat, currentMembers) {
+    
+    // [toall] 検知
+    if (!isDirectChat && messageBody.includes('[toall]') && !isSenderAdmin) {
+      console.log(`[toall]を検出した非管理者: ${accountId} in room ${roomId}`);
+    }
+
+    // おみくじ
     if (messageBody === 'おみくじ') {
       const omikujiResult = ChatworkBotUtils.drawOmikuji(isSenderAdmin);
       const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nです！[/info]`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
+
+    // Chatwork絵文字チェック
     if (!isDirectChat && !isSenderAdmin) {
       const emojiCount = ChatworkBotUtils.countChatworkEmojis(messageBody);
       if (emojiCount >= 50) {
@@ -387,14 +333,15 @@ class MessageProcessor {
         await ChatworkBotUtils.sendChatworkMessage(roomId, warningMessage);
       }
     }
-    if (messageBody.startsWith('/day-write ')) {
-      await this.handleDayWriteCommand(roomId, message, messageBody);
-    }
+
+    // /yes-or-no コマンド
     if (messageBody === '/yes-or-no') {
       const answer = await ChatworkBotUtils.getYesOrNoAnswer();
       const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、答えは「${answer}」です！`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
+
+    // /wiki コマンド
     if (messageBody.startsWith('/wiki/')) {
       const searchTerm = messageBody.substring('/wiki/'.length).trim();
       if (searchTerm) {
@@ -403,6 +350,8 @@ class MessageProcessor {
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       }
     }
+
+    // /scratch-user コマンド
     if (messageBody.startsWith('/scratch-user/')) {
       const username = messageBody.substring('/scratch-user/'.length).trim();
       if (username) {
@@ -411,6 +360,8 @@ class MessageProcessor {
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       }
     }
+
+    // /scratch-project コマンド
     if (messageBody.startsWith('/scratch-project/')) {
       const projectId = messageBody.substring('/scratch-project/'.length).trim();
       if (projectId) {
@@ -419,11 +370,13 @@ class MessageProcessor {
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       }
     }
+
+    // /today コマンド（day.json対応）
     if (messageBody === '/today') {
       const now = new Date();
       const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
       let messageContent = `[info][title]今日の情報[/title]今日は${todayFormatted}だよ！`;
-      const events = await ChatworkBotUtils.getTodaysEvents();
+      const events = await getTodaysEventsFromJson();
       if (events.length > 0) {
         events.forEach(event => {
           messageContent += `\n今日は${event}だよ！`;
@@ -435,24 +388,28 @@ class MessageProcessor {
       const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、\n\n${messageContent}`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
+
+    // /member コマンド（グループチャットのみ）
     if (!isDirectChat && messageBody === '/member') {
-      const members = currentMembers;
-      if (members.length > 0) {
+      if (currentMembers.length > 0) {
         let reply = '[info][title]メンバー一覧[/title]\n';
-        members.forEach(member => {
+        currentMembers.forEach(member => {
           reply += `・${member.name} (${member.role})\n`;
         });
         reply += '[/info]';
         await ChatworkBotUtils.sendChatworkMessage(roomId, reply);
       }
     }
+
+    // /member-name コマンド（グループチャットのみ）
     if (!isDirectChat && messageBody === '/member-name') {
-      const members = currentMembers;
-      if (members.length > 0) {
-        const names = members.map(m => m.name).join(', ');
+      if (currentMembers.length > 0) {
+        const names = currentMembers.map(m => m.name).join(', ');
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[info][title]メンバー名一覧[/title]\n${names}[/info]`);
       }
     }
+
+    // 固定応答
     const responses = {
       'はんせい': `[To:9859068] なかよし\n[pname:${accountId}]に呼ばれてるよ！`,
       'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよ！`,
@@ -463,241 +420,179 @@ class MessageProcessor {
       'おはよう': `[pname:${accountId}] おはよう！`,
       '/test': `アカウントID:${accountId}`
     };
+
     if (responses[messageBody]) {
       await ChatworkBotUtils.sendChatworkMessage(roomId, responses[messageBody]);
     }
   }
-  static async handleDayWriteCommand(roomId, message, messageBody) {
-    const dateAndEvent = messageBody.substring('/day-write '.length).trim();
-    const firstSpaceIndex = dateAndEvent.indexOf(' ');
-    const accountId = message.account.account_id;
-    const messageId = message.message_id;
-    if (firstSpaceIndex > 0) {
-      const dateStr = dateAndEvent.substring(0, firstSpaceIndex);
-      const event = dateAndEvent.substring(firstSpaceIndex + 1);
-      try {
-        let formattedDate;
-        const dateParts = dateStr.split('-');
-        if (dateParts.length === 3) {
-          const year = parseInt(dateParts[0]);
-          const month = parseInt(dateParts[1]);
-          const day = parseInt(dateParts[2]);
-          if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
-            formattedDate = `${year}/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`;
-          }
-        } else if (dateParts.length === 2) {
-          const month = parseInt(dateParts[0]);
-          const day = parseInt(dateParts[1]);
-          if (!isNaN(month) && !isNaN(day)) {
-            formattedDate = `${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`;
-          }
-        } else if (dateParts.length === 1) {
-          const day = parseInt(dateParts[0]);
-          if (!isNaN(day)) {
-            formattedDate = `${String(day).padStart(2, '0')}`;
-          }
-        }
-        if (formattedDate) {
-          await ChatworkBotUtils.addDateToList(formattedDate, event);
-          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、${formattedDate} のイベント「${event}」を日付リストに登録しました。`);
-        } else {
-          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、日付の形式が正しくありません。「yyyy-mm-dd」「mm-dd」「dd」形式で入力してください。`);
-        }
-      } catch (e) {
-        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、日付の解析中にエラーが発生しました。`);
-      }
-    } else {
-      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、コマンドの形式が正しくありません。「/day-write yyyy-mm-dd 〇〇の日」のように入力してください。`);
-    }
-  }
+
   static isUserAdmin(accountId, allMembers) {
     const user = allMembers.find(member => member.account_id === accountId);
     return user && user.role === 'admin';
-  }
-  static async writeToLog(roomId, userName, userId, messageBody, messageId) {
-    try {
-      const client = await pool.connect();
-      await client.query(
-        'INSERT INTO logs (room_id, user_name, user_id, message_body, message_id) VALUES ($1, $2, $3, $4, $5)',
-        [roomId, userName, userId, messageBody, messageId]
-      );
-      client.release();
-    } catch (error) {}
-  }
-}
-
-// メイン処理クラス
-class ChatworkBotMain {
-  static async executeSingleCheck() {
-    try {
-      console.log('=== Chatworkボット処理開始 ===');
-      const allRooms = await ChatworkBotUtils.getAllParticipatingRooms();
-      if (allRooms.length === 0) {
-        console.log('参加しているルームが取得できませんでした。');
-        return;
-      }
-      let roomsToProcess = [];
-      if (roomStartIndex >= allRooms.length) roomStartIndex = 0;
-      roomsToProcess = allRooms.slice(roomStartIndex, roomStartIndex + MAX_ROOMS_PER_CYCLE);
-      roomStartIndex += MAX_ROOMS_PER_CYCLE;
-      for (const room of roomsToProcess) {
-        const roomId = room.room_id.toString();
-        const roomName = room.name;
-        const isDirectChatRoom = ChatworkBotUtils.isDirectChat(room);
-        try {
-          let currentMembers = [];
-          if (!isDirectChatRoom) {
-            currentMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
-          }
-          const shouldSendDateChange = !isDirectChatRoom || DIRECT_CHAT_WITH_DATE_CHANGE.includes(roomId);
-          if (shouldSendDateChange) {
-            await this.sendDailyGreetingMessage(roomId, roomName);
-          }
-          await MessageProcessor.processMessagesForActions(roomId, currentMembers, isDirectChatRoom, roomName);
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        } catch (error) {}
-      }
-      console.log('=== Chatworkボット処理完了 ===');
-    } catch (error) {}
-  }
-  static async sendDailyGreetingMessage(roomId, roomName = '') {
-    try {
-      const now = new Date();
-      const currentHour = now.getHours();
-      const currentMinute = now.getMinutes();
-      if (currentHour === 0 && currentMinute === 0) {
-        const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
-        const lastSentDateKey = `lastDailyGreetingSentDate_${roomId}`;
-        const lastSentDate = await ChatworkBotUtils.getProperty(lastSentDateKey);
-        const todayDateOnly = now.toISOString().split('T')[0];
-        if (lastSentDate !== todayDateOnly) {
-          let message = `[info][title]日付変更！[/title]今日は${todayFormatted}だよ！`;
-          const events = await ChatworkBotUtils.getTodaysEvents();
-          if (events.length > 0) {
-            events.forEach(event => {
-              message += `\n今日は${event}だよ！`;
-            });
-          }
-          message += `[/info]`;
-          const success = await ChatworkBotUtils.sendChatworkMessage(roomId, message);
-          if (success) {
-            await ChatworkBotUtils.setProperty(lastSentDateKey, todayDateOnly);
-          }
-        }
-      }
-    } catch (error) {}
   }
 }
 
 // Express.jsのルート設定
 app.use(express.json());
+
+// WebHookエンドポイント
+app.post('/webhook', async (req, res) => {
+  try {
+    console.log('WebHook受信:', JSON.stringify(req.body, null, 2));
+
+    // Chatworkの WebHook データを処理
+    const webhookData = req.body.webhook_event || req.body;
+    
+    if (webhookData && webhookData.room_id) {
+      await WebHookMessageProcessor.processWebHookMessage(webhookData);
+      res.status(200).json({ status: 'success', message: 'WebHook processed' });
+    } else {
+      console.log('無効なWebHookデータ:', req.body);
+      res.status(400).json({ error: 'Invalid webhook data' });
+    }
+  } catch (error) {
+    console.error('WebHook処理エラー:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ヘルスチェック
 app.get('/', (req, res) => {
   res.json({
     status: 'OK',
-    message: 'Chatwork Bot is running',
+    message: 'Chatwork Bot WebHook版 (DB不使用 - day.json対応)',
     timestamp: new Date().toISOString(),
-    database: 'PostgreSQL'
+    mode: 'WebHook',
+    storage: 'Memory'
   });
 });
-app.post('/execute', async (req, res) => {
+
+// 手動実行エンドポイント（テスト用）
+app.post('/test-message', async (req, res) => {
   try {
-    await ChatworkBotMain.executeSingleCheck();
-    res.json({ status: 'success', message: 'Bot executed successfully' });
+    const { room_id, message_body, account_id, user_name } = req.body;
+    
+    if (!room_id || !message_body || !account_id || !user_name) {
+      return res.status(400).json({ error: 'room_id, message_body, account_id, user_name are required' });
+    }
+
+    const testWebhookData = {
+      room_id,
+      account: { account_id, name: user_name },
+      body: message_body,
+      message_id: 'test_' + Date.now(),
+      room_type: 'group'
+    };
+
+    await WebHookMessageProcessor.processWebHookMessage(testWebhookData);
+    res.json({ status: 'success', message: 'Test message processed' });
   } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
+    res.status(500).json({ error: error.message });
   }
 });
+
+// 統計・管理用エンドポイント
 app.get('/status', async (req, res) => {
   try {
-    const rooms = await ChatworkBotUtils.getAllParticipatingRooms();
     res.json({
       status: 'OK',
-      roomCount: rooms.length,
-      lastExecution: new Date().toISOString(),
-      database: 'PostgreSQL',
-      config: {
-        roomConfigCount: Object.keys(ROOM_CONFIG).length,
-        directChatWithDateChange: DIRECT_CHAT_WITH_DATE_CHANGE.length
+      mode: 'WebHook',
+      storage: 'Memory',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      logRoomId: LOG_ROOM_ID,
+      dayJsonUrl: DAY_JSON_URL,
+      memoryUsage: {
+        apiCacheSize: API_CACHE.size,
+        lastSentDatesSize: memoryStorage.lastSentDates.size
       }
     });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
-app.get('/db-test', async (req, res) => {
+
+// day.jsonテスト用エンドポイント
+app.get('/test-day-events', async (req, res) => {
   try {
-    const client = await pool.connect();
-    const result = await client.query('SELECT NOW() as current_time');
-    client.release();
-    res.json({
-      status: 'success',
-      message: 'Database connection successful',
-      current_time: result.rows[0].current_time
-    });
-  } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
-  }
-});
-app.get('/logs/:roomId?', async (req, res) => {
-  try {
-    const { roomId } = req.params;
-    const limit = parseInt(req.query.limit) || 100;
-    const client = await pool.connect();
-    let query = 'SELECT * FROM logs';
-    let params = [];
-    if (roomId) {
-      query += ' WHERE room_id = $1 ORDER BY timestamp DESC LIMIT $2';
-      params = [roomId, limit];
-    } else {
-      query += ' ORDER BY timestamp DESC LIMIT $1';
-      params = [limit];
-    }
-    const result = await client.query(query, params);
-    client.release();
-    res.json({ status: 'success', logs: result.rows });
-  } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
-  }
-});
-app.get('/events', async (req, res) => {
-  try {
-    const client = await pool.connect();
-    const result = await client.query('SELECT * FROM date_events ORDER BY date');
-    client.release();
-    res.json({ status: 'success', events: result.rows });
-  } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
-  }
-});
-app.get('/members/:roomId?', async (req, res) => {
-  try {
-    const { roomId } = req.params;
-    const client = await pool.connect();
-    let query = 'SELECT * FROM members';
-    let params = [];
-    if (roomId) {
-      query += ' WHERE room_id = $1';
-      params = [roomId];
-    }
-    query += ' ORDER BY join_time DESC';
-    const result = await client.query(query, params);
-    client.release();
-    res.json({ status: 'success', members: result.rows });
+    const events = await getTodaysEventsFromJson();
+    res.json({ status: 'success', todayEvents: events });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
 
-// cron: 15秒ごと
-cron.schedule('*/15 * * * * *', async () => {
-  console.log('定期実行開始:', new Date().toISOString());
+// day.json読み込みテスト
+app.get('/load-day-json', async (req, res) => {
   try {
-    await ChatworkBotMain.executeSingleCheck();
+    const dayEvents = await loadDayEvents();
+    res.json({ status: 'success', dayEvents });
   } catch (error) {
-    console.error('定期実行エラー:', error.message);
+    res.status(500).json({ status: 'error', message: error.message });
   }
 });
-app.listen(port, () => {
-  console.log(`Chatwork Bot server is running on port ${port}`);
+
+// 日付変更通知（cronで実行）
+async function sendDailyGreetingMessages() {
+  try {
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    
+    // 日本時間で0時0分かチェック
+    if (currentHour === 0 && currentMinute === 0) {
+      console.log('日付変更通知の送信を開始します');
+      
+      const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
+      const todayDateOnly = now.toISOString().split('T')[0];
+      
+      // 設定されたダイレクトチャットに送信
+      for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+        try {
+          const lastSentDate = memoryStorage.lastSentDates.get(roomId);
+          
+          if (lastSentDate !== todayDateOnly) {
+            let message = `[info][title]日付変更！[/title]今日は${todayFormatted}だよ！`;
+            const events = await getTodaysEventsFromJson();
+            
+            if (events.length > 0) {
+              events.forEach(event => {
+                message += `\n今日は${event}だよ！`;
+              });
+            }
+            
+            message += `[/info]`;
+            
+            const success = await ChatworkBotUtils.sendChatworkMessage(roomId, message);
+            if (success) {
+              memoryStorage.lastSentDates.set(roomId, todayDateOnly);
+              console.log(`日付変更通知送信完了: ルーム ${roomId}`);
+            }
+          }
+        } catch (error) {
+          console.error(`ルーム ${roomId} への日付変更通知送信エラー:`, error.message);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('日付変更通知処理エラー:', error.message);
+  }
+}
+
+// cron: 毎分0秒に実行（日付変更通知用）
+cron.schedule('0 * * * * *', async () => {
+  await sendDailyGreetingMessages();
 });
+
+// サーバー起動
+app.listen(port, () => {
+  console.log(`Chatwork Bot WebHook版 (DB不使用) がポート${port}で起動しました`);
+  console.log('WebHook URL: https://your-app-name.onrender.com/webhook');
+  console.log('環境変数:');
+  console.log('- CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN ? '設定済み' : '未設定');
+  console.log('- DIRECT_CHAT_WITH_DATE_CHANGE:', DIRECT_CHAT_WITH_DATE_CHANGE);
+  console.log('- LOG_ROOM_ID:', LOG_ROOM_ID);
+  console.log('- DAY_JSON_URL:', DAY_JSON_URL);
+});
+
 module.exports = app;
