@@ -1,4 +1,4 @@
-// Chatwork Bot for Render (WebHook版 - DB不使用) 修正版
+// Chatwork Bot for Render (WebHook版 - DB不使用) 修正版（API上限チェックなし）
 
 const express = require('express');
 const axios = require('axios');
@@ -17,11 +17,6 @@ const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.
 const memoryStorage = {
   properties: new Map(),
   lastSentDates: new Map(), // 日付変更通知の最終送信日
-  apiCallTimes: {
-    wikipedia: 0,
-    scratch: 0,
-    yesorno: 0
-  }
 };
 
 // Chatwork APIレートリミット制御
@@ -48,13 +43,8 @@ const CHATWORK_EMOJI_CODES = [
 ].map(code => code.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
 const CHATWORK_EMOJI_REGEX = new RegExp(`\\((${CHATWORK_EMOJI_CODES.join('|')})\\)`, 'g');
 
-// API制限対策
+// APIキャッシュ
 const API_CACHE = new Map();
-const API_CALL_LIMITS = {
-  wikipedia: { interval: 60000 },
-  scratch: { interval: 30000 },
-  yesorno: { interval: 10000 }
-};
 
 // day.json読み込み関数
 async function loadDayEvents() {
@@ -166,32 +156,27 @@ class ChatworkBotUtils {
   }
   
   static async getYesOrNoAnswer() {
-    const now = Date.now();
-    if (now - memoryStorage.apiCallTimes.yesorno < API_CALL_LIMITS.yesorno.interval) {
-      const answers = ['yes', 'no'];
-      return answers[Math.floor(Math.random() * answers.length)];
-    }
+    const answers = ['yes', 'no'];
     try {
       const response = await axios.get('https://yesno.wtf/api');
-      memoryStorage.apiCallTimes.yesorno = now;
-      return response.data.answer || '不明';
+      return response.data.answer || answers[Math.floor(Math.random() * answers.length)];
     } catch (error) {
-      return 'APIエラーにより取得できませんでした。';
+      return answers[Math.floor(Math.random() * answers.length)];
     }
   }
   
   static async getWikipediaSummary(searchTerm) {
     const now = Date.now();
     const cacheKey = `wiki_${searchTerm}`;
+
+    // キャッシュチェック（任意）
     if (API_CACHE.has(cacheKey)) {
       const cachedData = API_CACHE.get(cacheKey);
       if (now - cachedData.timestamp < 300000) { // 5分間キャッシュ
         return cachedData.data;
       }
     }
-    if (now - memoryStorage.apiCallTimes.wikipedia < API_CALL_LIMITS.wikipedia.interval) {
-      return `「${searchTerm}」の検索は一時的に制限されています。しばらく後に再試行してください。`;
-    }
+
     try {
       const params = new URLSearchParams({
         action: 'query',
@@ -203,7 +188,6 @@ class ChatworkBotUtils {
         titles: searchTerm
       });
       const response = await axios.get(`https://ja.wikipedia.org/w/api.php?${params}`);
-      memoryStorage.apiCallTimes.wikipedia = now;
       const data = response.data;
       let result;
       if (data.query && data.query.pages) {
@@ -231,13 +215,8 @@ class ChatworkBotUtils {
   }
   
   static async getScratchUserStats(username) {
-    const now = Date.now();
-    if (now - memoryStorage.apiCallTimes.scratch < API_CALL_LIMITS.scratch.interval) {
-      return `「${username}」の情報取得は一時的に制限されています。しばらく後に再試行してください。`;
-    }
     try {
       const response = await axios.get(`https://api.scratch.mit.edu/users/${encodeURIComponent(username)}`);
-      memoryStorage.apiCallTimes.scratch = now;
       const data = response.data;
       const status = data.profile?.status ?? '情報なし';
       const userLink = `https://scratch.mit.edu/users/${encodeURIComponent(username)}/`;
@@ -270,39 +249,28 @@ class ChatworkBotUtils {
 class WebHookMessageProcessor {
   static async processWebHookMessage(webhookData) {
     try {
-      // 修正: ChatworkのWebHookは account_id のみ
       const roomId = webhookData.room_id;
       const messageBody = webhookData.body;
       const messageId = webhookData.message_id;
-
-      // v2のWebHookは account_id のみ
       const accountId = webhookData.account_id;
-      // v1のような account オブジェクトがあればそちらを
       const account = webhookData.account || null;
 
-      // ユーザー名の決定
       let userName = '';
       if (account && account.name) {
         userName = account.name;
       } else if (accountId) {
-        // 名前は不明なのでIDのみ
-        userName = `ID:[pname:${accountId}]`;
+        userName = `ID:${accountId}`;
       }
 
-      // 必須項目チェック
       if (!roomId || !accountId || !messageBody) {
         console.log('不完全なWebHookデータ:', webhookData);
         return;
       }
 
-      // Chatworkルームにログ送信
       await ChatworkBotUtils.sendLogToChatwork(userName, messageBody);
 
-      // メンバー情報取得（権限チェック用）
       let currentMembers = [];
-      let isSenderAdmin = true; // ダイレクトチャットでは常にtrue
-
-      // room_type情報があればグループチャット判定
+      let isSenderAdmin = true;
       const isDirectChat = webhookData.room_type === 'direct';
 
       if (!isDirectChat) {
@@ -310,7 +278,6 @@ class WebHookMessageProcessor {
         isSenderAdmin = this.isUserAdmin(accountId, currentMembers);
       }
 
-      // コマンド処理
       await this.handleCommands(
         roomId,
         messageId,
@@ -326,19 +293,16 @@ class WebHookMessageProcessor {
   }
 
   static async handleCommands(roomId, messageId, accountId, messageBody, isSenderAdmin, isDirectChat, currentMembers) {
-    // [toall] 検知
     if (!isDirectChat && messageBody.includes('[toall]') && !isSenderAdmin) {
       console.log(`[toall]を検出した非管理者: ${accountId} in room ${roomId}`);
     }
 
-    // おみくじ
     if (messageBody === 'おみくじ') {
       const omikujiResult = ChatworkBotUtils.drawOmikuji(isSenderAdmin);
       const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nです！[/info]`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
-    // Chatwork絵文字チェック
     if (!isDirectChat && !isSenderAdmin) {
       const emojiCount = ChatworkBotUtils.countChatworkEmojis(messageBody);
       if (emojiCount >= 50) {
@@ -347,14 +311,12 @@ class WebHookMessageProcessor {
       }
     }
 
-    // /yes-or-no コマンド
     if (messageBody === '/yes-or-no') {
       const answer = await ChatworkBotUtils.getYesOrNoAnswer();
       const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、答えは「${answer}」です！`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
-    // /wiki コマンド
     if (messageBody.startsWith('/wiki/')) {
       const searchTerm = messageBody.substring('/wiki/'.length).trim();
       if (searchTerm) {
@@ -364,7 +326,6 @@ class WebHookMessageProcessor {
       }
     }
 
-    // /scratch-user コマンド
     if (messageBody.startsWith('/scratch-user/')) {
       const username = messageBody.substring('/scratch-user/'.length).trim();
       if (username) {
@@ -374,7 +335,6 @@ class WebHookMessageProcessor {
       }
     }
 
-    // /scratch-project コマンド
     if (messageBody.startsWith('/scratch-project/')) {
       const projectId = messageBody.substring('/scratch-project/'.length).trim();
       if (projectId) {
@@ -384,7 +344,6 @@ class WebHookMessageProcessor {
       }
     }
 
-    // /today コマンド（day.json対応）
     if (messageBody === '/today') {
       const now = new Date();
       const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -402,7 +361,6 @@ class WebHookMessageProcessor {
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
-    // /member コマンド（グループチャットのみ）
     if (!isDirectChat && messageBody === '/member') {
       if (currentMembers.length > 0) {
         let reply = '[info][title]メンバー一覧[/title]\n';
@@ -414,7 +372,6 @@ class WebHookMessageProcessor {
       }
     }
 
-    // /member-name コマンド（グループチャットのみ）
     if (!isDirectChat && messageBody === '/member-name') {
       if (currentMembers.length > 0) {
         const names = currentMembers.map(m => m.name).join(', ');
@@ -422,7 +379,6 @@ class WebHookMessageProcessor {
       }
     }
 
-    // 固定応答
     const responses = {
       'はんせい': `[To:9859068] なかよし\n[pname:${accountId}]に呼ばれてるよ！`,
       'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよ！`,
@@ -452,7 +408,6 @@ app.use(express.json());
 app.post('/webhook', async (req, res) => {
   try {
     console.log('WebHook受信:', JSON.stringify(req.body, null, 2));
-    // Chatworkの WebHook データを処理（修正: webhook_event内を渡す）
     const webhookEvent = req.body.webhook_event || req.body;
     if (webhookEvent && webhookEvent.room_id) {
       await WebHookMessageProcessor.processWebHookMessage(webhookEvent);
@@ -546,12 +501,10 @@ async function sendDailyGreetingMessages() {
     const now = new Date();
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
-    // 日本時間で0時0分かチェック
     if (currentHour === 0 && currentMinute === 0) {
       console.log('日付変更通知の送信を開始します');
       const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
       const todayDateOnly = now.toISOString().split('T')[0];
-      // 設定されたダイレクトチャットに送信
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
         try {
           const lastSentDate = memoryStorage.lastSentDates.get(roomId);
