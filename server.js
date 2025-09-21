@@ -286,7 +286,7 @@ class WebHookMessageProcessor {
         userName = account.name;
       } else if (accountId) {
         // 名前は不明なのでIDのみ
-        userName = `ID:${accountId}`;
+        userName = `ID:[pname:${accountId}]`;
       }
 
       // 必須項目チェック
