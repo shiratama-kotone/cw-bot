@@ -1,4 +1,4 @@
-// Chatwork Bot for Render (WebHook版 - DB不使用)
+// Chatwork Bot for Render (WebHook版 - DB不使用) 修正版
 
 const express = require('express');
 const axios = require('axios');
@@ -10,8 +10,8 @@ const port = process.env.PORT || 3000;
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
 const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983').split(',');
-const LOG_ROOM_ID = process.env.LOG_ROOM_ID || '404646956'; // ログ送信先のルームID
-const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/your-username/your-repo/main/day.json';
+const LOG_ROOM_ID = process.env.LOG_ROOM_ID || '410459928'; // ログ送信先のルームID
+const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
 
 // メモリ内データストレージ
 const memoryStorage = {
@@ -104,7 +104,6 @@ async function getTodaysEventsFromJson() {
 
 // ユーティリティ関数
 class ChatworkBotUtils {
-  
   static async getChatworkMembers(roomId) {
     await apiCallLimiter();
     try {
@@ -127,7 +126,8 @@ class ChatworkBotUtils {
     try {
       await axios.post(`https://api.chatwork.com/v2/rooms/${roomId}/messages`,
         new URLSearchParams({ body: message }),
-        { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+        { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
+        }
       );
       return true;
     } catch (error) {
@@ -183,20 +183,15 @@ class ChatworkBotUtils {
   static async getWikipediaSummary(searchTerm) {
     const now = Date.now();
     const cacheKey = `wiki_${searchTerm}`;
-    
-    // キャッシュチェック
     if (API_CACHE.has(cacheKey)) {
       const cachedData = API_CACHE.get(cacheKey);
       if (now - cachedData.timestamp < 300000) { // 5分間キャッシュ
         return cachedData.data;
       }
     }
-    
-    // レート制限チェック
     if (now - memoryStorage.apiCallTimes.wikipedia < API_CALL_LIMITS.wikipedia.interval) {
       return `「${searchTerm}」の検索は一時的に制限されています。しばらく後に再試行してください。`;
     }
-    
     try {
       const params = new URLSearchParams({
         action: 'query',
@@ -209,7 +204,6 @@ class ChatworkBotUtils {
       });
       const response = await axios.get(`https://ja.wikipedia.org/w/api.php?${params}`);
       memoryStorage.apiCallTimes.wikipedia = now;
-      
       const data = response.data;
       let result;
       if (data.query && data.query.pages) {
@@ -229,8 +223,6 @@ class ChatworkBotUtils {
       } else {
         result = `「${searchTerm}」の検索結果を処理できませんでした。`;
       }
-      
-      // キャッシュに保存
       API_CACHE.set(cacheKey, { data: result, timestamp: now });
       return result;
     } catch (error) {
@@ -278,18 +270,30 @@ class ChatworkBotUtils {
 class WebHookMessageProcessor {
   static async processWebHookMessage(webhookData) {
     try {
-      const { room_id: roomId, account, body: messageBody, message_id: messageId } = webhookData;
-      
-      if (!roomId || !account || !messageBody) {
+      // 修正: ChatworkのWebHookは account_id のみ
+      const roomId = webhookData.room_id;
+      const messageBody = webhookData.body;
+      const messageId = webhookData.message_id;
+
+      // v2のWebHookは account_id のみ
+      const accountId = webhookData.account_id;
+      // v1のような account オブジェクトがあればそちらを
+      const account = webhookData.account || null;
+
+      // ユーザー名の決定
+      let userName = '';
+      if (account && account.name) {
+        userName = account.name;
+      } else if (accountId) {
+        // 名前は不明なのでIDのみ
+        userName = `ID:${accountId}`;
+      }
+
+      // 必須項目チェック
+      if (!roomId || !accountId || !messageBody) {
         console.log('不完全なWebHookデータ:', webhookData);
         return;
       }
-
-      const accountId = account.account_id;
-      const userName = account.name;
-      const isDirectChat = webhookData.room_type === 'direct';
-
-      console.log(`WebHook処理開始: ルーム${roomId}, ユーザー${userName}, メッセージ: ${messageBody.substring(0, 50)}`);
 
       // Chatworkルームにログ送信
       await ChatworkBotUtils.sendLogToChatwork(userName, messageBody);
@@ -297,22 +301,31 @@ class WebHookMessageProcessor {
       // メンバー情報取得（権限チェック用）
       let currentMembers = [];
       let isSenderAdmin = true; // ダイレクトチャットでは常にtrue
-      
+
+      // room_type情報があればグループチャット判定
+      const isDirectChat = webhookData.room_type === 'direct';
+
       if (!isDirectChat) {
         currentMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
         isSenderAdmin = this.isUserAdmin(accountId, currentMembers);
       }
 
       // コマンド処理
-      await this.handleCommands(roomId, messageId, accountId, messageBody.trim(), isSenderAdmin, isDirectChat, currentMembers);
-
+      await this.handleCommands(
+        roomId,
+        messageId,
+        accountId,
+        messageBody.trim(),
+        isSenderAdmin,
+        isDirectChat,
+        currentMembers
+      );
     } catch (error) {
       console.error('WebHookメッセージ処理エラー:', error.message);
     }
   }
 
   static async handleCommands(roomId, messageId, accountId, messageBody, isSenderAdmin, isDirectChat, currentMembers) {
-    
     // [toall] 検知
     if (!isDirectChat && messageBody.includes('[toall]') && !isSenderAdmin) {
       console.log(`[toall]を検出した非管理者: ${accountId} in room ${roomId}`);
@@ -439,12 +452,10 @@ app.use(express.json());
 app.post('/webhook', async (req, res) => {
   try {
     console.log('WebHook受信:', JSON.stringify(req.body, null, 2));
-
-    // Chatworkの WebHook データを処理
-    const webhookData = req.body.webhook_event || req.body;
-    
-    if (webhookData && webhookData.room_id) {
-      await WebHookMessageProcessor.processWebHookMessage(webhookData);
+    // Chatworkの WebHook データを処理（修正: webhook_event内を渡す）
+    const webhookEvent = req.body.webhook_event || req.body;
+    if (webhookEvent && webhookEvent.room_id) {
+      await WebHookMessageProcessor.processWebHookMessage(webhookEvent);
       res.status(200).json({ status: 'success', message: 'WebHook processed' });
     } else {
       console.log('無効なWebHookデータ:', req.body);
@@ -471,11 +482,9 @@ app.get('/', (req, res) => {
 app.post('/test-message', async (req, res) => {
   try {
     const { room_id, message_body, account_id, user_name } = req.body;
-    
     if (!room_id || !message_body || !account_id || !user_name) {
       return res.status(400).json({ error: 'room_id, message_body, account_id, user_name are required' });
     }
-
     const testWebhookData = {
       room_id,
       account: { account_id, name: user_name },
@@ -483,7 +492,6 @@ app.post('/test-message', async (req, res) => {
       message_id: 'test_' + Date.now(),
       room_type: 'group'
     };
-
     await WebHookMessageProcessor.processWebHookMessage(testWebhookData);
     res.json({ status: 'success', message: 'Test message processed' });
   } catch (error) {
@@ -538,31 +546,24 @@ async function sendDailyGreetingMessages() {
     const now = new Date();
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
-    
     // 日本時間で0時0分かチェック
     if (currentHour === 0 && currentMinute === 0) {
       console.log('日付変更通知の送信を開始します');
-      
       const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
       const todayDateOnly = now.toISOString().split('T')[0];
-      
       // 設定されたダイレクトチャットに送信
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
         try {
           const lastSentDate = memoryStorage.lastSentDates.get(roomId);
-          
           if (lastSentDate !== todayDateOnly) {
             let message = `[info][title]日付変更！[/title]今日は${todayFormatted}だよ！`;
             const events = await getTodaysEventsFromJson();
-            
             if (events.length > 0) {
               events.forEach(event => {
                 message += `\n今日は${event}だよ！`;
               });
             }
-            
             message += `[/info]`;
-            
             const success = await ChatworkBotUtils.sendChatworkMessage(roomId, message);
             if (success) {
               memoryStorage.lastSentDates.set(roomId, todayDateOnly);
