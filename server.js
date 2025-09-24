@@ -9,7 +9,7 @@ const port = process.env.PORT || 3000;
 
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
-const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983').split(',');
+const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,404646956').split(',');
 const LOG_ROOM_ID = process.env.LOG_ROOM_ID || '410459928'; // ログ送信先のルームID
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
 
@@ -465,6 +465,7 @@ app.get('/status', async (req, res) => {
       uptime: process.uptime(),
       logRoomId: LOG_ROOM_ID,
       dayJsonUrl: DAY_JSON_URL,
+      directChatRooms: DIRECT_CHAT_WITH_DATE_CHANGE,
       memoryUsage: {
         apiCacheSize: API_CACHE.size,
         lastSentDatesSize: memoryStorage.lastSentDates.size
