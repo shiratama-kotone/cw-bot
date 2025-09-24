@@ -1,4 +1,4 @@
-// Chatwork Bot for Render (WebHook版 - DB不使用) 修正版（API上限チェックなし）
+// Chatwork Bot for Render (WebHook版 - DB不使用) 修正版（API上限チェックなし） 
 
 const express = require('express');
 const axios = require('axios');
