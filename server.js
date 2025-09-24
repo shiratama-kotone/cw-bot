@@ -61,9 +61,10 @@ async function loadDayEvents() {
 async function getTodaysEventsFromJson() {
   try {
     const dayEvents = await loadDayEvents();
-    const now = new Date();
-    const monthDay = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    const day = String(now.getDate()).padStart(2, '0');
+    const now = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+    const jstDate = new Date(now);
+    const monthDay = `${String(jstDate.getMonth() + 1).padStart(2, '0')}-${String(jstDate.getDate()).padStart(2, '0')}`;
+    const day = String(jstDate.getDate()).padStart(2, '0');
     
     const events = [];
     
@@ -345,7 +346,8 @@ class WebHookMessageProcessor {
     }
 
     if (messageBody === '/today') {
-      const now = new Date();
+      const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+      const now = new Date(jstNow);
       const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
       let messageContent = `[info][title]今日の情報[/title]今日は${todayFormatted}だよ！`;
       const events = await getTodaysEventsFromJson();
@@ -499,7 +501,8 @@ app.get('/load-day-json', async (req, res) => {
 // 日付変更通知（cronで実行）
 async function sendDailyGreetingMessages() {
   try {
-    const now = new Date();
+    const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+    const now = new Date(jstNow);
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
     if (currentHour === 0 && currentMinute === 0) {
@@ -534,9 +537,11 @@ async function sendDailyGreetingMessages() {
   }
 }
 
-// cron: 毎分0秒に実行（日付変更通知用）
+// cron: 毎分0秒に実行（日本時間で日付変更通知用）
 cron.schedule('0 * * * * *', async () => {
   await sendDailyGreetingMessages();
+}, {
+  timezone: "Asia/Tokyo"
 });
 
 // サーバー起動
