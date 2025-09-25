@@ -1,4 +1,4 @@
-// Chatwork Bot for Render (WebHook版 - DB不使用) 修正版（API上限チェックなし） 
+// Chatwork Bot for Render (WebHook版 - DB不使用) 修正版（API上限チェックなし）
 
 const express = require('express');
 const axios = require('axios');
@@ -50,6 +50,7 @@ const API_CACHE = new Map();
 async function loadDayEvents() {
   try {
     const response = await axios.get(DAY_JSON_URL);
+    console.log('day.json読み込み成功');
     return response.data;
   } catch (error) {
     console.error('day.json読み込みエラー:', error.message);
@@ -501,14 +502,11 @@ app.get('/load-day-json', async (req, res) => {
 // 日付変更通知（cronで実行）
 async function sendDailyGreetingMessages() {
   try {
+    console.log('日付変更通知の送信を開始します');
     const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
     const now = new Date(jstNow);
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    if (currentHour === 0 && currentMinute === 0) {
-      console.log('日付変更通知の送信を開始します');
-      const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
-      const todayDateOnly = now.toISOString().split('T')[0];
+    const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
+    const todayDateOnly = now.toISOString().split('T')[0];
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
         try {
           const lastSentDate = memoryStorage.lastSentDates.get(roomId);
@@ -531,14 +529,13 @@ async function sendDailyGreetingMessages() {
           console.error(`ルーム ${roomId} への日付変更通知送信エラー:`, error.message);
         }
       }
+    } catch (error) {
+      console.error('日付変更通知処理エラー:', error.message);
     }
-  } catch (error) {
-    console.error('日付変更通知処理エラー:', error.message);
-  }
 }
 
-// cron: 毎分0秒に実行（日本時間で日付変更通知用）
-cron.schedule('0 * * * * *', async () => {
+// cron: 毎日0時0分に実行（日本時間で日付変更通知用）
+cron.schedule('0 0 0 * * *', async () => {
   await sendDailyGreetingMessages();
 }, {
   timezone: "Asia/Tokyo"
