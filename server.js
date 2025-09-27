@@ -391,6 +391,7 @@ class WebHookMessageProcessor {
       'おやすみ': `おやすみなさい！[pname:${accountId}]！`,
       'おはよう': `[pname:${accountId}] おはよう！`,
       '/test': `アカウントID:${accountId}`
+      'プロセカやってくる': `[preview id=1864425247 ht=130]`
     };
 
     if (responses[messageBody]) {
