@@ -1,4 +1,4 @@
-// Chatwork Bot for Render (WebHook版 - DB不使用) 修正版（API上限チェックなし）
+// Chatwork Bot for Render (WebHook版 - 全ルーム対応)
 
 const express = require('express');
 const axios = require('axios');
@@ -10,7 +10,7 @@ const port = process.env.PORT || 3000;
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
 const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,404646956').split(',');
-const LOG_ROOM_ID = process.env.LOG_ROOM_ID || '410459928'; // ログ送信先のルームID
+const LOG_ROOM_ID = '404646956'; // ログ送信先のルームIDを固定
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
 
 // メモリ内データストレージ
@@ -128,9 +128,13 @@ class ChatworkBotUtils {
     }
   }
 
-  // ログをChatworkルームに送信する関数
-  static async sendLogToChatwork(userName, messageBody, roomName = '') {
+  // ログをChatworkルームに送信する関数（指定ルームのみ）
+  static async sendLogToChatwork(userName, messageBody, sourceRoomId) {
     try {
+      // 指定されたルーム(404646956)からのメッセージのみログ送信
+      if (sourceRoomId !== LOG_ROOM_ID) {
+        return;
+      }
       const logMessage = `[info][title]${userName}[/title]${messageBody}[/info]`;
       await this.sendChatworkMessage(LOG_ROOM_ID, logMessage);
     } catch (error) {
@@ -269,7 +273,8 @@ class WebHookMessageProcessor {
         return;
       }
 
-      await ChatworkBotUtils.sendLogToChatwork(userName, messageBody);
+      // ログ送信（指定ルームのみ）
+      await ChatworkBotUtils.sendLogToChatwork(userName, messageBody, roomId);
 
       let currentMembers = [];
       let isSenderAdmin = true;
@@ -280,6 +285,7 @@ class WebHookMessageProcessor {
         isSenderAdmin = this.isUserAdmin(accountId, currentMembers);
       }
 
+      // すべてのルームでコマンドを処理
       await this.handleCommands(
         roomId,
         messageId,
@@ -448,9 +454,6 @@ class WebHookMessageProcessor {
       'ジャン': `ライリー`,
       '雪平': `実篤`,
       '夏野': `二葉`,
-      
-      
-      
     };
 
     if (responses[messageBody]) {
@@ -489,10 +492,11 @@ app.post('/webhook', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     status: 'OK',
-    message: 'Chatwork Bot WebHook版 (DB不使用 - day.json対応)',
+    message: 'Chatwork Bot WebHook版 (全ルーム対応)',
     timestamp: new Date().toISOString(),
-    mode: 'WebHook',
-    storage: 'Memory'
+    mode: 'WebHook - All Rooms',
+    storage: 'Memory',
+    logRoom: LOG_ROOM_ID
   });
 });
 
@@ -522,7 +526,7 @@ app.get('/status', async (req, res) => {
   try {
     res.json({
       status: 'OK',
-      mode: 'WebHook',
+      mode: 'WebHook - All Rooms',
       storage: 'Memory',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
@@ -603,13 +607,14 @@ cron.schedule('0 0 0 * * *', async () => {
 
 // サーバー起動
 app.listen(port, () => {
-  console.log(`Chatwork Bot WebHook版 (DB不使用) がポート${port}で起動しました`);
+  console.log(`Chatwork Bot WebHook版 (全ルーム対応) がポート${port}で起動しました`);
   console.log('WebHook URL: https://your-app-name.onrender.com/webhook');
   console.log('環境変数:');
   console.log('- CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN ? '設定済み' : '未設定');
   console.log('- DIRECT_CHAT_WITH_DATE_CHANGE:', DIRECT_CHAT_WITH_DATE_CHANGE);
-  console.log('- LOG_ROOM_ID:', LOG_ROOM_ID);
+  console.log('- LOG_ROOM_ID:', LOG_ROOM_ID, '(固定)');
   console.log('- DAY_JSON_URL:', DAY_JSON_URL);
+  console.log('動作モード: すべてのルームで反応、ログは', LOG_ROOM_ID, 'のみ');
 });
 
 module.exports = app;
