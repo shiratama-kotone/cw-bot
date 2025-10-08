@@ -249,6 +249,48 @@ class ChatworkBotUtils {
       return 'Scratchプロジェクト情報の取得中にエラーが発生しました。';
     }
   }
+
+  // ルームのメッセージを取得（999件を超える場合は複数回取得）
+  static async getRoomMessages(roomId, force = 0) {
+    try {
+      let allMessages = [];
+      let currentForce = force;
+      
+      while (true) {
+        await apiCallLimiter();
+        const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages`, {
+          headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN },
+          params: { force: currentForce }
+        });
+        
+        const messages = response.data;
+        if (!messages || messages.length === 0) {
+          break;
+        }
+        
+        allMessages = allMessages.concat(messages);
+        
+        // 999件未満なら終了
+        if (messages.length < 999) {
+          break;
+        }
+        
+        // 最も古いメッセージのIDを取得して次のforceに設定
+        const oldestMessageId = messages[messages.length - 1].message_id;
+        currentForce = 1; // 次回以降はforce=1で古いメッセージを取得
+        
+        // 安全のため最大10回まで
+        if (allMessages.length > 9990) {
+          break;
+        }
+      }
+      
+      return allMessages;
+    } catch (error) {
+      console.error(`メッセージ取得エラー (${roomId}):`, error.message);
+      return [];
+    }
+  }
 }
 
 // WebHookメッセージ処理クラス
@@ -385,6 +427,59 @@ class WebHookMessageProcessor {
       if (currentMembers.length > 0) {
         const names = currentMembers.map(m => m.name).join(', ');
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[info][title]メンバー名一覧[/title]\n${names}[/info]`);
+      }
+    }
+
+    // /romeraコマンド: メッセージ数ランキング
+    if (messageBody === '/romera') {
+      try {
+        console.log(`ルーム ${roomId} のメッセージをAPIから取得中...`);
+        
+        // APIから全メッセージを取得
+        const messages = await ChatworkBotUtils.getRoomMessages(roomId);
+        
+        // 今日の0時0分0秒のタイムスタンプを取得（JST）
+        const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+        const now = new Date(jstNow);
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        const todayStartTimestamp = todayStart.getTime() / 1000;
+        
+        // 今日のメッセージをカウント
+        const counts = {};
+        messages.forEach(msg => {
+          if (msg.send_time >= todayStartTimestamp) {
+            const accId = msg.account.account_id;
+            counts[accId] = (counts[accId] || 0) + 1;
+          }
+        });
+        
+        // ランキング作成
+        const ranking = Object.entries(counts)
+          .sort((a, b) => b[1] - a[1])
+          .map(([accountId, count], index) => ({
+            rank: index + 1,
+            accountId,
+            count
+          }));
+        
+        // 合計メッセージ数
+        const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
+        
+        // メッセージ作成
+        let rankingMessage = '[info][title]メッセージ数ランキング[/title]\n';
+        ranking.forEach((item, index) => {
+          rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
+          if (index < ranking.length - 1) {
+            rankingMessage += '\n[hr]';
+          }
+          rankingMessage += '\n';
+        });
+        rankingMessage += `\n合計：${totalCount}コメ\n(botを含む)[/info]`;
+        
+        await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
+      } catch (error) {
+        console.error('ランキング取得エラー:', error.message);
+        await ChatworkBotUtils.sendChatworkMessage(roomId, 'ランキングの取得中にエラーが発生しました。');
       }
     }
 
@@ -571,31 +666,31 @@ async function sendDailyGreetingMessages() {
     const now = new Date(jstNow);
     const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
     const todayDateOnly = now.toISOString().split('T')[0];
-      for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
-        try {
-          const lastSentDate = memoryStorage.lastSentDates.get(roomId);
-          if (lastSentDate !== todayDateOnly) {
-            let message = `[info][title]日付変更！[/title]今日は${todayFormatted}だよ！`;
-            const events = await getTodaysEventsFromJson();
-            if (events.length > 0) {
-              events.forEach(event => {
-                message += `\n今日は${event}だよ！`;
-              });
-            }
-            message += `[/info]`;
-            const success = await ChatworkBotUtils.sendChatworkMessage(roomId, message);
-            if (success) {
-              memoryStorage.lastSentDates.set(roomId, todayDateOnly);
-              console.log(`日付変更通知送信完了: ルーム ${roomId}`);
-            }
+    for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+      try {
+        const lastSentDate = memoryStorage.lastSentDates.get(roomId);
+        if (lastSentDate !== todayDateOnly) {
+          let message = `[info][title]日付変更！[/title]今日は${todayFormatted}だよ！`;
+          const events = await getTodaysEventsFromJson();
+          if (events.length > 0) {
+            events.forEach(event => {
+              message += `\n今日は${event}だよ！`;
+            });
           }
-        } catch (error) {
-          console.error(`ルーム ${roomId} への日付変更通知送信エラー:`, error.message);
+          message += `[/info]`;
+          const success = await ChatworkBotUtils.sendChatworkMessage(roomId, message);
+          if (success) {
+            memoryStorage.lastSentDates.set(roomId, todayDateOnly);
+            console.log(`日付変更通知送信完了: ルーム ${roomId}`);
+          }
         }
+      } catch (error) {
+        console.error(`ルーム ${roomId} への日付変更通知送信エラー:`, error.message);
       }
-    } catch (error) {
-      console.error('日付変更通知処理エラー:', error.message);
     }
+  } catch (error) {
+    console.error('日付変更通知処理エラー:', error.message);
+  }
 }
 
 // cron: 毎日0時0分に実行（日本時間で日付変更通知用）
