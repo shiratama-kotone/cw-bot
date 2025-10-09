@@ -1,1 +1,2 @@
 Renderでデプロイして、webhook設定するだけ
+environment variableは `CHATWORK_API_TOKEN`だけ
