@@ -62,18 +62,13 @@ async function loadDayEvents() {
 async function getTodaysEventsFromJson() {
   try {
     const dayEvents = await loadDayEvents();
+    const now = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+    const jstDate = new Date(now);
+    const monthDay = `${String(jstDate.getMonth() + 1).padStart(2, '0')}-${String(jstDate.getDate()).padStart(2, '0')}`;
+    const day = String(jstDate.getDate()).padStart(2, '0');
     
-    // ★修正箇所: JST時刻の取得を安定させる
-    const now = new Date();
-    const jstOffset = 9 * 60 * 60 * 1000;
-    const jstTime = now.getTime() + jstOffset;
-    const jstDate = new Date(jstTime);
-    
-    const monthDay = `${String(jstDate.getUTCMonth() + 1).padStart(2, '0')}-${String(jstDate.getUTCDate()).padStart(2, '0')}`;
-    const day = String(jstDate.getUTCDate()).padStart(2, '0');
-
     const events = [];
-
+    
     // MM-DD形式のイベントをチェック
     if (dayEvents[monthDay]) {
       if (Array.isArray(dayEvents[monthDay])) {
@@ -82,7 +77,7 @@ async function getTodaysEventsFromJson() {
         events.push(dayEvents[monthDay]);
       }
     }
-
+    
     // DD形式のイベントをチェック
     if (dayEvents[day]) {
       if (Array.isArray(dayEvents[day])) {
@@ -91,7 +86,7 @@ async function getTodaysEventsFromJson() {
         events.push(dayEvents[day]);
       }
     }
-
+    
     return events;
   } catch (error) {
     console.error('今日のイベント取得エラー:', error.message);
@@ -117,7 +112,7 @@ class ChatworkBotUtils {
       return [];
     }
   }
-
+  
   static async sendChatworkMessage(roomId, message) {
     await apiCallLimiter();
     try {
@@ -146,12 +141,12 @@ class ChatworkBotUtils {
       console.error('Chatworkログ送信エラー:', error.message);
     }
   }
-
+  
   static countChatworkEmojis(text) {
     const matches = text.match(CHATWORK_EMOJI_REGEX);
     return matches ? matches.length : 0;
   }
-
+  
   static drawOmikuji(isAdmin) {
     const fortunes = ['大吉', '中吉', '吉', '小吉', 'null', 'undefined'];
     const specialFortune = '超町長調帳朝腸蝶大吉';
@@ -165,7 +160,7 @@ class ChatworkBotUtils {
       return fortunes[index];
     }
   }
-
+  
   static async getYesOrNoAnswer() {
     const answers = ['yes', 'no'];
     try {
@@ -175,7 +170,7 @@ class ChatworkBotUtils {
       return answers[Math.floor(Math.random() * answers.length)];
     }
   }
-
+  
   static async getWikipediaSummary(searchTerm) {
     const now = Date.now();
     const cacheKey = `wiki_${searchTerm}`;
@@ -224,7 +219,7 @@ class ChatworkBotUtils {
       return `Wikipedia検索中にエラーが発生しました。「${searchTerm}」`;
     }
   }
-
+  
   static async getScratchUserStats(username) {
     try {
       const response = await axios.get(`https://api.scratch.mit.edu/users/${encodeURIComponent(username)}`);
@@ -239,7 +234,7 @@ class ChatworkBotUtils {
       return `Scratchユーザー情報の取得中に予期せぬエラーが発生しました。`;
     }
   }
-
+  
   static async getScratchProjectInfo(projectId) {
     try {
       await apiCallLimiter();
@@ -256,53 +251,40 @@ class ChatworkBotUtils {
   }
 
   // ルームのメッセージを取得（999件を超える場合は複数回取得）
-  // ★修正：999件超えのメッセージを正しく取得するため、message_idとforce=1を使用するように修正
   static async getRoomMessages(roomId, force = 0) {
     try {
       let allMessages = [];
       let currentForce = force;
-      let beforeId = null; // 取得基準となるメッセージID
-
+      
       while (true) {
         await apiCallLimiter();
-        
-        const params = { force: currentForce };
-        if (beforeId) {
-          // beforeIdがある場合は、そのIDより古いメッセージを取得
-          params.message_id = beforeId; 
-        }
-        
         const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages`, {
           headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN },
-          params: params // message_idを含むparamsを使用
+          params: { force: currentForce }
         });
-
+        
         const messages = response.data;
         if (!messages || messages.length === 0) {
           break;
         }
-
+        
         allMessages = allMessages.concat(messages);
-
+        
         // 999件未満なら終了
         if (messages.length < 999) {
           break;
         }
-
-        // 最も古いメッセージのIDを取得して次の取得基準に設定
-        const oldestMessageId = messages[messages.length - 1].message_id;
-        beforeId = oldestMessageId; 
         
-        // 初回取得のforce=0の後は、古いメッセージを取得し続けるため force=1 を使用
-        currentForce = 1; 
-
-        // 安全のため最大10回まで（9990件）
+        // 最も古いメッセージのIDを取得して次のforceに設定
+        const oldestMessageId = messages[messages.length - 1].message_id;
+        currentForce = 1; // 次回以降はforce=1で古いメッセージを取得
+        
+        // 安全のため最大10回まで
         if (allMessages.length > 9990) {
-          console.warn(`ルーム ${roomId} でメッセージ取得制限に達しました (9990件以上)。`);
           break;
         }
       }
-
+      
       return allMessages;
     } catch (error) {
       console.error(`メッセージ取得エラー (${roomId}):`, error.message);
@@ -413,13 +395,9 @@ class WebHookMessageProcessor {
     }
 
     if (messageBody === '/today') {
-      // ★修正箇所: JST時刻の取得を安定させる
-      const now = new Date();
-      const jstOffset = 9 * 60 * 60 * 1000;
-      const jstTime = now.getTime() + jstOffset;
-      const jstDate = new Date(jstTime);
-      const todayFormatted = jstDate.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
-      
+      const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+      const now = new Date(jstNow);
+      const todayFormatted = now.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
       let messageContent = `[info][title]今日の情報[/title]今日は${todayFormatted}だよ！`;
       const events = await getTodaysEventsFromJson();
       if (events.length > 0) {
@@ -456,35 +434,25 @@ class WebHookMessageProcessor {
     if (messageBody === '/romera') {
       try {
         console.log(`ルーム ${roomId} のメッセージをAPIから取得中...`);
-
+        
         // APIから全メッセージを取得
         const messages = await ChatworkBotUtils.getRoomMessages(roomId);
-
-        // ★修正箇所: JSTでの今日の0時0分0秒のUNIXタイムスタンプを正確に計算する
-        const now = new Date();
-        const jstOffset = 9 * 60 * 60 * 1000; // JST (+9時間)のミリ秒オフセット
-        const jstTime = now.getTime() + jstOffset;
-        const jstDate = new Date(jstTime);
-
-        // JSTでの年/月/日を取得し、JSTの0時0分0秒のDateオブジェクトを作成
-        // Dateコンストラクタで引数を渡すと、ローカルタイムとして解釈されるため、getUTC*でJSTの日付を取得
-        const todayStartJST = new Date(jstDate.getUTCFullYear(), jstDate.getUTCMonth(), jstDate.getUTCDate(), 0, 0, 0);
         
-        // JSTの0時0分0秒のタイムスタンプをUNIX時間（秒）に変換
-        // todayStartJSTは内部的にJSTの0時だが、環境のタイムゾーン設定により影響を受ける可能性があるため、
-        // JSTオフセットを引いてUTCの0時に戻したタイムスタンプを使用
-        const todayStartTimestamp = (todayStartJST.getTime() - jstOffset) / 1000; 
-
+        // 今日の0時0分0秒のタイムスタンプを取得（JST）
+        const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+        const now = new Date(jstNow);
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        const todayStartTimestamp = todayStart.getTime() / 1000;
+        
         // 今日のメッセージをカウント
         const counts = {};
         messages.forEach(msg => {
-          // send_time (UNIX秒) が今日の開始時刻以上かチェック
           if (msg.send_time >= todayStartTimestamp) {
             const accId = msg.account.account_id;
             counts[accId] = (counts[accId] || 0) + 1;
           }
         });
-
+        
         // ランキング作成
         const ranking = Object.entries(counts)
           .sort((a, b) => b[1] - a[1])
@@ -493,10 +461,10 @@ class WebHookMessageProcessor {
             accountId,
             count
           }));
-
+        
         // 合計メッセージ数
         const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
-
+        
         // メッセージ作成
         let rankingMessage = '[info][title]メッセージ数ランキング[/title]\n';
         ranking.forEach((item, index) => {
@@ -507,7 +475,7 @@ class WebHookMessageProcessor {
           rankingMessage += '\n';
         });
         rankingMessage += `\n合計：${totalCount}コメ\n(botを含む)[/info]`;
-
+        
         await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
       } catch (error) {
         console.error('ランキング取得エラー:', error.message);
@@ -545,7 +513,6 @@ class WebHookMessageProcessor {
       'Git': `hub`,
       '初音': `ミク`,
       '鏡音': `リン`,
-      '鏡音': `レン`,
       '巡音': `ルカ`,
       'MEI': `KO`,
       'KAI': `TO`,
@@ -647,6 +614,7 @@ app.post('/test-message', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
 
 // 統計・管理用エンドポイント
 app.get('/status', async (req, res) => {
