@@ -206,7 +206,7 @@ class ChatworkBotUtils {
           const pageUrl = `https://ja.wikipedia.org/wiki/${encodeURIComponent(pageTitle)}`;
           result = `${summary}\n\n元記事: ${pageUrl}`;
         } else if (pageId && pages[pageId].missing !== undefined) {
-          result = `「${searchTerm}」に関する記事は見つかりませんでした。`;
+          result = `「${searchTerm}」に一致する情報は見つかりませんでした。`;
         } else {
           result = `「${searchTerm}」の検索結果を処理できませんでした。`;
         }
@@ -250,37 +250,70 @@ class ChatworkBotUtils {
     }
   }
 
-  // ルームのメッセージを取得（999件を超える場合は複数回取得）
-  static async getRoomMessages(roomId, force = 0) {
+  // ルームのメッセージを取得（今日の0時以降のメッセージのみ）
+  static async getRoomMessages(roomId) {
     try {
       let allMessages = [];
-      let currentForce = force;
+      let shouldContinue = true;
       
-      while (true) {
+      // 今日の0時0分0秒のタイムスタンプを取得（日本時間）
+      const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+      const now = new Date(jstNow);
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      // 日本時間のタイムスタンプをUNIXタイムに変換（秒単位）
+      const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000) + 32400; // +9時間（32400秒）
+      
+      // force=0で最初の100件を取得
+      let force = 0;
+      
+      while (shouldContinue) {
         await apiCallLimiter();
         const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages`, {
           headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN },
-          params: { force: currentForce }
+          params: { force: force }
         });
         
         const messages = response.data;
+        
+        // メッセージがない、または空の場合は終了
         if (!messages || messages.length === 0) {
           break;
         }
         
-        allMessages = allMessages.concat(messages);
+        // 今日のメッセージと今日より前のメッセージを分離
+        const todayMessages = [];
+        let foundOldMessage = false;
         
-        // 999件未満なら終了
-        if (messages.length < 999) {
+        for (const msg of messages) {
+          if (msg.send_time >= todayStartTimestamp) {
+            todayMessages.push(msg);
+          } else {
+            // 日付が変わった（今日より前のメッセージ）
+            foundOldMessage = true;
+            break;
+          }
+        }
+        
+        // 今日のメッセージを追加
+        allMessages = allMessages.concat(todayMessages);
+        
+        // 日付が変わっていたら終了
+        if (foundOldMessage) {
+          shouldContinue = false;
           break;
         }
         
-        // 最も古いメッセージのIDを取得して次のforceに設定
-        const oldestMessageId = messages[messages.length - 1].message_id;
-        currentForce = 1; // 次回以降はforce=1で古いメッセージを取得
+        // 100件未満なら終了（これ以上古いメッセージはない）
+        if (messages.length < 100) {
+          shouldContinue = false;
+          break;
+        }
         
-        // 安全のため最大10回まで
-        if (allMessages.length > 9990) {
+        // 次の100件を取得するためにforce=1に設定
+        force = 1;
+        
+        // 安全のため最大100回まで（10000件）
+        if (allMessages.length > 10000) {
           break;
         }
       }
@@ -435,22 +468,16 @@ class WebHookMessageProcessor {
       try {
         console.log(`ルーム ${roomId} のメッセージをAPIから取得中...`);
         
-        // APIから全メッセージを取得
+        // APIから今日のメッセージを取得
         const messages = await ChatworkBotUtils.getRoomMessages(roomId);
         
-        // 今日の0時0分0秒のタイムスタンプを取得（JST）
-        const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
-        const now = new Date(jstNow);
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-        const todayStartTimestamp = todayStart.getTime() / 1000;
+        console.log(`取得したメッセージ数: ${messages.length}件`);
         
-        // 今日のメッセージをカウント
+        // メッセージをカウント
         const counts = {};
         messages.forEach(msg => {
-          if (msg.send_time >= todayStartTimestamp) {
-            const accId = msg.account.account_id;
-            counts[accId] = (counts[accId] || 0) + 1;
-          }
+          const accId = msg.account.account_id;
+          counts[accId] = (counts[accId] || 0) + 1;
         });
         
         // ランキング作成
