@@ -1,3 +1,4 @@
+
 // Chatwork Bot for Render (WebHook版 - 全ルーム対応)
 
 const express = require('express');
@@ -17,6 +18,8 @@ const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.
 const memoryStorage = {
   properties: new Map(),
   lastSentDates: new Map(), // 日付変更通知の最終送信日
+  messageCounts: new Map(), // ルームIDごとのユーザー別メッセージ数 { roomId: { accountId: count } }
+  roomResetDates: new Map(), // ルームIDごとの最終リセット日 { roomId: 'YYYY-MM-DD' }
 };
 
 // Chatwork APIレートリミット制御
@@ -206,7 +209,7 @@ class ChatworkBotUtils {
           const pageUrl = `https://ja.wikipedia.org/wiki/${encodeURIComponent(pageTitle)}`;
           result = `${summary}\n\n元記事: ${pageUrl}`;
         } else if (pageId && pages[pageId].missing !== undefined) {
-          result = `「${searchTerm}」に一致する情報は見つかりませんでした。`;
+          result = `「${searchTerm}」に関する記事は見つかりませんでした。`;
         } else {
           result = `「${searchTerm}」の検索結果を処理できませんでした。`;
         }
@@ -250,75 +253,17 @@ class ChatworkBotUtils {
     }
   }
 
-  // ルームのメッセージを取得（今日の0時以降のメッセージのみ）
+  // ルームのメッセージを取得（最新100件のみ - Chatwork APIの制限）
   static async getRoomMessages(roomId) {
     try {
-      let allMessages = [];
-      let shouldContinue = true;
+      await apiCallLimiter();
+      // force=1で最新100件を強制取得
+      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages`, {
+        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN },
+        params: { force: 1 }
+      });
       
-      // 今日の0時0分0秒のタイムスタンプを取得（日本時間）
-      const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
-      const now = new Date(jstNow);
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-      // 日本時間のタイムスタンプをUNIXタイムに変換（秒単位）
-      const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000) + 32400; // +9時間（32400秒）
-      
-      // force=0で最初の100件を取得
-      let force = 0;
-      
-      while (shouldContinue) {
-        await apiCallLimiter();
-        const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages`, {
-          headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN },
-          params: { force: force }
-        });
-        
-        const messages = response.data;
-        
-        // メッセージがない、または空の場合は終了
-        if (!messages || messages.length === 0) {
-          break;
-        }
-        
-        // 今日のメッセージと今日より前のメッセージを分離
-        const todayMessages = [];
-        let foundOldMessage = false;
-        
-        for (const msg of messages) {
-          if (msg.send_time >= todayStartTimestamp) {
-            todayMessages.push(msg);
-          } else {
-            // 日付が変わった（今日より前のメッセージ）
-            foundOldMessage = true;
-            break;
-          }
-        }
-        
-        // 今日のメッセージを追加
-        allMessages = allMessages.concat(todayMessages);
-        
-        // 日付が変わっていたら終了
-        if (foundOldMessage) {
-          shouldContinue = false;
-          break;
-        }
-        
-        // 100件未満なら終了（これ以上古いメッセージはない）
-        if (messages.length < 100) {
-          shouldContinue = false;
-          break;
-        }
-        
-        // 次の100件を取得するためにforce=1に設定
-        force = 1;
-        
-        // 安全のため最大100回まで（10000件）
-        if (allMessages.length > 10000) {
-          break;
-        }
-      }
-      
-      return allMessages;
+      return response.data || [];
     } catch (error) {
       console.error(`メッセージ取得エラー (${roomId}):`, error.message);
       return [];
@@ -348,6 +293,9 @@ class WebHookMessageProcessor {
         return;
       }
 
+      // メッセージカウントを更新
+      this.updateMessageCount(roomId, accountId);
+
       // ログ送信（指定ルームのみ）
       await ChatworkBotUtils.sendLogToChatwork(userName, messageBody, roomId);
 
@@ -372,6 +320,37 @@ class WebHookMessageProcessor {
       );
     } catch (error) {
       console.error('WebHookメッセージ処理エラー:', error.message);
+    }
+  }
+
+  // メッセージカウントを更新
+  static updateMessageCount(roomId, accountId) {
+    try {
+      // 今日の日付を取得（日本時間）
+      const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+      const now = new Date(jstNow);
+      const todayDateOnly = now.toISOString().split('T')[0];
+
+      // ルームの最終リセット日を確認
+      const lastResetDate = memoryStorage.roomResetDates.get(roomId);
+      
+      // 日付が変わっていたらリセット
+      if (lastResetDate !== todayDateOnly) {
+        memoryStorage.messageCounts.set(roomId, {});
+        memoryStorage.roomResetDates.set(roomId, todayDateOnly);
+        console.log(`ルーム ${roomId} のメッセージカウントをリセットしました (${todayDateOnly})`);
+      }
+
+      // ルームのメッセージカウントを取得
+      let roomCounts = memoryStorage.messageCounts.get(roomId) || {};
+      
+      // カウントを増やす
+      roomCounts[accountId] = (roomCounts[accountId] || 0) + 1;
+      
+      // 保存
+      memoryStorage.messageCounts.set(roomId, roomCounts);
+    } catch (error) {
+      console.error('メッセージカウント更新エラー:', error.message);
     }
   }
 
@@ -466,22 +445,40 @@ class WebHookMessageProcessor {
     // /romeraコマンド: メッセージ数ランキング
     if (messageBody === '/romera') {
       try {
-        console.log(`ルーム ${roomId} のメッセージをAPIから取得中...`);
+        console.log(`ルーム ${roomId} のランキングを作成中...`);
         
-        // APIから今日のメッセージを取得
-        const messages = await ChatworkBotUtils.getRoomMessages(roomId);
+        // メモリから今日のカウントを取得
+        let roomCounts = memoryStorage.messageCounts.get(roomId) || {};
         
-        console.log(`取得したメッセージ数: ${messages.length}件`);
-        
-        // メッセージをカウント
-        const counts = {};
-        messages.forEach(msg => {
-          const accId = msg.account.account_id;
-          counts[accId] = (counts[accId] || 0) + 1;
-        });
+        // メモリにデータがない場合、APIから最新100件を取得して初期化
+        if (Object.keys(roomCounts).length === 0) {
+          console.log(`メモリにデータがないため、APIから最新100件を取得します...`);
+          const messages = await ChatworkBotUtils.getRoomMessages(roomId);
+          
+          // 今日の0時0分0秒のタイムスタンプを取得（日本時間）
+          const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+          const now = new Date(jstNow);
+          const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+          const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000) + 32400; // +9時間
+          
+          const counts = {};
+          messages.forEach(msg => {
+            if (msg.send_time >= todayStartTimestamp) {
+              const accId = msg.account.account_id;
+              counts[accId] = (counts[accId] || 0) + 1;
+            }
+          });
+          
+          // メモリに保存
+          memoryStorage.messageCounts.set(roomId, counts);
+          memoryStorage.roomResetDates.set(roomId, now.toISOString().split('T')[0]);
+          roomCounts = counts;
+          
+          console.log(`APIから${messages.length}件取得し、今日のメッセージ${Object.values(counts).reduce((a, b) => a + b, 0)}件をカウントしました`);
+        }
         
         // ランキング作成
-        const ranking = Object.entries(counts)
+        const ranking = Object.entries(roomCounts)
           .sort((a, b) => b[1] - a[1])
           .map(([accountId, count], index) => ({
             rank: index + 1,
@@ -494,13 +491,17 @@ class WebHookMessageProcessor {
         
         // メッセージ作成
         let rankingMessage = '[info][title]メッセージ数ランキング[/title]\n';
-        ranking.forEach((item, index) => {
-          rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
-          if (index < ranking.length - 1) {
-            rankingMessage += '\n[hr]';
-          }
-          rankingMessage += '\n';
-        });
+        if (ranking.length === 0) {
+          rankingMessage += '今日のメッセージはまだありません。\n';
+        } else {
+          ranking.forEach((item, index) => {
+            rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
+            if (index < ranking.length - 1) {
+              rankingMessage += '\n[hr]';
+            }
+            rankingMessage += '\n';
+          });
+        }
         rankingMessage += `\n合計：${totalCount}コメ\n(botを含む)[/info]`;
         
         await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
@@ -641,7 +642,6 @@ app.post('/test-message', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
 
 // 統計・管理用エンドポイント
 app.get('/status', async (req, res) => {
