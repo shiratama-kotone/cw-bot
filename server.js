@@ -223,13 +223,34 @@ class ChatworkBotUtils {
     }
   }
   
-  static async getScratchUserStats(username) {
+static async getScratchUserStats(username) {
     try {
       const response = await axios.get(`https://api.scratch.mit.edu/users/${encodeURIComponent(username)}`);
       const data = response.data;
-      const status = data.profile?.status ?? '情報なし';
+      const bio = data.profile?.bio ?? '';
+      const status = data.profile?.status ?? '';
       const userLink = `https://scratch.mit.edu/users/${encodeURIComponent(username)}/`;
-      return `[info][title]Scratchユーザー情報[/title]ユーザー名: ${username}\nステータス: ${status}\nユーザーページ: ${userLink}[/info]`;
+      
+      let result = '';
+      
+      // bioがある場合は「私について」として表示
+      if (bio) {
+        result += `[info][title]私について[/title]${bio}[/info]\n\n`;
+      }
+      
+      // statusがある場合は「私が取り組んでいること」として表示
+      if (status) {
+        result += `[info][title]私が取り組んでいること[/title]${status}[/info]\n\n`;
+      }
+      
+      // どちらもない場合
+      if (!bio && !status) {
+        result = `[info][title]Scratchユーザー情報[/title]ユーザー名: ${username}\nプロフィール情報がありません。[/info]\n\n`;
+      }
+      
+      result += `ユーザーページ: ${userLink}`;
+      
+      return result;
     } catch (error) {
       if (error.response?.status === 404) {
         return `「${username}」というScratchユーザーは見つかりませんでした。`;
