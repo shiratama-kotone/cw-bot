@@ -3,7 +3,6 @@
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
-const { Aki } = require('aki-api');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -20,8 +19,7 @@ const memoryStorage = {
   lastSentDates: new Map(), // 日付変更通知の最終送信日
   messageCounts: new Map(), // ルームIDごとのユーザー別メッセージ数 { roomId: { accountId: count } }
   roomResetDates: new Map(), // ルームIDごとの最終リセット日 { roomId: 'YYYY-MM-DD' }
-  akinatorSessions: new Map(), // アキネーターセッション { `${roomId}_${accountId}`: { aki, progress, startMessageId } }
-  lastAkinatorMessages: new Map(), // 最後のアキネーター質問メッセージID { `${roomId}_${accountId}`: messageId }
+  lastEarthquakeId: null, // 最後に通知した地震のID
 };
 
 // Chatwork APIレートリミット制御
@@ -48,8 +46,19 @@ const CHATWORK_EMOJI_CODES = [
 ].map(code => code.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
 const CHATWORK_EMOJI_REGEX = new RegExp(`\\((${CHATWORK_EMOJI_CODES.join('|')})\\)`, 'g');
 
-// APIキャッシュ
+// APIキャッシュ（サイズ制限付き）
 const API_CACHE = new Map();
+const MAX_CACHE_SIZE = 50; // キャッシュの最大サイズを制限
+
+// キャッシュに追加する関数
+function addToCache(key, value) {
+  if (API_CACHE.size >= MAX_CACHE_SIZE) {
+    // 最も古いエントリを削除
+    const firstKey = API_CACHE.keys().next().value;
+    API_CACHE.delete(firstKey);
+  }
+  API_CACHE.set(key, value);
+}
 
 // day.json読み込み関数
 async function loadDayEvents() {
@@ -180,7 +189,7 @@ class ChatworkBotUtils {
     const now = Date.now();
     const cacheKey = `wiki_${searchTerm}`;
 
-    // キャッシュチェック（任意）
+    // キャッシュチェック
     if (API_CACHE.has(cacheKey)) {
       const cachedData = API_CACHE.get(cacheKey);
       if (now - cachedData.timestamp < 300000) { // 5分間キャッシュ
@@ -218,7 +227,7 @@ class ChatworkBotUtils {
       } else {
         result = `「${searchTerm}」の検索結果を処理できませんでした。`;
       }
-      API_CACHE.set(cacheKey, { data: result, timestamp: now });
+      addToCache(cacheKey, { data: result, timestamp: now });
       return result;
     } catch (error) {
       return `Wikipedia検索中にエラーが発生しました。「${searchTerm}」`;
@@ -313,8 +322,12 @@ class ChatworkBotUtils {
       await apiCallLimiter();
       const FormData = require('form-data');
       const form = new FormData();
-      form.append('file', imageBuffer, { filename });
-      form.append('message', '画像を生成しました');
+      
+      // Bufferから直接アップロード
+      form.append('file', imageBuffer, {
+        filename: filename,
+        contentType: 'image/png'
+      });
 
       const response = await axios.post(
         `https://api.chatwork.com/v2/rooms/${roomId}/files`,
@@ -323,126 +336,91 @@ class ChatworkBotUtils {
           headers: {
             'X-ChatWorkToken': CHATWORK_API_TOKEN,
             ...form.getHeaders()
-          }
+          },
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity
         }
       );
       return response.data;
     } catch (error) {
       console.error(`画像アップロードエラー (${roomId}):`, error.message);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+      }
       return null;
     }
   }
 
-  // アキネーター開始
-  static async startAkinator(roomId, accountId, messageId) {
-    const sessionKey = `${roomId}_${accountId}`;
-    
+  // P2P地震情報APIから最新の地震情報を取得
+  static async getLatestEarthquakeInfo() {
     try {
-      const aki = new Aki({ region: 'jp' });
-      await aki.start();
+      const response = await axios.get('https://api.p2pquake.net/v2/history?codes=551&limit=1');
+      const data = response.data;
       
-      memoryStorage.akinatorSessions.set(sessionKey, {
-        aki,
-        progress: 0,
-        startMessageId: messageId
-      });
-
-      const question = aki.question;
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん\n${question}`;
-      const sentMessageId = await this.sendChatworkMessage(roomId, replyMessage);
-      
-      if (sentMessageId) {
-        memoryStorage.lastAkinatorMessages.set(sessionKey, sentMessageId);
+      if (!data || data.length === 0) {
+        return null;
       }
 
-      return true;
-    } catch (error) {
-      console.error('アキネーター開始エラー:', error.message);
-      return false;
-    }
-  }
-
-  // アキネーター回答処理
-  static async answerAkinator(roomId, accountId, answer, replyToMessageId) {
-    const sessionKey = `${roomId}_${accountId}`;
-    const session = memoryStorage.akinatorSessions.get(sessionKey);
-
-    if (!session) {
-      return false;
-    }
-
-    try {
-      const { aki } = session;
+      const earthquake = data[0];
       
-      // 回答を変換
-      const answerMap = {
-        'はい': 0,
-        'いいえ': 1,
-        'わからない': 2,
-        'たぶんそう': 3,
-        '部分的にそう': 3,
-        'たぶん違う': 4,
-        'そうでもない': 4
+      // 震度3以上のみ
+      if (!earthquake.earthquake || earthquake.earthquake.maxScale < 30) {
+        return null;
+      }
+
+      return {
+        id: earthquake.id,
+        time: earthquake.earthquake.time,
+        hypocenter: earthquake.earthquake.hypocenter.name,
+        magnitude: earthquake.earthquake.hypocenter.magnitude,
+        maxScale: earthquake.earthquake.maxScale
       };
-
-      const answerIndex = answerMap[answer];
-      if (answerIndex === undefined) {
-        const errorMessage = `[rp aid=${accountId} to=${roomId}-${replyToMessageId}]${answer}\nはい、いいえ、わからない、たぶんそう、部分的にそう、たぶん違う、そうでもない の中から答えて下さい`;
-        await this.sendChatworkMessage(roomId, errorMessage);
-        return true;
-      }
-
-      await aki.step(answerIndex);
-      session.progress++;
-
-      // 確信率80%以上で結果表示
-      if (aki.progress >= 80) {
-        await aki.win();
-        
-        let resultMessage = `[rp aid=${accountId} to=${roomId}-${replyToMessageId}][info][title]結果[/title]\n`;
-        const answers = aki.answers.slice(0, 5); // 最大5位まで
-        
-        answers.forEach((ans, index) => {
-          const probability = (parseFloat(ans.proba) * 100).toFixed(2);
-          resultMessage += `${index + 1}. ${ans.name}  確信率：${probability}%`;
-          if (index < answers.length - 1) {
-            resultMessage += '\n[hr]\n';
-          }
-        });
-        
-        resultMessage += '[/info]';
-        await this.sendChatworkMessage(roomId, resultMessage);
-        
-        // セッション削除
-        memoryStorage.akinatorSessions.delete(sessionKey);
-        memoryStorage.lastAkinatorMessages.delete(sessionKey);
-        
-        return true;
-      }
-
-      // 次の質問
-      const question = aki.question;
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${replyToMessageId}][pname:${accountId}]さん\n${question}`;
-      const sentMessageId = await this.sendChatworkMessage(roomId, replyMessage);
-      
-      if (sentMessageId) {
-        memoryStorage.lastAkinatorMessages.set(sessionKey, sentMessageId);
-      }
-
-      return true;
     } catch (error) {
-      console.error('アキネーター回答処理エラー:', error.message);
-      memoryStorage.akinatorSessions.delete(sessionKey);
-      memoryStorage.lastAkinatorMessages.delete(sessionKey);
-      return false;
+      console.error('地震情報取得エラー:', error.message);
+      return null;
     }
   }
 
-  // アキネーター停止
-  static stopAkinator(roomId, accountId) {
-    const sessionKey = `${roomId}_${accountId}`;
-    memoryStorage.akinatorSessions.delete(sessionKey);
-    memoryStorage.lastAkinatorMessages.delete(sessionKey);
+  // 地震情報を通知
+  static async notifyEarthquake(earthquakeInfo, isTest = false) {
+    try {
+      // 震度を数字に変換（P2P地震情報は10倍の値）
+      const scaleMap = {
+        10: '1',
+        20: '2',
+        30: '3',
+        40: '4',
+        45: '5弱',
+        50: '5強',
+        55: '6弱',
+        60: '6強',
+        70: '7'
+      };
+      const scale = scaleMap[earthquakeInfo.maxScale] || earthquakeInfo.maxScale / 10;
+
+      // 日時をフォーマット
+      const date = new Date(earthquakeInfo.time);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+
+      const title = isTest ? '地震情報-テスト' : '地震情報';
+      const magnitudeText = isTest ? '不明' : earthquakeInfo.magnitude;
+      
+      const message = `[info][title]${title}[/title]${year}年${month}月${day}日に${earthquakeInfo.hypocenter}を中心とする震度${scale}の地震が発生しました。\nマグニチュードは、${magnitudeText}です。[/info]`;
+
+      for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+        try {
+          await this.sendChatworkMessage(roomId, message);
+          console.log(`地震情報送信完了: ルーム ${roomId}`);
+        } catch (error) {
+          console.error(`ルーム ${roomId} への地震情報送信エラー:`, error.message);
+        }
+      }
+    } catch (error) {
+      console.error('地震情報通知エラー:', error.message);
+    }
   }
 
   // Make it a Quote画像生成
@@ -517,26 +495,6 @@ class WebHookMessageProcessor {
         isSenderAdmin = this.isUserAdmin(accountId, currentMembers);
       }
 
-      // アキネーターの返信チェック
-      // Chatworkの返信形式: [rp aid=xxx to=roomId-messageId] がメッセージ本文に含まれる
-      const sessionKey = `${roomId}_${accountId}`;
-      const lastAkinatorMessageId = memoryStorage.lastAkinatorMessages.get(sessionKey);
-      
-      if (lastAkinatorMessageId) {
-        const session = memoryStorage.akinatorSessions.get(sessionKey);
-        if (session) {
-          // 返信形式のチェック: [rp aid=xxx to=roomId-lastAkinatorMessageId] が含まれているか
-          const replyPattern = new RegExp(`\\[rp aid=${accountId} to=${roomId}-${lastAkinatorMessageId}\\]`);
-          if (replyPattern.test(messageBody)) {
-            // 返信本文を抽出（[rp ...]タグを除去）
-            const cleanMessage = messageBody.replace(/\[rp aid=\d+ to=\d+-\d+\]/g, '').trim();
-            // アキネーターへの回答として処理
-            await ChatworkBotUtils.answerAkinator(roomId, accountId, cleanMessage, messageId);
-            return;
-          }
-        }
-      }
-
       // すべてのルームでコマンドを処理
       await this.handleCommands(
         roomId,
@@ -586,38 +544,6 @@ class WebHookMessageProcessor {
   static async handleCommands(roomId, messageId, accountId, messageBody, isSenderAdmin, isDirectChat, currentMembers) {
     if (!isDirectChat && messageBody.includes('[toall]') && !isSenderAdmin) {
       console.log(`[toall]を検出した非管理者: ${accountId} in room ${roomId}`);
-    }
-
-    // アキネーター開始
-    if (messageBody === '/akinator-start') {
-      const sessionKey = `${roomId}_${accountId}`;
-      const existingSession = memoryStorage.akinatorSessions.get(sessionKey);
-      
-      if (existingSession) {
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、既にアキネーターをプレイ中です。`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
-        return;
-      }
-
-      const started = await ChatworkBotUtils.startAkinator(roomId, accountId, messageId);
-      if (!started) {
-        const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]アキネーターの開始に失敗しました。`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, errorMessage);
-      }
-      return;
-    }
-
-    // アキネーター停止
-    if (messageBody === '/akinator-stop') {
-      const sessionKey = `${roomId}_${accountId}`;
-      const session = memoryStorage.akinatorSessions.get(sessionKey);
-      
-      if (session) {
-        ChatworkBotUtils.stopAkinator(roomId, accountId);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]アキネーターを終了しました。`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
-      }
-      return;
     }
 
     // Make it a Quote
@@ -937,7 +863,7 @@ app.get('/status', async (req, res) => {
       memoryUsage: {
         apiCacheSize: API_CACHE.size,
         lastSentDatesSize: memoryStorage.lastSentDates.size,
-        akinatorSessionsSize: memoryStorage.akinatorSessions.size
+        lastEarthquakeId: memoryStorage.lastEarthquakeId
       }
     });
   } catch (error) {
@@ -960,6 +886,40 @@ app.get('/load-day-json', async (req, res) => {
   try {
     const dayEvents = await loadDayEvents();
     res.json({ status: 'success', dayEvents });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// 地震情報テスト用エンドポイント
+app.get('/eew-test:scale', async (req, res) => {
+  try {
+    const scale = parseInt(req.params.scale);
+    
+    if (isNaN(scale) || scale < 10 || scale > 70) {
+      return res.status(400).json({ 
+        status: 'error', 
+        message: '震度は10〜70の範囲で指定してください（10=震度1, 70=震度7）' 
+      });
+    }
+
+    // テスト用の地震情報を作成
+    const now = new Date();
+    const testEarthquakeInfo = {
+      id: `test_${Date.now()}`,
+      time: now.toISOString(),
+      hypocenter: 'テスト震源地',
+      magnitude: null, // テストでは不明
+      maxScale: scale
+    };
+
+    await ChatworkBotUtils.notifyEarthquake(testEarthquakeInfo, true);
+    
+    res.json({ 
+      status: 'success', 
+      message: 'テスト地震情報を送信しました',
+      earthquakeInfo: testEarthquakeInfo
+    });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
   }
@@ -1043,6 +1003,21 @@ async function sendMorningMessage() {
   }
 }
 
+// 地震情報チェック（1分ごと）
+async function checkEarthquakeInfo() {
+  try {
+    const earthquakeInfo = await ChatworkBotUtils.getLatestEarthquakeInfo();
+    
+    if (earthquakeInfo && earthquakeInfo.id !== memoryStorage.lastEarthquakeId) {
+      console.log('新しい地震情報を検出:', earthquakeInfo);
+      await ChatworkBotUtils.notifyEarthquake(earthquakeInfo);
+      memoryStorage.lastEarthquakeId = earthquakeInfo.id;
+    }
+  } catch (error) {
+    console.error('地震情報チェックエラー:', error.message);
+  }
+}
+
 // cron: 毎日0時0分に実行（日本時間で日付変更通知用）
 cron.schedule('0 0 0 * * *', async () => {
   await sendDailyGreetingMessages();
@@ -1064,6 +1039,13 @@ cron.schedule('0 0 6 * * *', async () => {
   timezone: "Asia/Tokyo"
 });
 
+// cron: 1分ごとに地震情報をチェック
+cron.schedule('*/1 * * * *', async () => {
+  await checkEarthquakeInfo();
+}, {
+  timezone: "Asia/Tokyo"
+});
+
 // サーバー起動
 app.listen(port, () => {
   console.log(`Chatwork Bot WebHook版 (全ルーム対応) がポート${port}で起動しました`);
@@ -1075,3 +1057,4 @@ app.listen(port, () => {
   console.log('- DAY_JSON_URL:', DAY_JSON_URL);
   console.log('動作モード: すべてのルームで反応、ログは', LOG_ROOM_ID, 'のみ');
 });
+
