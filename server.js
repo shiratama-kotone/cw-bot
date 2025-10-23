@@ -781,6 +781,8 @@ class WebHookMessageProcessor {
       'ジャン': `ライリー`,
       '雪平': `実篤`,
       '夏野': `二葉`,
+      'bot！！！':`はい！！！！`,
+      'ぼっと！！！':`はい！！！！`,
     };
 
     if (responses[messageBody]) {
