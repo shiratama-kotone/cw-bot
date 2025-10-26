@@ -443,7 +443,7 @@ class ChatworkBotUtils {
     }
   }
 
-  // Make it a Quote画像生成（独自API使用）
+  // Make it a Quote画像生成（外部API直接使用）
   static async createQuoteImage(roomId, targetRoomId, targetMessageId) {
     try {
       // メッセージを取得
@@ -454,36 +454,13 @@ class ChatworkBotUtils {
       }
 
       const username = message.account.name;
-      const displayName = message.account.name;
       const avatar = message.account.avatar_image_url || 'https://www.chatwork.com/assets/images/common/avatar-default.png';
       const text = message.body;
 
-      console.log('Quote画像生成開始:', { username, displayName, avatar: avatar.substring(0, 50), text: text.substring(0, 50) });
+      console.log('Quote画像生成開始:', { username, avatar: avatar.substring(0, 50), text: text.substring(0, 50) });
 
-      // 独自のMake it a Quote APIを使用
-      const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
-      const quoteUrl = `${baseUrl}/miaq?u-name=${encodeURIComponent(username)}&d-name=${encodeURIComponent(displayName)}&text=${encodeURIComponent(text)}&avatar=${encodeURIComponent(avatar)}&color=true`;
-      
-      console.log('画像取得URL:', quoteUrl);
-      
-      const response = await axios.get(quoteUrl, { 
-        responseType: 'arraybuffer',
-        headers: {
-          'Accept': 'image/png,image/*'
-        }
-      });
-      
-      console.log('画像取得完了:', {
-        status: response.status,
-        contentType: response.headers['content-type'],
-        dataLength: response.data.byteLength
-      });
-
-      if (!response.data || response.data.byteLength === 0) {
-        return { success: false, error: '画像データが空です' };
-      }
-
-      const imageBuffer = Buffer.from(response.data);
+      // 外部APIを直接使用
+      const imageBuffer = await this.generateQuoteImageFromAPI(username, username, text, avatar, true);
       
       console.log('Bufferサイズ:', imageBuffer.length);
 
