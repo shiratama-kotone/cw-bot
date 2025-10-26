@@ -487,16 +487,25 @@ class ChatworkBotUtils {
   // Make it a Quote画像を生成（外部API使用）
   static async generateQuoteImageFromAPI(username, displayName, text, avatar, color) {
     try {
-      // 外部APIを使用
-      const apiUrl = `https://api.voids.top/fakequote?username=${encodeURIComponent(displayName)}&avatar=${encodeURIComponent(avatar)}&message=${encodeURIComponent(text)}`;
-      
-      const response = await axios.get(apiUrl, { 
-        responseType: 'arraybuffer',
-        headers: {
-          'Accept': 'image/png,image/*'
+      // 外部APIを使用（POSTリクエスト）
+      const response = await axios.post(
+        'https://api.voids.top/fakequote',
+        {
+          username: username,
+          display_name: displayName,
+          text: text,
+          avatar: avatar,
+          color: color
         },
-        timeout: 10000
-      });
+        { 
+          responseType: 'arraybuffer',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'image/png,image/*'
+          },
+          timeout: 10000
+        }
+      );
       
       if (!response.data || response.data.byteLength === 0) {
         throw new Error('画像データが空です');
@@ -505,6 +514,10 @@ class ChatworkBotUtils {
       return Buffer.from(response.data);
     } catch (error) {
       console.error('外部API画像生成エラー:', error.message);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data?.toString().substring(0, 200));
+      }
       throw error;
     }
   }
@@ -983,19 +996,33 @@ app.get('/miaq', async (req, res) => {
     const { 'u-name': username, 'd-name': displayName, text, avatar, color } = req.query;
 
     // 必須パラメータチェック
-    if (!username || !displayName || !text || !avatar) {
+    if (!text || !avatar) {
       return res.status(400).json({
         status: 'error',
-        message: '必須パラメータが不足しています: u-name, d-name, text, avatar'
+        message: '必須パラメータが不足しています: text, avatar'
       });
     }
 
-    console.log('MIAQ画像生成リクエスト:', { username, displayName, text: text.substring(0, 50), avatar: avatar.substring(0, 50), color });
-
+    const finalUsername = username || 'Anonymous';
+    const finalDisplayName = displayName || username || 'Anonymous';
     const isColor = color === 'true';
 
+    console.log('MIAQ画像生成リクエスト:', { 
+      username: finalUsername, 
+      displayName: finalDisplayName, 
+      text: text.substring(0, 50), 
+      avatar: avatar.substring(0, 50), 
+      color: isColor 
+    });
+
     // 外部APIから画像を生成
-    const imageBuffer = await ChatworkBotUtils.generateQuoteImageFromAPI(username, displayName, text, avatar, isColor);
+    const imageBuffer = await ChatworkBotUtils.generateQuoteImageFromAPI(
+      finalUsername, 
+      finalDisplayName, 
+      text, 
+      avatar, 
+      isColor
+    );
 
     // 画像をレスポンスとして返す
     res.setHeader('Content-Type', 'image/png');
