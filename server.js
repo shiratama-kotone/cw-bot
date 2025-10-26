@@ -487,6 +487,28 @@ class ChatworkBotUtils {
   // Make it a Quote画像を生成（外部API使用）
   static async generateQuoteImageFromAPI(username, displayName, text, avatar, color) {
     try {
+      let avatarData = avatar;
+      
+      // ChatworkのアバターURLの場合、画像をダウンロードしてbase64に変換
+      if (avatar && !avatar.startsWith('data:image')) {
+        try {
+          console.log('アバター画像をダウンロード中:', avatar);
+          const avatarResponse = await axios.get(avatar, {
+            responseType: 'arraybuffer',
+            timeout: 5000
+          });
+          
+          const base64Image = Buffer.from(avatarResponse.data).toString('base64');
+          // 常にPNG形式として扱う
+          avatarData = `data:image/png;base64,${base64Image}`;
+          console.log('アバター画像をPNG base64に変換しました');
+        } catch (avatarError) {
+          console.error('アバター画像のダウンロードエラー:', avatarError.message);
+          // デフォルトアバターを使用
+          avatarData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+        }
+      }
+
       // 外部APIを使用（POSTリクエスト）
       const response = await axios.post(
         'https://api.voids.top/fakequote',
@@ -494,7 +516,7 @@ class ChatworkBotUtils {
           username: username,
           display_name: displayName,
           text: text,
-          avatar: avatar,
+          avatar: avatarData,
           color: color
         },
         { 
