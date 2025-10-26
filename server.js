@@ -459,10 +459,10 @@ class ChatworkBotUtils {
 
       console.log('Quote画像生成開始:', { username, avatar: avatar.substring(0, 50), text: text.substring(0, 50) });
 
-      // 外部APIを直接使用
+      // 外部APIを直接使用（カラー固定）
       const imageBuffer = await this.generateQuoteImageFromAPI(username, username, text, avatar, true);
       
-      console.log('Bufferサイズ:', imageBuffer.length);
+      console.log('画像生成完了 Bufferサイズ:', imageBuffer.length);
 
       // Chatworkにアップロード
       const uploadResult = await this.uploadImageToChatwork(roomId, imageBuffer, 'quote.png');
@@ -1027,7 +1027,8 @@ app.get('/miaq', async (req, res) => {
 
     const finalUsername = username || 'Anonymous';
     const finalDisplayName = displayName || username || 'Anonymous';
-    const isColor = color === 'true';
+    // 常にカラー
+    const isColor = true;
 
     console.log('MIAQ画像生成リクエスト:', { 
       username: finalUsername, 
