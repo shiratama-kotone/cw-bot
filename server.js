@@ -9,7 +9,7 @@ const port = process.env.PORT || 3000;
 
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
-const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,404646956,407676893').split(',');
+const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,404646956').split(',');
 const LOG_ROOM_ID = '404646956'; // ログ送信先のルームIDを固定
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
 
@@ -323,11 +323,28 @@ class ChatworkBotUtils {
       const FormData = require('form-data');
       const form = new FormData();
       
+      console.log('アップロード準備:', {
+        roomId,
+        filename,
+        bufferLength: imageBuffer.length
+      });
+
       // Bufferから直接アップロード
       form.append('file', imageBuffer, {
         filename: filename,
-        contentType: 'image/png'
+        contentType: 'image/png',
+        knownLength: imageBuffer.length
       });
+
+      // form.getLengthで実際のコンテンツ長を取得
+      const contentLength = await new Promise((resolve, reject) => {
+        form.getLength((err, length) => {
+          if (err) reject(err);
+          else resolve(length);
+        });
+      });
+
+      console.log('FormDataサイズ:', contentLength);
 
       const response = await axios.post(
         `https://api.chatwork.com/v2/rooms/${roomId}/files`,
@@ -335,12 +352,15 @@ class ChatworkBotUtils {
         {
           headers: {
             'X-ChatWorkToken': CHATWORK_API_TOKEN,
-            ...form.getHeaders()
+            ...form.getHeaders(),
+            'Content-Length': contentLength
           },
           maxContentLength: Infinity,
           maxBodyLength: Infinity
         }
       );
+      
+      console.log('アップロード応答:', response.data);
       return response.data;
     } catch (error) {
       console.error(`画像アップロードエラー (${roomId}):`, error.message);
@@ -423,7 +443,7 @@ class ChatworkBotUtils {
     }
   }
 
-  // Make it a Quote画像生成
+  // Make it a Quote画像生成（独自API使用）
   static async createQuoteImage(roomId, targetRoomId, targetMessageId) {
     try {
       // メッセージを取得
@@ -434,26 +454,81 @@ class ChatworkBotUtils {
       }
 
       const username = message.account.name;
+      const displayName = message.account.name;
       const avatar = message.account.avatar_image_url || 'https://www.chatwork.com/assets/images/common/avatar-default.png';
       const text = message.body;
 
-      // Make it a Quote APIを使用
-      const quoteUrl = `https://api.voids.top/fakequote?username=${encodeURIComponent(username)}&avatar=${encodeURIComponent(avatar)}&message=${encodeURIComponent(text)}`;
+      console.log('Quote画像生成開始:', { username, displayName, avatar: avatar.substring(0, 50), text: text.substring(0, 50) });
+
+      // 独自のMake it a Quote APIを使用
+      const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+      const quoteUrl = `${baseUrl}/miaq?u-name=${encodeURIComponent(username)}&d-name=${encodeURIComponent(displayName)}&text=${encodeURIComponent(text)}&avatar=${encodeURIComponent(avatar)}&color=true`;
       
-      const response = await axios.get(quoteUrl, { responseType: 'arraybuffer' });
+      console.log('画像取得URL:', quoteUrl);
+      
+      const response = await axios.get(quoteUrl, { 
+        responseType: 'arraybuffer',
+        headers: {
+          'Accept': 'image/png,image/*'
+        }
+      });
+      
+      console.log('画像取得完了:', {
+        status: response.status,
+        contentType: response.headers['content-type'],
+        dataLength: response.data.byteLength
+      });
+
+      if (!response.data || response.data.byteLength === 0) {
+        return { success: false, error: '画像データが空です' };
+      }
+
       const imageBuffer = Buffer.from(response.data);
+      
+      console.log('Bufferサイズ:', imageBuffer.length);
 
       // Chatworkにアップロード
       const uploadResult = await this.uploadImageToChatwork(roomId, imageBuffer, 'quote.png');
       
       if (uploadResult) {
+        console.log('アップロード成功:', uploadResult);
         return { success: true };
       } else {
         return { success: false, error: 'アップロードに失敗しました' };
       }
     } catch (error) {
       console.error('Quote画像生成エラー:', error.message);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response headers:', error.response.headers);
+        console.error('Response data length:', error.response.data?.length || 0);
+      }
       return { success: false, error: error.message };
+    }
+  }
+
+  // Make it a Quote画像を生成（外部API使用）
+  static async generateQuoteImageFromAPI(username, displayName, text, avatar, color) {
+    try {
+      // 外部APIを使用
+      const apiUrl = `https://api.voids.top/fakequote?username=${encodeURIComponent(displayName)}&avatar=${encodeURIComponent(avatar)}&message=${encodeURIComponent(text)}`;
+      
+      const response = await axios.get(apiUrl, { 
+        responseType: 'arraybuffer',
+        headers: {
+          'Accept': 'image/png,image/*'
+        },
+        timeout: 10000
+      });
+      
+      if (!response.data || response.data.byteLength === 0) {
+        throw new Error('画像データが空です');
+      }
+
+      return Buffer.from(response.data);
+    } catch (error) {
+      console.error('外部API画像生成エラー:', error.message);
+      throw error;
     }
   }
 }
@@ -781,8 +856,6 @@ class WebHookMessageProcessor {
       'ジャン': `ライリー`,
       '雪平': `実篤`,
       '夏野': `二葉`,
-      'bot！！！':`はい！！！！`,
-      'ぼっと！！！':`はい！！！！`,
     };
 
     if (responses[messageBody]) {
@@ -927,6 +1000,40 @@ app.get('/eew-test:scale', async (req, res) => {
   }
 });
 
+// Make it a Quote画像生成エンドポイント
+app.get('/miaq', async (req, res) => {
+  try {
+    const { 'u-name': username, 'd-name': displayName, text, avatar, color } = req.query;
+
+    // 必須パラメータチェック
+    if (!username || !displayName || !text || !avatar) {
+      return res.status(400).json({
+        status: 'error',
+        message: '必須パラメータが不足しています: u-name, d-name, text, avatar'
+      });
+    }
+
+    console.log('MIAQ画像生成リクエスト:', { username, displayName, text: text.substring(0, 50), avatar: avatar.substring(0, 50), color });
+
+    const isColor = color === 'true';
+
+    // 外部APIから画像を生成
+    const imageBuffer = await ChatworkBotUtils.generateQuoteImageFromAPI(username, displayName, text, avatar, isColor);
+
+    // 画像をレスポンスとして返す
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Content-Length', imageBuffer.length);
+    res.send(imageBuffer);
+  } catch (error) {
+    console.error('MIAQ画像生成エラー:', error.message);
+    res.status(500).json({ 
+      status: 'error', 
+      message: '画像生成に失敗しました',
+      error: error.message 
+    });
+  }
+});
+
 // 日付変更通知（cronで実行）
 async function sendDailyGreetingMessages() {
   try {
@@ -1059,4 +1166,3 @@ app.listen(port, () => {
   console.log('- DAY_JSON_URL:', DAY_JSON_URL);
   console.log('動作モード: すべてのルームで反応、ログは', LOG_ROOM_ID, 'のみ');
 });
-
