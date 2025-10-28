@@ -459,10 +459,10 @@ class ChatworkBotUtils {
 
       console.log('Quote画像生成開始:', { username, avatar: avatar.substring(0, 50), text: text.substring(0, 50) });
 
-      // 外部APIを直接使用（カラー固定）
+      // 外部APIを直接使用（常にカラー）
       const imageBuffer = await this.generateQuoteImageFromAPI(username, username, text, avatar, true);
       
-      console.log('画像生成完了 Bufferサイズ:', imageBuffer.length);
+      console.log('画像生成完了。Bufferサイズ:', imageBuffer.length);
 
       // Chatworkにアップロード
       const uploadResult = await this.uploadImageToChatwork(roomId, imageBuffer, 'quote.png');
@@ -1117,6 +1117,83 @@ async function sendNightMessage() {
     }
   } catch (error) {
     console.error('夜11時通知処理エラー:', error.message);
+  }
+}
+
+// 23:59にランキングを送信
+async function sendDailyRanking() {
+  try {
+    console.log('今日のランキングを送信します');
+    
+    for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+      try {
+        console.log(`ルーム ${roomId} のランキングを作成中...`);
+
+        // メモリから今日のカウントを取得
+        let roomCounts = memoryStorage.messageCounts.get(roomId) || {};
+
+        // メモリにデータがない場合、APIから最新100件を取得して初期化
+        if (Object.keys(roomCounts).length === 0) {
+          console.log(`メモリにデータがないため、APIから最新100件を取得します...`);
+          const messages = await ChatworkBotUtils.getRoomMessages(roomId);
+
+          // 今日の0時0分0秒のタイムスタンプを取得（日本時間）
+          const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+          const now = new Date(jstNow);
+          const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+          const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000) + 32400; // +9時間
+
+          const counts = {};
+          messages.forEach(msg => {
+            if (msg.send_time >= todayStartTimestamp) {
+              const accId = msg.account.account_id;
+              counts[accId] = (counts[accId] || 0) + 1;
+            }
+          });
+
+          // メモリに保存
+          memoryStorage.messageCounts.set(roomId, counts);
+          memoryStorage.roomResetDates.set(roomId, now.toISOString().split('T')[0]);
+          roomCounts = counts;
+
+          console.log(`APIから${messages.length}件取得し、今日のメッセージ${Object.values(counts).reduce((a, b) => a + b, 0)}件をカウントしました`);
+        }
+
+        // ランキング作成
+        const ranking = Object.entries(roomCounts)
+          .sort((a, b) => b[1] - a[1])
+          .map(([accountId, count], index) => ({
+            rank: index + 1,
+            accountId,
+            count
+          }));
+
+        // 合計メッセージ数
+        const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
+
+        // メッセージ作成
+        let rankingMessage = '今日のコメ数ランキングだよ！\n[info][title]メッセージ数ランキング[/title]\n';
+        if (ranking.length === 0) {
+          rankingMessage += '今日のメッセージはまだありません。\n';
+        } else {
+          ranking.forEach((item, index) => {
+            rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
+            if (index < ranking.length - 1) {
+              rankingMessage += '\n[hr]';
+            }
+            rankingMessage += '\n';
+          });
+        }
+        rankingMessage += `\n合計：${totalCount}コメ\n(botを含む)[/info]`;
+
+        await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
+        console.log(`ランキング送信完了: ルーム ${roomId}`);
+      } catch (error) {
+        console.error(`ルーム ${roomId} へのランキング送信エラー:`, error.message);
+      }
+    }
+  } catch (error) {
+    console.error('ランキング送信処理エラー:', error.message);
   }
 }
 
