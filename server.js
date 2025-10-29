@@ -826,6 +826,7 @@ class WebHookMessageProcessor {
       '1+1=': `1!`,
       'トイレいってくる': `漏らさないでねー`,
       'からめりは': `エロ画像マニア！`,
+      'たまごは': `人外ナー！`,
       'ゆゆゆは': `かわいい．．．はず`,
       'はんせいは': `かっこいい！`,
       'プロセカ公式Youtube': `https://www.youtube.com/@pj_sekai_colorfulstage`,
