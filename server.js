@@ -9,7 +9,7 @@ const port = process.env.PORT || 3000;
 
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
-const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '415060980,404646956').split(',');
+const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,404646956').split(',');
 const LOG_ROOM_ID = '404646956'; // ログ送信先のルームIDを固定
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
 
@@ -127,6 +127,20 @@ class ChatworkBotUtils {
     }
   }
 
+  // ルーム情報を取得
+  static async getRoomInfo(roomId) {
+    await apiCallLimiter();
+    try {
+      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}`, {
+        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
+      });
+      return response.data;
+    } catch (error) {
+      console.error(`ルーム情報取得エラー (${roomId}):`, error.message);
+      return null;
+    }
+  }
+
   static async sendChatworkMessage(roomId, message) {
     await apiCallLimiter();
     try {
@@ -150,7 +164,9 @@ class ChatworkBotUtils {
         return;
       }
       const logMessage = `[info][title]${userName}[/title]${messageBody}[/info]`;
+      console.log(`ログ送信: ルーム ${LOG_ROOM_ID} へ`);
       await this.sendChatworkMessage(LOG_ROOM_ID, logMessage);
+      console.log(`ログ送信完了: ルーム ${LOG_ROOM_ID}`);
     } catch (error) {
       console.error('Chatworkログ送信エラー:', error.message);
     }
@@ -571,6 +587,7 @@ class WebHookMessageProcessor {
       this.updateMessageCount(roomId, accountId);
 
       // ログ送信（指定ルームのみ）
+      console.log(`ログ送信チェック: sourceRoomId=${roomId}, LOG_ROOM_ID=${LOG_ROOM_ID}`);
       await ChatworkBotUtils.sendLogToChatwork(userName, messageBody, roomId);
 
       let currentMembers = [];
@@ -734,6 +751,48 @@ class WebHookMessageProcessor {
       }
     }
 
+    // /infoコマンド: ルーム情報表示
+    if (!isDirectChat && messageBody === '/info') {
+      try {
+        const roomInfo = await ChatworkBotUtils.getRoomInfo(roomId);
+        
+        if (!roomInfo) {
+          await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得に失敗しました。');
+          return;
+        }
+
+        const roomName = roomInfo.name;
+        const memberCount = currentMembers.length;
+        const adminCount = currentMembers.filter(m => m.role === 'admin').length;
+        const fileCount = roomInfo.file_num || 0;
+        const messageCount = roomInfo.message_num || 0;
+        const lastUpdateTime = roomInfo.last_update_time;
+        const iconPath = roomInfo.icon_path || '';
+        
+        // 最新メッセージリンク
+        const messageLink = `https://www.chatwork.com/#!rid${roomId}-${lastUpdateTime}`;
+        
+        // アイコンリンク
+        const iconLink = iconPath ? `https://appdata.chatwork.com${iconPath}` : 'なし';
+
+        // 管理者のリスト
+        const admins = currentMembers.filter(m => m.role === 'admin');
+        let adminList = '';
+        if (admins.length > 0) {
+          adminList = admins.map(admin => `[picon:${admin.account_id}]`).join(' ');
+        } else {
+          adminList = 'なし';
+        }
+
+        const infoMessage = `[info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}個\nメッセージ数：${messageCount}件\nメッセージリンク：${messageLink}\nアイコンリンク：${iconLink}\n[info][title]管理者[/title]${adminList}[/info][/info]`;
+
+        await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
+      } catch (error) {
+        console.error('ルーム情報取得エラー:', error.message);
+        await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得中にエラーが発生しました。');
+      }
+    }
+
     // /romeraコマンド: メッセージ数ランキング
     if (messageBody === '/romera') {
       try {
@@ -826,7 +885,6 @@ class WebHookMessageProcessor {
       '1+1=': `1!`,
       'トイレいってくる': `漏らさないでねー`,
       'からめりは': `エロ画像マニア！`,
-      'たまごは': `人外ナー！`,
       'ゆゆゆは': `かわいい．．．はず`,
       'はんせいは': `かっこいい！`,
       'プロセカ公式Youtube': `https://www.youtube.com/@pj_sekai_colorfulstage`,
@@ -1242,6 +1300,13 @@ cron.schedule('0 0 0 * * *', async () => {
 // cron: 毎日23時0分に実行（日本時間で夜の挨拶）
 cron.schedule('0 0 23 * * *', async () => {
   await sendNightMessage();
+}, {
+  timezone: "Asia/Tokyo"
+});
+
+// cron: 毎日23時59分に実行（日本時間で今日のランキング）
+cron.schedule('59 23 * * *', async () => {
+  await sendDailyRanking();
 }, {
   timezone: "Asia/Tokyo"
 });
