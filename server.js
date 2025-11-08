@@ -766,14 +766,25 @@ class WebHookMessageProcessor {
         const adminCount = currentMembers.filter(m => m.role === 'admin').length;
         const fileCount = roomInfo.file_num || 0;
         const messageCount = roomInfo.message_num || 0;
-        const lastUpdateTime = roomInfo.last_update_time;
         const iconPath = roomInfo.icon_path || '';
         
-        // 最新メッセージリンク
-        const messageLink = `https://www.chatwork.com/#!rid${roomId}-${lastUpdateTime}`;
+        // 最新メッセージを取得してメッセージIDを取得
+        const messages = await ChatworkBotUtils.getRoomMessages(roomId);
+        let messageLink = 'なし';
+        if (messages && messages.length > 0) {
+          const latestMessageId = messages[0].message_id;
+          messageLink = `https://www.chatwork.com/#!rid${roomId}-${latestMessageId}`;
+        }
         
-        // アイコンリンク
-        const iconLink = iconPath ? `https://appdata.chatwork.com${iconPath}` : 'なし';
+        // アイコンリンク（icon_pathは相対パスまたは絶対URLの可能性がある）
+        let iconLink = 'なし';
+        if (iconPath) {
+          if (iconPath.startsWith('http')) {
+            iconLink = iconPath;
+          } else {
+            iconLink = `https://appdata.chatwork.com${iconPath}`;
+          }
+        }
 
         // 管理者のリスト
         const admins = currentMembers.filter(m => m.role === 'admin');
