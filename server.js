@@ -9,9 +9,12 @@ const port = process.env.PORT || 3000;
 
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
+const INFO_API_TOKEN = process.env.INFO_API_TOKEN || '';
+const AI_API_TOKEN = process.env.AI_API_TOKEN || '';
 const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,407676893,415060980').split(',');
 const LOG_ROOM_ID = '404646956'; // ログ送信先のルームIDを固定
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
+const YUYUYU_ACCOUNT_ID = '10544705'; // ゆゆゆの本垢のアカウントID
 
 // メモリ内データストレージ
 const memoryStorage = {
@@ -221,21 +224,24 @@ class ChatworkBotUtils {
         exintro: true,
         explaintext: true,
         redirects: 1,
-        titles: searchTerm
+        titles: searchTerm,
+        origin: '*'
       });
-      const response = await axios.get(`https://ja.wikipedia.org/w/api.php?${params}`);
+      const response = await axios.get(`https://ja.wikipedia.org/w/api.php?${params}`, {
+        timeout: 10000
+      });
       const data = response.data;
       let result;
       if (data.query && data.query.pages) {
         const pages = data.query.pages;
         const pageId = Object.keys(pages)[0];
-        if (pageId && pages[pageId] && pages[pageId].extract) {
+        if (pageId && pageId !== '-1' && pages[pageId] && pages[pageId].extract) {
           let summary = pages[pageId].extract;
           if (summary.length > 500) summary = summary.substring(0, 500) + '...';
           const pageTitle = pages[pageId].title;
           const pageUrl = `https://ja.wikipedia.org/wiki/${encodeURIComponent(pageTitle)}`;
           result = `${summary}\n\n元記事: ${pageUrl}`;
-        } else if (pageId && pages[pageId].missing !== undefined) {
+        } else if (pageId && (pageId === '-1' || pages[pageId].missing !== undefined)) {
           result = `「${searchTerm}」に関する記事は見つかりませんでした。`;
         } else {
           result = `「${searchTerm}」の検索結果を処理できませんでした。`;
@@ -246,7 +252,8 @@ class ChatworkBotUtils {
       addToCache(cacheKey, { data: result, timestamp: now });
       return result;
     } catch (error) {
-      return `Wikipedia検索中にエラーが発生しました。「${searchTerm}」`;
+      console.error('Wikipedia検索エラー:', error.message);
+      return `Wikipedia検索中にエラーが発生しました: ${error.message}`;
     }
   }
 
@@ -435,16 +442,19 @@ class ChatworkBotUtils {
       };
       const scale = scaleMap[earthquakeInfo.maxScale] || earthquakeInfo.maxScale / 10;
 
-      // 日時をフォーマット
+      // 日時をフォーマット（時間・分まで表示）
       const date = new Date(earthquakeInfo.time);
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, '0');
       const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
 
       const title = isTest ? '地震情報-テスト' : '地震情報';
-      const magnitudeText = isTest ? '不明' : earthquakeInfo.magnitude;
+      // マグニチュードが-1の場合は調査中
+      const magnitudeText = isTest ? '不明' : (earthquakeInfo.magnitude === -1 ? '調査中' : earthquakeInfo.magnitude);
       
-      const message = `[info][title]${title}[/title]${year}年${month}月${day}日に${earthquakeInfo.hypocenter}を中心とする震度${scale}の地震が発生しました。\nマグニチュードは、${magnitudeText}です。[/info]`;
+      const message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes}に${earthquakeInfo.hypocenter}を中心とする震度${scale}の地震が発生しました。\nマグニチュードは、${magnitudeText}です。[/info]`;
 
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
         try {
@@ -500,7 +510,81 @@ class ChatworkBotUtils {
     }
   }
 
-  // Make it a Quote画像を生成（外部API使用）
+  // 指定ルームの情報を取得（INFO_API_TOKENを使用）
+  static async getRoomInfoWithToken(roomId, apiToken) {
+    await apiCallLimiter();
+    try {
+      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}`, {
+        headers: { 'X-ChatWorkToken': apiToken }
+      });
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return { error: 'not_found' };
+      }
+      console.error(`ルーム情報取得エラー (${roomId}):`, error.message);
+      return { error: 'unknown' };
+    }
+  }
+
+  // 指定ルームのメンバーを取得（INFO_API_TOKENを使用）
+  static async getRoomMembersWithToken(roomId, apiToken) {
+    await apiCallLimiter();
+    try {
+      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/members`, {
+        headers: { 'X-ChatWorkToken': apiToken }
+      });
+      return response.data.map(member => ({
+        account_id: member.account_id,
+        name: member.name,
+        role: member.role
+      }));
+    } catch (error) {
+      console.error(`メンバー取得エラー (${roomId}):`, error.message);
+      return [];
+    }
+  }
+
+  // Google AI Studioと会話
+  static async talkWithAI(message) {
+    try {
+      if (!AI_API_TOKEN) {
+        return 'AI APIキーが設定されていません。';
+      }
+
+      const response = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${AI_API_TOKEN}`,
+        {
+          contents: [{
+            parts: [{
+              text: message
+            }]
+          }]
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        }
+      );
+
+      if (response.data.candidates && response.data.candidates.length > 0) {
+        const content = response.data.candidates[0].content;
+        if (content.parts && content.parts.length > 0) {
+          return content.parts[0].text;
+        }
+      }
+
+      return 'AIからの応答を取得できませんでした。';
+    } catch (error) {
+      console.error('AI会話エラー:', error.message);
+      if (error.response) {
+        console.error('Response data:', error.response.data);
+      }
+      return `AIとの会話中にエラーが発生しました: ${error.message}`;
+    }
+  }
   static async generateQuoteImageFromAPI(username, displayName, text, avatar, color) {
     try {
       let avatarData = avatar;
@@ -694,6 +778,87 @@ class WebHookMessageProcessor {
         const wikipediaSummary = await ChatworkBotUtils.getWikipediaSummary(searchTerm);
         const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、Wikipediaの検索結果です。\n\n${wikipediaSummary}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+      }
+    }
+
+    // /info/{ルームID}コマンド: 指定ルームの情報表示
+    if (messageBody.startsWith('/info/')) {
+      const targetRoomId = messageBody.substring('/info/'.length).trim();
+      
+      if (!targetRoomId || !INFO_API_TOKEN) {
+        const errorMsg = !INFO_API_TOKEN 
+          ? 'INFO_API_TOKENが設定されていません。'
+          : 'ルームIDを指定してください。';
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]${errorMsg}`);
+        return;
+      }
+
+      try {
+        const roomInfo = await ChatworkBotUtils.getRoomInfoWithToken(targetRoomId, INFO_API_TOKEN);
+        
+        if (roomInfo.error === 'not_found') {
+          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]存在しないルームです。`);
+          return;
+        }
+        
+        if (roomInfo.error) {
+          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得に失敗しました。`);
+          return;
+        }
+
+        // メンバーを取得してゆゆゆが参加しているか確認
+        const members = await ChatworkBotUtils.getRoomMembersWithToken(targetRoomId, INFO_API_TOKEN);
+        const isYuyuyuMember = members.some(m => m.account_id === parseInt(YUYUYU_ACCOUNT_ID));
+        
+        if (!isYuyuyuMember) {
+          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ゆゆゆの本垢が参加していません。`);
+          return;
+        }
+
+        // ルーム情報を整形
+        const roomName = roomInfo.name;
+        const memberCount = members.length;
+        const adminCount = members.filter(m => m.role === 'admin').length;
+        const fileCount = roomInfo.file_num || 0;
+        const messageCount = roomInfo.message_num || 0;
+        const iconPath = roomInfo.icon_path || '';
+        
+        let iconLink = 'なし';
+        if (iconPath) {
+          if (iconPath.startsWith('http')) {
+            iconLink = iconPath;
+          } else {
+            iconLink = `https://appdata.chatwork.com${iconPath}`;
+          }
+        }
+
+        const admins = members.filter(m => m.role === 'admin');
+        let adminList = '';
+        if (admins.length > 0) {
+          adminList = admins.map(admin => `[picon:${admin.account_id}]`).join(' ');
+        } else {
+          adminList = 'なし';
+        }
+
+        const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}個\nメッセージ数：${messageCount}件\nアイコンリンク：${iconLink}\n[info][title]管理者[/title]${adminList}[/info][/info]`;
+
+        await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
+      } catch (error) {
+        console.error('ルーム情報取得エラー:', error.message);
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得中にエラーが発生しました。`);
+      }
+      return;
+    }
+
+    // /aiコマンド: Google AIと会話
+    if (messageBody.startsWith('/ai/')) {
+      const aiMessage = messageBody.substring('/ai/'.length).trim();
+      if (aiMessage) {
+        const aiResponse = await ChatworkBotUtils.talkWithAI(aiMessage);
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、AIの応答です。\n\n${aiResponse}`;
+        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+      } else {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]使用方法: /ai/{メッセージ}`);
       }
     }
 
