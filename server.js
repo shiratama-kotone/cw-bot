@@ -308,7 +308,39 @@ class ChatworkBotUtils {
     }
   }
 
-  // ルームのメッセージを取得（最新100件のみ - Chatwork APIの制限）
+  // ルームのメッセージカウントを初期化（起動時・日付変更時用）
+  static async initializeMessageCount(roomId) {
+    try {
+      console.log(`ルーム ${roomId} のメッセージカウントを初期化中...`);
+      const messages = await this.getRoomMessages(roomId);
+
+      // 今日の0時0分0秒のタイムスタンプを取得（日本時間）
+      const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+      const now = new Date(jstNow);
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000) + 32400; // +9時間
+
+      const counts = {};
+      messages.forEach(msg => {
+        if (msg.send_time >= todayStartTimestamp) {
+          const accId = msg.account.account_id;
+          counts[accId] = (counts[accId] || 0) + 1;
+        }
+      });
+
+      // メモリに保存
+      memoryStorage.messageCounts.set(roomId, counts);
+      memoryStorage.roomResetDates.set(roomId, now.toISOString().split('T')[0]);
+
+      const totalCount = Object.values(counts).reduce((a, b) => a + b, 0);
+      console.log(`ルーム ${roomId} 初期化完了: ${totalCount}件のメッセージ`);
+      
+      return counts;
+    } catch (error) {
+      console.error(`ルーム ${roomId} の初期化エラー:`, error.message);
+      return {};
+    }
+  }
   static async getRoomMessages(roomId) {
     try {
       await apiCallLimiter();
@@ -977,31 +1009,10 @@ class WebHookMessageProcessor {
         // メモリから今日のカウントを取得
         let roomCounts = memoryStorage.messageCounts.get(roomId) || {};
 
-        // メモリにデータがない場合、APIから最新100件を取得して初期化
+        // メモリにデータがない場合、APIから今日のメッセージを全て取得して初期化
         if (Object.keys(roomCounts).length === 0) {
-          console.log(`メモリにデータがないため、APIから最新100件を取得します...`);
-          const messages = await ChatworkBotUtils.getRoomMessages(roomId);
-
-          // 今日の0時0分0秒のタイムスタンプを取得（日本時間）
-          const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
-          const now = new Date(jstNow);
-          const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-          const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000) + 32400; // +9時間
-
-          const counts = {};
-          messages.forEach(msg => {
-            if (msg.send_time >= todayStartTimestamp) {
-              const accId = msg.account.account_id;
-              counts[accId] = (counts[accId] || 0) + 1;
-            }
-          });
-
-          // メモリに保存
-          memoryStorage.messageCounts.set(roomId, counts);
-          memoryStorage.roomResetDates.set(roomId, now.toISOString().split('T')[0]);
-          roomCounts = counts;
-
-          console.log(`APIから${messages.length}件取得し、今日のメッセージ${Object.values(counts).reduce((a, b) => a + b, 0)}件をカウントしました`);
+          console.log(`メモリにデータがないため、今日のメッセージを全て取得します...`);
+          roomCounts = await ChatworkBotUtils.initializeMessageCount(roomId);
         }
 
         // ランキング作成
@@ -1325,6 +1336,11 @@ async function sendDailyGreetingMessages() {
           if (success) {
             memoryStorage.lastSentDates.set(roomId, todayDateOnly);
             console.log(`日付変更通知送信完了: ルーム ${roomId}`);
+            
+            // 日付が変わったのでメッセージカウントをリセット
+            console.log(`メッセージカウントをリセット: ルーム ${roomId}`);
+            memoryStorage.messageCounts.set(roomId, {});
+            memoryStorage.roomResetDates.set(roomId, todayDateOnly);
           }
         }
       } catch (error) {
@@ -1367,31 +1383,10 @@ async function sendDailyRanking() {
         // メモリから今日のカウントを取得
         let roomCounts = memoryStorage.messageCounts.get(roomId) || {};
 
-        // メモリにデータがない場合、APIから最新100件を取得して初期化
+        // メモリにデータがない場合、今日のメッセージを全て取得
         if (Object.keys(roomCounts).length === 0) {
-          console.log(`メモリにデータがないため、APIから最新100件を取得します...`);
-          const messages = await ChatworkBotUtils.getRoomMessages(roomId);
-
-          // 今日の0時0分0秒のタイムスタンプを取得（日本時間）
-          const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
-          const now = new Date(jstNow);
-          const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-          const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000) + 32400; // +9時間
-
-          const counts = {};
-          messages.forEach(msg => {
-            if (msg.send_time >= todayStartTimestamp) {
-              const accId = msg.account.account_id;
-              counts[accId] = (counts[accId] || 0) + 1;
-            }
-          });
-
-          // メモリに保存
-          memoryStorage.messageCounts.set(roomId, counts);
-          memoryStorage.roomResetDates.set(roomId, now.toISOString().split('T')[0]);
-          roomCounts = counts;
-
-          console.log(`APIから${messages.length}件取得し、今日のメッセージ${Object.values(counts).reduce((a, b) => a + b, 0)}件をカウントしました`);
+          console.log(`メモリにデータがないため、今日のメッセージを全て取得します...`);
+          roomCounts = await ChatworkBotUtils.initializeMessageCount(roomId);
         }
 
         // ランキング作成
@@ -1502,13 +1497,24 @@ cron.schedule('*/1 * * * *', async () => {
 });
 
 // サーバー起動
-app.listen(port, () => {
+app.listen(port, async () => {
   console.log(`Chatwork Bot WebHook版 (全ルーム対応) がポート${port}で起動しました`);
   console.log('WebHook URL: https://your-app-name.onrender.com/webhook');
   console.log('環境変数:');
   console.log('- CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN ? '設定済み' : '未設定');
+  console.log('- INFO_API_TOKEN:', INFO_API_TOKEN ? '設定済み' : '未設定');
+  console.log('- AI_API_TOKEN:', AI_API_TOKEN ? '設定済み' : '未設定');
   console.log('- DIRECT_CHAT_WITH_DATE_CHANGE:', DIRECT_CHAT_WITH_DATE_CHANGE);
   console.log('- LOG_ROOM_ID:', LOG_ROOM_ID, '(固定)');
   console.log('- DAY_JSON_URL:', DAY_JSON_URL);
   console.log('動作モード: すべてのルームで反応、ログは', LOG_ROOM_ID, 'のみ');
+  
+  // 起動時にメッセージカウントを初期化
+  console.log('\n起動時初期化: メッセージカウントを初期化します...');
+  for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+    await ChatworkBotUtils.initializeMessageCount(roomId);
+    // API制限を避けるため少し待つ
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  console.log('初期化完了\n');
 });
