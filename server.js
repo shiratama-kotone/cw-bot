@@ -1114,6 +1114,12 @@ class WebHookMessageProcessor {
       'ジャン': `ライリー`,
       '雪平': `実篤`,
       '夏野': `二葉`,
+      'D':`E`,
+      'E':`C`,
+      'C':`O`,
+      'O':`*`,
+      '*':`2`,
+      '2':`7`,
     };
 
     if (responses[messageBody]) {
