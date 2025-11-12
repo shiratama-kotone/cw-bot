@@ -1552,23 +1552,3 @@ app.listen(port, async () => {
   }
   console.log('初期化完了\n');
 });
-
-// {
-  //"name": "chatwork-bot",
-  //"version": "1.0.0",
-  //"description": "Chatwork Bot with Node.js and PostgreSQL",
-  //"main": "server.js",
-  //"scripts": {
-    //"start": "node server.js"
-  //},
-  //"dependencies": {
-    //"express": "^4.18.2",
-    //"axios": "^1.6.0",
-    //"node-cron": "^3.0.2",
-    //"pg": "^8.11.3",
-    //"form-data": "^4.0.0"
-  //},
-  //"engines": {
-    //"node": ">=18.0.0"
-  //}
-}
