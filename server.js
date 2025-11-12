@@ -1049,6 +1049,40 @@ class WebHookMessageProcessor {
       }
     }
 
+    // /komekasegiコマンド: コメ稼ぎ
+    if (messageBody === '/komekasegi') {
+      const messages = [
+        'コメ稼ぎだお',
+        '過疎だね',
+        '静かすぎて風の音が聞こえる',
+        'みんな寝落ちした？',
+        'ここ、無人島かな？',
+        '今日も平和だね〜',
+        '誰か生きてる？',
+        '砂漠のオアシス状態',
+        'コメントが凍結してる!?',
+        'しーん……',
+        'この空気、逆に好き',
+        '時が止まったみたい',
+        '過疎 is 神',
+        '電波届いてるよね？',
+        'こっそり独り言タイム',
+        'エコー返ってくる気がする',
+        '幽霊さん、いますか〜？'
+      ];
+
+      // 10回送信
+      for (let i = 0; i < 10; i++) {
+        const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+        await ChatworkBotUtils.sendChatworkMessage(roomId, randomMessage);
+        
+        // 最後以外は1秒待つ
+        if (i < 9) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+    }
+
     const responses = {
       'はんせい': `[To:9859068] なかよし\n[pname:${accountId}]に呼ばれてるよ！`,
       'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよ！`,
@@ -1114,12 +1148,6 @@ class WebHookMessageProcessor {
       'ジャン': `ライリー`,
       '雪平': `実篤`,
       '夏野': `二葉`,
-      'D':`E`,
-      'E':`C`,
-      'C':`O`,
-      'O':`*`,
-      '*':`2`,
-      '2':`7`,
     };
 
     if (responses[messageBody]) {
@@ -1524,3 +1552,23 @@ app.listen(port, async () => {
   }
   console.log('初期化完了\n');
 });
+
+// {
+  //"name": "chatwork-bot",
+  //"version": "1.0.0",
+  //"description": "Chatwork Bot with Node.js and PostgreSQL",
+  //"main": "server.js",
+  //"scripts": {
+    //"start": "node server.js"
+  //},
+  //"dependencies": {
+    //"express": "^4.18.2",
+    //"axios": "^1.6.0",
+    //"node-cron": "^3.0.2",
+    //"pg": "^8.11.3",
+    //"form-data": "^4.0.0"
+  //},
+  //"engines": {
+    //"node": ">=18.0.0"
+  //}
+}
