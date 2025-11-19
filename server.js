@@ -1,11 +1,99 @@
-// Chatwork Bot for Render (WebHook版 - 全ルーム対応)
+// ルームの今日のメッセージを全て取得（複数回リクエスト）
+  static async getAllTodayMessages(roomId) {
+    try {
+      // 今日の0時0分0秒のタイムスタンプを取得（日本時間）
+      const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+      const now = new Date(jstNow);
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000) + 32400; // +9時間
+
+      let allMessages = [];
+      let force = 0;
+      let hasMore = true;
+      let totalFetched = 0;
+
+      // 日付変更までのメッセージを全て取得（100件ずつ）
+      while (hasMore) {
+        await apiCallLimiter();
+        const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages`, {
+          headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN },
+          params: { force: force }
+        });
+
+        const messages = response.data || [];
+        totalFetched += messages.length;
+        
+        if (messages.length === 0) {
+          console.log(`ルーム ${roomId}: これ以上メッセージがありません（合計${totalFetched}件取得）`);
+          hasMore = false;
+          break;
+        }
+
+        // 今日のメッセージと今日より前のメッセージを分離
+        const todayMessages = [];
+        let foundYesterday = false;
+
+        for (const msg of messages) {
+          if (msg.send_time >= todayStartTimestamp) {
+            todayMessages.push(msg);
+          } else {
+            foundYesterday = true;
+            break;
+          }
+        }
+
+        allMessages = allMessages.concat(todayMessages);
+
+        // 今日より前のメッセージが見つかったら終了
+        if (foundYesterday) {
+          console.log(`ルーム ${roomId}: 日付変更を検出。今日のメッセージ ${all// Chatwork Bot for Render (WebHook版 - 全ルーム対応)
 
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
+const { Pool } = require('pg');
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// PostgreSQL接続設定
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+});
+
+// データベース初期化
+async function initializeDatabase() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS webhooks (
+        id SERIAL PRIMARY KEY,
+        room_id BIGINT NOT NULL,
+        message_id BIGINT NOT NULL,
+        account_id BIGINT NOT NULL,
+        account_name TEXT,
+        body TEXT,
+        send_time BIGINT NOT NULL,
+        update_time BIGINT,
+        webhook_event_type TEXT,
+        webhook_event_time BIGINT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(message_id)
+      )
+    `);
+    
+    // インデックス作成
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_webhooks_room_id ON webhooks(room_id);
+      CREATE INDEX IF NOT EXISTS idx_webhooks_send_time ON webhooks(send_time);
+      CREATE INDEX IF NOT EXISTS idx_webhooks_room_send ON webhooks(room_id, send_time);
+    `);
+    
+    console.log('データベーステーブル初期化完了');
+  } catch (error) {
+    console.error('データベース初期化エラー:', error.message);
+  }
+}
 
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
@@ -679,8 +767,41 @@ class ChatworkBotUtils {
 
 // WebHookメッセージ処理クラス
 class WebHookMessageProcessor {
+  // WebHookをデータベースに保存
+  static async saveWebhookToDatabase(webhookData) {
+    try {
+      const roomId = webhookData.room_id;
+      const messageId = webhookData.message_id;
+      const accountId = webhookData.account_id;
+      const accountName = webhookData.account?.name || null;
+      const body = webhookData.body || '';
+      const sendTime = webhookData.send_time;
+      const updateTime = webhookData.update_time || null;
+      const webhookEventType = webhookData.webhook_event_type || 'message_created';
+      const webhookEventTime = webhookData.webhook_event_time || null;
+
+      await pool.query(`
+        INSERT INTO webhooks (
+          room_id, message_id, account_id, account_name, body,
+          send_time, update_time, webhook_event_type, webhook_event_time
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (message_id) DO NOTHING
+      `, [
+        roomId, messageId, accountId, accountName, body,
+        sendTime, updateTime, webhookEventType, webhookEventTime
+      ]);
+
+      console.log(`WebHook保存: ルーム ${roomId}, メッセージID ${messageId}`);
+    } catch (error) {
+      console.error('WebHook保存エラー:', error.message);
+    }
+  }
+
   static async processWebHookMessage(webhookData) {
     try {
+      // データベースに保存
+      await this.saveWebhookToDatabase(webhookData);
+
       const roomId = webhookData.room_id;
       const messageBody = webhookData.body;
       const messageId = webhookData.message_id;
@@ -1055,108 +1176,20 @@ class WebHookMessageProcessor {
         'コメ稼ぎだお',
         '過疎だね',
         '静かすぎて風の音が聞こえる',
-'みんな寝落ちした？',
-'ここ、無人島かな？',
-'今日も平和だね〜',
-'誰か生きてる？',
-'砂漠のオアシス状態',
-'コメントが凍結してる!?',
-'しーん……',
-'この空気、逆に好き',
-'時が止まったみたい',
-'過疎 is 神',
-'電波届いてるよね？',
-'こっそり独り言タイム',
-'エコー返ってくる気がする',
-'幽霊さん、いますか〜？',
-'静寂、いいね',
-'だーれもいない…',
-'ぼっち配信スタート',
-'無人ライブ中〜',
-'風が喋ってる気がする',
-'砂時計の音が聞こえる',
-'世界の終わりみたい',
-'今がチャンス、独占空間！',
-'過疎の極み',
-'無音こわっ',
-'時空が歪んでる気がする',
-'静寂フェス開催中',
-'これが真のソロプレイ',
-'しずか〜…',
-'電波の海で迷子',
-'ぼっちタイム到来',
-'コメント0記念日',
-'誰も見てないの逆に自由',
-'自分の声しか聞こえない',
-'砂漠で叫んでる気分',
-'深夜テンション出せない静けさ',
-'風通し良すぎ',
-'ここだけ時止まってる',
-'心の声だけ響いてる',
-'気配が消えた…',
-'ゆゆゆ、孤独に語る',
-'まるで図書館',
-'過疎でも元気！',
-'人類滅亡した？',
-'沈黙の民しかおらん',
-'ここが静寂の聖地',
-'過疎こそ至高',
-'コメントが幻覚に見える',
-'エアリプしか返ってこない',
-'風のざわめきだけが友達',
-'ネットの果てに来た気分',
-'ひとり劇場開幕！',
-'寂しさレベルMAX',
-'おーい！地球にいる？',
-'ログが止まってる!?',
-'過疎警報発令中',
-'生きてる人、挙手！',
-'ここまで静かだと逆に落ち着く',
-'時間の流れが遅い',
-'コメント欄が冬眠中',
-'今日も無風運転',
-'空気すら寝てる',
-'ここ、電波の果て？',
-'もはや瞑想の時間',
-'静けさが心に沁みる',
-'コメントの化石見つけたい',
-'過疎モードON！',
-'まばたきしたら1時間経ってた',
-'人類、滅びた説',
-'ここだけ時差100年',
-'無人島の配信室',
-'今なら全レス可能！',
-'心の中で会話してる',
-'過疎＝平和',
-'永遠に静か',
-'世界がミュートになった',
-'一人芝居の練習に最適',
-'風しか相手してくれない',
-'コメント0でも笑ってる',
-'孤独耐性MAX',
-'この静けさ、クセになる',
-'もはや瞑想会',
-'過疎神が降臨した',
-'静けさを支配した',
-'ここだけ別次元',
-'誰かログインして〜',
-'コメが冷凍保存中',
-'音速より静か',
-'声が反響してる気がする',
-'風が唯一の相棒',
-'過疎耐久チャレンジ',
-'心が透明になりそう',
-'無人配信ギネス狙える',
-'砂漠にWi-Fi一本',
-'コメント欄が白紙',
-'システムも寝てる？',
-'世界でいちばん静かな場所',
-'しーん…',
-'もはや芸術的静寂',
-'今日も安定の過疎です',
-'過疎こそ、私の居場所',
-        '静かすぎて風の音が聞こえる',
-
+        'みんな寝落ちした？',
+        'ここ、無人島かな？',
+        '今日も平和だね〜',
+        '誰か生きてる？',
+        '砂漠のオアシス状態',
+        'コメントが凍結してる!?',
+        'しーん……',
+        'この空気、逆に好き',
+        '時が止まったみたい',
+        '過疎 is 神',
+        '電波届いてるよね？',
+        'こっそり独り言タイム',
+        'エコー返ってくる気がする',
+        '幽霊さん、いますか〜？'
       ];
 
       // 10回送信
@@ -1626,10 +1659,15 @@ app.listen(port, async () => {
   console.log('- CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN ? '設定済み' : '未設定');
   console.log('- INFO_API_TOKEN:', INFO_API_TOKEN ? '設定済み' : '未設定');
   console.log('- AI_API_TOKEN:', AI_API_TOKEN ? '設定済み' : '未設定');
+  console.log('- DATABASE_URL:', process.env.DATABASE_URL ? '設定済み' : '未設定');
   console.log('- DIRECT_CHAT_WITH_DATE_CHANGE:', DIRECT_CHAT_WITH_DATE_CHANGE);
   console.log('- LOG_ROOM_ID:', LOG_ROOM_ID, '(固定)');
   console.log('- DAY_JSON_URL:', DAY_JSON_URL);
   console.log('動作モード: すべてのルームで反応、ログは', LOG_ROOM_ID, 'のみ');
+  
+  // データベース初期化
+  console.log('\nデータベースを初期化します...');
+  await initializeDatabase();
   
   // 起動時にメッセージカウントを初期化
   console.log('\n起動時初期化: メッセージカウントを初期化します...');
