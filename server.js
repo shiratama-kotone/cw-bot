@@ -574,7 +574,13 @@ class ChatworkBotUtils {
       // マグニチュードが-1の場合は調査中
       const magnitudeText = isTest ? '不明' : (earthquakeInfo.magnitude === -1 ? '調査中' : earthquakeInfo.magnitude);
       
-      const message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes}に${earthquakeInfo.hypocenter}を中心とする震度${scale}の地震が発生しました。\nマグニチュードは、${magnitudeText}です。[/info]`;
+      let message;
+      // 震源地情報がない、または空の場合
+      if (!earthquakeInfo.hypocenter || earthquakeInfo.hypocenter === '' || earthquakeInfo.hypocenter === '不明') {
+        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes}に震度${scale}の地震が発生しました。\nマグニチュードは調査中です。[/info]`;
+      } else {
+        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes}に${earthquakeInfo.hypocenter}を中心とする震度${scale}の地震が発生しました。\nマグニチュードは、${magnitudeText}です。[/info]`;
+      }
 
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
         try {
@@ -630,7 +636,32 @@ class ChatworkBotUtils {
     }
   }
 
-  // 指定ルームの情報を取得（INFO_API_TOKENを使用）
+  // ルームのメンバー権限を変更
+  static async updateMemberRole(roomId, accountIds, role) {
+    await apiCallLimiter();
+    try {
+      const params = new URLSearchParams();
+      params.append('members_admin_ids', accountIds.join(','));
+      
+      if (role === 'member') {
+        params.append('members_member_ids', accountIds.join(','));
+      } else if (role === 'readonly') {
+        params.append('members_readonly_ids', accountIds.join(','));
+      }
+
+      await axios.put(
+        `https://api.chatwork.com/v2/rooms/${roomId}/members`,
+        params,
+        {
+          headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
+        }
+      );
+      return true;
+    } catch (error) {
+      console.error(`メンバー権限変更エラー (${roomId}):`, error.message);
+      return false;
+    }
+  }
   static async getRoomInfoWithToken(roomId, apiToken) {
     await apiCallLimiter();
     try {
@@ -1204,6 +1235,72 @@ class WebHookMessageProcessor {
       }
     }
 
+    // /disselfコマンド: 自分の権限を下げる
+    if (!isDirectChat && messageBody === '/disself') {
+      try {
+        const currentUser = currentMembers.find(m => m.account_id === accountId);
+        
+        if (!currentUser) {
+          return;
+        }
+
+        const currentRole = currentUser.role;
+        
+        if (currentRole === 'admin') {
+          // 管理者 → メンバーに降格
+          // 他の管理者とメンバーのIDを取得
+          const admins = currentMembers.filter(m => m.role === 'admin' && m.account_id !== accountId).map(m => m.account_id);
+          const members = currentMembers.filter(m => m.role === 'member').map(m => m.account_id);
+          const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => m.account_id);
+          
+          // 自分をメンバーに追加
+          members.push(accountId);
+          
+          // 権限更新
+          const params = new URLSearchParams();
+          if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
+          if (members.length > 0) params.append('members_member_ids', members.join(','));
+          if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
+          
+          await apiCallLimiter();
+          await axios.put(
+            `https://api.chatwork.com/v2/rooms/${roomId}/members`,
+            params,
+            { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+          );
+          
+          console.log(`${accountId} を管理者からメンバーに降格しました（ルーム ${roomId}）`);
+        } else if (currentRole === 'member') {
+          // メンバー → 閲覧のみに降格
+          const admins = currentMembers.filter(m => m.role === 'admin').map(m => m.account_id);
+          const members = currentMembers.filter(m => m.role === 'member' && m.account_id !== accountId).map(m => m.account_id);
+          const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => m.account_id);
+          
+          // 自分を閲覧のみに追加
+          readonly.push(accountId);
+          
+          // 権限更新
+          const params = new URLSearchParams();
+          if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
+          if (members.length > 0) params.append('members_member_ids', members.join(','));
+          if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
+          
+          await apiCallLimiter();
+          await axios.put(
+            `https://api.chatwork.com/v2/rooms/${roomId}/members`,
+            params,
+            { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+          );
+          
+          console.log(`${accountId} をメンバーから閲覧のみに降格しました（ルーム ${roomId}）`);
+        }
+        // 閲覧のみの場合は何もしない
+      } catch (error) {
+        console.error('権限変更エラー:', error.message);
+      }
+      return;
+    }
+
     const responses = {
       'はんせい': `[To:9859068] なかよし\n[pname:${accountId}]に呼ばれてるよ！`,
       'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよ！`,
@@ -1535,17 +1632,24 @@ async function sendDailyRanking() {
       try {
         console.log(`ルーム ${roomId} のランキングを作成中...`);
 
-        // メモリから今日のカウントを取得
-        let roomCounts = memoryStorage.messageCounts.get(roomId) || {};
+        // 今日のメッセージを全て取得（日付変更まで）
+        const messages = await ChatworkBotUtils.getAllTodayMessages(roomId);
 
-        // メモリにデータがない場合、今日のメッセージを全て取得
-        if (Object.keys(roomCounts).length === 0) {
-          console.log(`メモリにデータがないため、今日のメッセージを全て取得します...`);
-          roomCounts = await ChatworkBotUtils.initializeMessageCount(roomId);
-        }
+        const counts = {};
+        messages.forEach(msg => {
+          const accId = msg.account.account_id;
+          counts[accId] = (counts[accId] || 0) + 1;
+        });
+
+        // メモリに保存
+        memoryStorage.messageCounts.set(roomId, counts);
+        
+        const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+        const now = new Date(jstNow);
+        memoryStorage.roomResetDates.set(roomId, now.toISOString().split('T')[0]);
 
         // ランキング作成
-        const ranking = Object.entries(roomCounts)
+        const ranking = Object.entries(counts)
           .sort((a, b) => b[1] - a[1])
           .map(([accountId, count], index) => ({
             rank: index + 1,
