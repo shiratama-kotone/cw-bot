@@ -1,52 +1,5 @@
-// ルームの今日のメッセージを全て取得（複数回リクエスト）
-  static async getAllTodayMessages(roomId) {
-    try {
-      // 今日の0時0分0秒のタイムスタンプを取得（日本時間）
-      const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
-      const now = new Date(jstNow);
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-      const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000) + 32400; // +9時間
-
-      let allMessages = [];
-      let force = 0;
-      let hasMore = true;
-      let totalFetched = 0;
-
-      // 日付変更までのメッセージを全て取得（100件ずつ）
-      while (hasMore) {
-        await apiCallLimiter();
-        const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages`, {
-          headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN },
-          params: { force: force }
-        });
-
-        const messages = response.data || [];
-        totalFetched += messages.length;
-        
-        if (messages.length === 0) {
-          console.log(`ルーム ${roomId}: これ以上メッセージがありません（合計${totalFetched}件取得）`);
-          hasMore = false;
-          break;
-        }
-
-        // 今日のメッセージと今日より前のメッセージを分離
-        const todayMessages = [];
-        let foundYesterday = false;
-
-        for (const msg of messages) {
-          if (msg.send_time >= todayStartTimestamp) {
-            todayMessages.push(msg);
-          } else {
-            foundYesterday = true;
-            break;
-          }
-        }
-
-        allMessages = allMessages.concat(todayMessages);
-
-        // 今日より前のメッセージが見つかったら終了
-        if (foundYesterday) {
-          console.log(`ルーム ${roomId}: 日付変更を検出。今日のメッセージ ${all// Chatwork Bot for Render (WebHook版 - 全ルーム対応)
+// Chatwork Bot for Render (WebHook版 - 全ルーム対応)
+// server.js - 修正版（/romera で必ず当日のメッセージを全取得、23:55 の事前ランキング追加、地震通知の空震源地対応 等）
 
 const express = require('express');
 const axios = require('axios');
@@ -81,14 +34,14 @@ async function initializeDatabase() {
         UNIQUE(message_id)
       )
     `);
-    
+
     // インデックス作成
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_webhooks_room_id ON webhooks(room_id);
       CREATE INDEX IF NOT EXISTS idx_webhooks_send_time ON webhooks(send_time);
       CREATE INDEX IF NOT EXISTS idx_webhooks_room_send ON webhooks(room_id, send_time);
     `);
-    
+
     console.log('データベーステーブル初期化完了');
   } catch (error) {
     console.error('データベース初期化エラー:', error.message);
@@ -269,7 +222,7 @@ class ChatworkBotUtils {
   }
 
   static drawOmikuji(isAdmin) {
-    const fortunes = ['大吉', '中吉', '吉', '小吉', 'null', 'undefined'];
+    const fortunes = ['大吉', '中吉', '吉', '小吉', '末吉', '凶'];
     const specialFortune = '超町長調帳朝腸蝶大吉';
     let specialChance = 0.002;
     if (isAdmin) specialChance = 0.25;
@@ -406,7 +359,7 @@ class ChatworkBotUtils {
       const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
       const now = new Date(jstNow);
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-      const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000) + 32400; // +9時間
+      const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000);
 
       const counts = {};
       messages.forEach(msg => {
@@ -422,13 +375,14 @@ class ChatworkBotUtils {
 
       const totalCount = Object.values(counts).reduce((a, b) => a + b, 0);
       console.log(`ルーム ${roomId} 初期化完了: ${totalCount}件のメッセージ`);
-      
+
       return counts;
     } catch (error) {
       console.error(`ルーム ${roomId} の初期化エラー:`, error.message);
       return {};
     }
   }
+
   static async getRoomMessages(roomId) {
     try {
       await apiCallLimiter();
@@ -465,7 +419,7 @@ class ChatworkBotUtils {
       await apiCallLimiter();
       const FormData = require('form-data');
       const form = new FormData();
-      
+
       console.log('アップロード準備:', {
         roomId,
         filename,
@@ -502,7 +456,7 @@ class ChatworkBotUtils {
           maxBodyLength: Infinity
         }
       );
-      
+
       console.log('アップロード応答:', response.data);
       return response.data;
     } catch (error) {
@@ -520,14 +474,14 @@ class ChatworkBotUtils {
     try {
       const response = await axios.get('https://api.p2pquake.net/v2/history?codes=551&limit=1');
       const data = response.data;
-      
+
       if (!data || data.length === 0) {
         return null;
       }
 
       const earthquake = data[0];
-      
-      // 震度3以上のみ
+
+      // 震度3以上のみ（P2PquakeのmaxScaleは10倍表記）
       if (!earthquake.earthquake || earthquake.earthquake.maxScale < 30) {
         return null;
       }
@@ -535,8 +489,8 @@ class ChatworkBotUtils {
       return {
         id: earthquake.id,
         time: earthquake.earthquake.time,
-        hypocenter: earthquake.earthquake.hypocenter.name,
-        magnitude: earthquake.earthquake.hypocenter.magnitude,
+        hypocenter: earthquake.earthquake.hypocenter && earthquake.earthquake.hypocenter.name ? earthquake.earthquake.hypocenter.name : null,
+        magnitude: earthquake.earthquake.hypocenter ? earthquake.earthquake.hypocenter.magnitude : null,
         maxScale: earthquake.earthquake.maxScale
       };
     } catch (error) {
@@ -546,9 +500,10 @@ class ChatworkBotUtils {
   }
 
   // 地震情報を通知
+  // 変更: 震源地が空（null/空文字/不明）の場合は「時間と震度のみ」を送信
   static async notifyEarthquake(earthquakeInfo, isTest = false) {
     try {
-      // 震度を数字に変換（P2P地震情報は10倍の値）
+      // 震度変換マップ（P2P地震情報は10倍）
       const scaleMap = {
         10: '1',
         20: '2',
@@ -560,26 +515,26 @@ class ChatworkBotUtils {
         60: '6強',
         70: '7'
       };
-      const scale = scaleMap[earthquakeInfo.maxScale] || earthquakeInfo.maxScale / 10;
+      const scale = scaleMap[earthquakeInfo.maxScale] || (earthquakeInfo.maxScale / 10);
 
-      // 日時をフォーマット（時間・分まで表示）
-      const date = new Date(earthquakeInfo.time);
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      const hours = String(date.getHours()).padStart(2, '0');
-      const minutes = String(date.getMinutes()).padStart(2, '0');
+      // 日時を日本時間でフォーマット
+      const jstStr = new Date(earthquakeInfo.time).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+      const jstDate = new Date(jstStr);
+      const year = jstDate.getFullYear();
+      const month = String(jstDate.getMonth() + 1).padStart(2, '0');
+      const day = String(jstDate.getDate()).padStart(2, '0');
+      const hours = String(jstDate.getHours()).padStart(2, '0');
+      const minutes = String(jstDate.getMinutes()).padStart(2, '0');
 
       const title = isTest ? '地震情報-テスト' : '地震情報';
-      // マグニチュードが-1の場合は調査中
-      const magnitudeText = isTest ? '不明' : (earthquakeInfo.magnitude === -1 ? '調査中' : earthquakeInfo.magnitude);
-      
+      const magnitudeText = (earthquakeInfo.magnitude === null || earthquakeInfo.magnitude === -1 || earthquakeInfo.magnitude === undefined) ? '調査中' : earthquakeInfo.magnitude;
+
       let message;
-      // 震源地情報がない、または空の場合
+      // 震源地情報がない、または空の場合は時間と震度のみを表示
       if (!earthquakeInfo.hypocenter || earthquakeInfo.hypocenter === '' || earthquakeInfo.hypocenter === '不明') {
-        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes}に震度${scale}の地震が発生しました。\nマグニチュードは調査中です。[/info]`;
+        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に震度${scale}の地震が発生しました。\nマグニチュード: ${magnitudeText}。[/info]`;
       } else {
-        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes}に${earthquakeInfo.hypocenter}を中心とする震度${scale}の地震が発生しました。\nマグニチュードは、${magnitudeText}です。[/info]`;
+        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に ${earthquakeInfo.hypocenter} を中心とする震度${scale}の地震が発生しました。\nマグニチュード: ${magnitudeText}。[/info]`;
       }
 
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
@@ -600,7 +555,7 @@ class ChatworkBotUtils {
     try {
       // メッセージを取得
       const message = await this.getMessage(targetRoomId, targetMessageId);
-      
+
       if (!message) {
         return { success: false, error: 'メッセージが見つかりませんでした' };
       }
@@ -609,16 +564,16 @@ class ChatworkBotUtils {
       const avatar = message.account.avatar_image_url || 'https://www.chatwork.com/assets/images/common/avatar-default.png';
       const text = message.body;
 
-      console.log('Quote画像生成開始:', { username, avatar: avatar.substring(0, 50), text: text.substring(0, 50) });
+      console.log('Quote画像生成開始:', { username, avatar: avatar.substring(0, 50), text: (text || '').substring(0, 50) });
 
       // 外部APIを直接使用（常にカラー）
       const imageBuffer = await this.generateQuoteImageFromAPI(username, username, text, avatar, true);
-      
+
       console.log('画像生成完了。Bufferサイズ:', imageBuffer.length);
 
       // Chatworkにアップロード
       const uploadResult = await this.uploadImageToChatwork(roomId, imageBuffer, 'quote.png');
-      
+
       if (uploadResult) {
         console.log('アップロード成功:', uploadResult);
         return { success: true };
@@ -642,7 +597,7 @@ class ChatworkBotUtils {
     try {
       const params = new URLSearchParams();
       params.append('members_admin_ids', accountIds.join(','));
-      
+
       if (role === 'member') {
         params.append('members_member_ids', accountIds.join(','));
       } else if (role === 'readonly') {
@@ -662,6 +617,7 @@ class ChatworkBotUtils {
       return false;
     }
   }
+
   static async getRoomInfoWithToken(roomId, apiToken) {
     await apiCallLimiter();
     try {
@@ -736,10 +692,11 @@ class ChatworkBotUtils {
       return `AIとの会話中にエラーが発生しました: ${error.message}`;
     }
   }
+
   static async generateQuoteImageFromAPI(username, displayName, text, avatar, color) {
     try {
       let avatarData = avatar;
-      
+
       // ChatworkのアバターURLの場合、画像をダウンロードしてbase64に変換
       if (avatar && !avatar.startsWith('data:image')) {
         try {
@@ -748,7 +705,7 @@ class ChatworkBotUtils {
             responseType: 'arraybuffer',
             timeout: 5000
           });
-          
+
           const base64Image = Buffer.from(avatarResponse.data).toString('base64');
           // 常にPNG形式として扱う
           avatarData = `data:image/png;base64,${base64Image}`;
@@ -770,7 +727,7 @@ class ChatworkBotUtils {
           avatar: avatarData,
           color: color
         },
-        { 
+        {
           responseType: 'arraybuffer',
           headers: {
             'Content-Type': 'application/json',
@@ -779,7 +736,7 @@ class ChatworkBotUtils {
           timeout: 10000
         }
       );
-      
+
       if (!response.data || response.data.byteLength === 0) {
         throw new Error('画像データが空です');
       }
@@ -792,6 +749,87 @@ class ChatworkBotUtils {
         console.error('Response data:', error.response.data?.toString().substring(0, 200));
       }
       throw error;
+    }
+  }
+
+  // 今日のメッセージを全て取得（複数回リクエスト）
+  // 実装方針:
+  // - 最新から取得していき、古いメッセージが今日より前になったら終了
+  // - 各リクエストで最後に得られた message_id を次の force に渡してさらに過去を取得する（Chatwork API の非公式な挙動に依存）
+  // - 重複排除とループ上限を設ける
+  static async getAllTodayMessages(roomId) {
+    try {
+      // 日本時間で今日の 0:00 の Unix 秒を算出（send_time は秒単位のはず）
+      const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+      const now = new Date(jstNow);
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+      const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000);
+
+      const allMessagesMap = new Map(); // message_id -> message
+      let loopCount = 0;
+      const MAX_LOOPS = 50;
+      let lastMessageId = null;
+      let continueFetching = true;
+
+      while (continueFetching && loopCount < MAX_LOOPS) {
+        loopCount++;
+        await apiCallLimiter();
+
+        const params = lastMessageId ? { force: lastMessageId } : { force: 1 };
+        let response;
+        try {
+          response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages`, {
+            headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN },
+            params
+          });
+        } catch (err) {
+          console.error(`getAllTodayMessages API error (${roomId}):`, err.message);
+          break;
+        }
+
+        const messages = response.data || [];
+        if (!messages || messages.length === 0) {
+          break;
+        }
+
+        // 最新順で来る想定（messages[0] が最新）: 各メッセージを登録
+        for (const msg of messages) {
+          if (!msg || !msg.message_id) continue;
+          if (!allMessagesMap.has(String(msg.message_id))) {
+            // only add if sent today or possibly earlier — we'll filter later
+            allMessagesMap.set(String(msg.message_id), msg);
+          }
+        }
+
+        // 最後のメッセージの send_time が今日より前なら、もうそれより古いメッセージは不要
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg && typeof lastMsg.send_time === 'number' && lastMsg.send_time < todayStartTimestamp) {
+          // 既にこのバッチの最古が今日より前 → 収集完了
+          break;
+        }
+
+        // 同じ lastMessageId が続く場合はループを停止（API が進まない場合）
+        const newLastId = messages[messages.length - 1] ? String(messages[messages.length - 1].message_id) : null;
+        if (!newLastId || newLastId === lastMessageId) {
+          // 進まないので停止
+          break;
+        }
+        lastMessageId = newLastId;
+
+        // 少し待って次のリクエスト
+        await new Promise(r => setTimeout(r, 200));
+      }
+
+      // Map から今日送信されたメッセージのみ抽出して配列化（send_time は秒単位）
+      const todayMessages = Array.from(allMessagesMap.values()).filter(m => typeof m.send_time === 'number' && m.send_time >= todayStartTimestamp);
+
+      // sort by send_time ascending (古い順) or descending as needed; here we'll return descending (最新->古い) to match other parts
+      todayMessages.sort((a, b) => b.send_time - a.send_time);
+
+      return todayMessages;
+    } catch (error) {
+      console.error(`getAllTodayMessages エラー (${roomId}):`, error.message);
+      return [];
     }
   }
 }
@@ -872,7 +910,7 @@ class WebHookMessageProcessor {
         roomId,
         messageId,
         accountId,
-        messageBody.trim(),
+        (messageBody || '').trim(),
         isSenderAdmin,
         isDirectChat,
         currentMembers
@@ -924,7 +962,7 @@ class WebHookMessageProcessor {
       if (params.length === 2) {
         const [targetRoomId, targetMessageId] = params;
         const result = await ChatworkBotUtils.createQuoteImage(roomId, targetRoomId, targetMessageId);
-        
+
         if (!result.success) {
           const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]エラー: ${result.error}`;
           await ChatworkBotUtils.sendChatworkMessage(roomId, errorMessage);
@@ -968,9 +1006,9 @@ class WebHookMessageProcessor {
     // /info/{ルームID}コマンド: 指定ルームの情報表示
     if (messageBody.startsWith('/info/')) {
       const targetRoomId = messageBody.substring('/info/'.length).trim();
-      
+
       if (!targetRoomId || !INFO_API_TOKEN) {
-        const errorMsg = !INFO_API_TOKEN 
+        const errorMsg = !INFO_API_TOKEN
           ? 'INFO_API_TOKENが設定されていません。'
           : 'ルームIDを指定してください。';
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]${errorMsg}`);
@@ -979,12 +1017,12 @@ class WebHookMessageProcessor {
 
       try {
         const roomInfo = await ChatworkBotUtils.getRoomInfoWithToken(targetRoomId, INFO_API_TOKEN);
-        
+
         if (roomInfo.error === 'not_found') {
           await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]存在しないルームです。`);
           return;
         }
-        
+
         if (roomInfo.error) {
           await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得に失敗しました。`);
           return;
@@ -993,7 +1031,7 @@ class WebHookMessageProcessor {
         // メンバーを取得してゆゆゆが参加しているか確認
         const members = await ChatworkBotUtils.getRoomMembersWithToken(targetRoomId, INFO_API_TOKEN);
         const isYuyuyuMember = members.some(m => m.account_id === parseInt(YUYUYU_ACCOUNT_ID));
-        
+
         if (!isYuyuyuMember) {
           await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ゆゆゆの本垢が参加していません。`);
           return;
@@ -1006,7 +1044,7 @@ class WebHookMessageProcessor {
         const fileCount = roomInfo.file_num || 0;
         const messageCount = roomInfo.message_num || 0;
         const iconPath = roomInfo.icon_path || '';
-        
+
         let iconLink = 'なし';
         if (iconPath) {
           if (iconPath.startsWith('http')) {
@@ -1024,8 +1062,7 @@ class WebHookMessageProcessor {
           adminList = 'なし';
         }
 
-        const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}個\nメッセージ数：${messageCount}件\nアイコンリンク：${iconLink}\n[info][title]管理者[/title]${adminList}[/info][/info]`;
-
+        const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
       } catch (error) {
         console.error('ルーム情報取得エラー:', error.message);
@@ -1104,7 +1141,7 @@ class WebHookMessageProcessor {
     if (!isDirectChat && messageBody === '/info') {
       try {
         const roomInfo = await ChatworkBotUtils.getRoomInfo(roomId);
-        
+
         if (!roomInfo) {
           await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得に失敗しました。');
           return;
@@ -1116,7 +1153,7 @@ class WebHookMessageProcessor {
         const fileCount = roomInfo.file_num || 0;
         const messageCount = roomInfo.message_num || 0;
         const iconPath = roomInfo.icon_path || '';
-        
+
         // 最新メッセージを取得してメッセージIDを取得
         const messages = await ChatworkBotUtils.getRoomMessages(roomId);
         let messageLink = 'なし';
@@ -1124,7 +1161,7 @@ class WebHookMessageProcessor {
           const latestMessageId = messages[0].message_id;
           messageLink = `https://www.chatwork.com/#!rid${roomId}-${latestMessageId}`;
         }
-        
+
         // アイコンリンク（icon_pathは相対パスまたは絶対URLの可能性がある）
         let iconLink = 'なし';
         if (iconPath) {
@@ -1144,7 +1181,7 @@ class WebHookMessageProcessor {
           adminList = 'なし';
         }
 
-        const infoMessage = `[info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}個\nメッセージ数：${messageCount}件\nメッセージリンク：${messageLink}\nアイコンリンク：${iconLink}\n[info][title]管理者[/title]${adminList}[/info][/info]`;
+        const infoMessage = `[info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\n最新メッセージ：${messageLink}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
 
         await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
       } catch (error) {
@@ -1154,21 +1191,27 @@ class WebHookMessageProcessor {
     }
 
     // /romeraコマンド: メッセージ数ランキング
+    // 変更: 毎回 Chatwork API から当日の全メッセージを取得してランキングを作成する（再起動後でも正しい集計）
     if (messageBody === '/romera') {
       try {
-        console.log(`ルーム ${roomId} のランキングを作成中...`);
+        console.log(`ルーム ${roomId} のランキングを作成中... (APIから当日のメッセージを全取得)`);
 
-        // メモリから今日のカウントを取得
-        let roomCounts = memoryStorage.messageCounts.get(roomId) || {};
+        // Chatwork API から当日のメッセージをすべて取得
+        const messages = await ChatworkBotUtils.getAllTodayMessages(roomId);
 
-        // メモリにデータがない場合、APIから今日のメッセージを全て取得して初期化
-        if (Object.keys(roomCounts).length === 0) {
-          console.log(`メモリにデータがないため、今日のメッセージを全て取得します...`);
-          roomCounts = await ChatworkBotUtils.initializeMessageCount(roomId);
-        }
+        const counts = {};
+        messages.forEach(msg => {
+          try {
+            const accId = msg.account && msg.account.account_id ? msg.account.account_id : null;
+            if (accId) counts[accId] = (counts[accId] || 0) + 1;
+          } catch (e) { /* ignore malformed */ }
+        });
+
+        // メモリに保存（次回高速化に使われる）
+        memoryStorage.messageCounts.set(roomId, counts);
 
         // ランキング作成
-        const ranking = Object.entries(roomCounts)
+        const ranking = Object.entries(counts)
           .sort((a, b) => b[1] - a[1])
           .map(([accountId, count], index) => ({
             rank: index + 1,
@@ -1227,7 +1270,7 @@ class WebHookMessageProcessor {
       for (let i = 0; i < 10; i++) {
         const randomMessage = messages[Math.floor(Math.random() * messages.length)];
         await ChatworkBotUtils.sendChatworkMessage(roomId, randomMessage);
-        
+
         // 最後以外は1秒待つ
         if (i < 9) {
           await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1239,59 +1282,59 @@ class WebHookMessageProcessor {
     if (!isDirectChat && messageBody === '/disself') {
       try {
         const currentUser = currentMembers.find(m => m.account_id === accountId);
-        
+
         if (!currentUser) {
           return;
         }
 
         const currentRole = currentUser.role;
-        
+
         if (currentRole === 'admin') {
           // 管理者 → メンバーに降格
           // 他の管理者とメンバーのIDを取得
           const admins = currentMembers.filter(m => m.role === 'admin' && m.account_id !== accountId).map(m => m.account_id);
           const members = currentMembers.filter(m => m.role === 'member').map(m => m.account_id);
           const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => m.account_id);
-          
+
           // 自分をメンバーに追加
           members.push(accountId);
-          
+
           // 権限更新
           const params = new URLSearchParams();
           if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
           if (members.length > 0) params.append('members_member_ids', members.join(','));
           if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
-          
+
           await apiCallLimiter();
           await axios.put(
             `https://api.chatwork.com/v2/rooms/${roomId}/members`,
             params,
             { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
           );
-          
+
           console.log(`${accountId} を管理者からメンバーに降格しました（ルーム ${roomId}）`);
         } else if (currentRole === 'member') {
           // メンバー → 閲覧のみに降格
           const admins = currentMembers.filter(m => m.role === 'admin').map(m => m.account_id);
           const members = currentMembers.filter(m => m.role === 'member' && m.account_id !== accountId).map(m => m.account_id);
           const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => m.account_id);
-          
+
           // 自分を閲覧のみに追加
           readonly.push(accountId);
-          
+
           // 権限更新
           const params = new URLSearchParams();
           if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
           if (members.length > 0) params.append('members_member_ids', members.join(','));
           if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
-          
+
           await apiCallLimiter();
           await axios.put(
             `https://api.chatwork.com/v2/rooms/${roomId}/members`,
             params,
             { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
           );
-          
+
           console.log(`${accountId} をメンバーから閲覧のみに降格しました（ルーム ${roomId}）`);
         }
         // 閲覧のみの場合は何もしない
@@ -1301,71 +1344,18 @@ class WebHookMessageProcessor {
       return;
     }
 
+    // 定型応答（簡易）
     const responses = {
       'はんせい': `[To:9859068] なかよし\n[pname:${accountId}]に呼ばれてるよ！`,
       'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよ！`,
-      'からめり': `[To:10337719] からめり\n[pname:${accountId}]に呼ばれてるよ！`,
       'いろいろあぷり': `https://shiratama-kotone.github.io/any-app/`,
-      '喘げ': `...っ♡///`,
       'おやすみ': `おやすみなさい！[pname:${accountId}]！`,
       'おはよう': `[pname:${accountId}] おはよう！`,
       '/test': `アカウントID:${accountId}`,
       'プロセカやってくる': `[preview id=1864425247 ht=130]`,
-      'おっ': `ぱい`,
-      'せっ': `くす`,
-      '精': `子`,
-      '114': `514`,
-      'ちん': `ちんㅤ`,
-      '野獣': `やりますねぇ！`,
-      'こ↑': `こ↓`,
       '富士山': `3776m!`,
-      'TOALL': `[toall...すると思った？`,
       'botのコードください': `https://github.com/shiratama-kotone/cw-bot`,
       '1+1=': `1!`,
-      'トイレいってくる': `漏らさないでねー`,
-      'からめりは': `エロ画像マニア！`,
-      'ゆゆゆは': `かわいい．．．はず`,
-      'はんせいは': `かっこいい！`,
-      'プロセカ公式Youtube': `https://www.youtube.com/@pj_sekai_colorfulstage`,
-      '6': `9`,
-      'Git': `hub`,
-      '初音': `ミク`,
-      '鏡音': `リン`,
-      '巡音': `ルカ`,
-      'MEI': `KO`,
-      'KAI': `TO`,
-      '星乃': `一歌`,
-      '天馬': `咲希 または 司`,
-      '望月': `穂波`,
-      '日野森': `志歩 または 雫`,
-      '花里': `みのり`,
-      '桐谷': `遥`,
-      '桃井': `愛莉`,
-      '小豆沢': `こはね`,
-      '白石': `杏`,
-      '東雲': `絵名 または 彰人`,
-      '青柳': `冬弥`,
-      '鳳': `えむ`,
-      '草薙': `寧々`,
-      '神代': `類`,
-      '宵崎': `奏`,
-      '朝比奈': `まふゆ`,
-      '暁山': `瑞希 または 優希`,
-      '高木': `未羽`,
-      '吉崎': `花乃 または 葉太`,
-      '高坂': `朔`,
-      '真堂': `良樹`,
-      '日暮': `アリサ`,
-      '山下': `真里奈`,
-      '早川': `ななみ`,
-      '内山': `唯奈`,
-      '斎藤': `彩香`,
-      '長谷川': `里帆`,
-      '有澤': `日菜子`,
-      '柊': `マグネタイト`,
-      'ジャン': `ライリー`,
-      '雪平': `実篤`,
-      '夏野': `二葉`,
     };
 
     if (responses[messageBody]) {
@@ -1480,11 +1470,11 @@ app.get('/load-day-json', async (req, res) => {
 app.get('/eew-test:scale', async (req, res) => {
   try {
     const scale = parseInt(req.params.scale);
-    
+
     if (isNaN(scale) || scale < 10 || scale > 70) {
-      return res.status(400).json({ 
-        status: 'error', 
-        message: '震度は10〜70の範囲で指定してください（10=震度1, 70=震度7）' 
+      return res.status(400).json({
+        status: 'error',
+        message: '震度は10〜70の範囲で指定してください（10=震度1, 70=震度7）'
       });
     }
 
@@ -1499,9 +1489,9 @@ app.get('/eew-test:scale', async (req, res) => {
     };
 
     await ChatworkBotUtils.notifyEarthquake(testEarthquakeInfo, true);
-    
-    res.json({ 
-      status: 'success', 
+
+    res.json({
+      status: 'success',
       message: 'テスト地震情報を送信しました',
       earthquakeInfo: testEarthquakeInfo
     });
@@ -1528,20 +1518,20 @@ app.get('/miaq', async (req, res) => {
     // 常にカラー
     const isColor = true;
 
-    console.log('MIAQ画像生成リクエスト:', { 
-      username: finalUsername, 
-      displayName: finalDisplayName, 
-      text: text.substring(0, 50), 
-      avatar: avatar.substring(0, 50), 
-      color: isColor 
+    console.log('MIAQ画像生成リクエスト:', {
+      username: finalUsername,
+      displayName: finalDisplayName,
+      text: (text || '').substring(0, 50),
+      avatar: (avatar || '').substring(0, 50),
+      color: isColor
     });
 
     // 外部APIから画像を生成
     const imageBuffer = await ChatworkBotUtils.generateQuoteImageFromAPI(
-      finalUsername, 
-      finalDisplayName, 
-      text, 
-      avatar, 
+      finalUsername,
+      finalDisplayName,
+      text,
+      avatar,
       isColor
     );
 
@@ -1551,10 +1541,10 @@ app.get('/miaq', async (req, res) => {
     res.send(imageBuffer);
   } catch (error) {
     console.error('MIAQ画像生成エラー:', error.message);
-    res.status(500).json({ 
-      status: 'error', 
+    res.status(500).json({
+      status: 'error',
       message: '画像生成に失敗しました',
-      error: error.message 
+      error: error.message
     });
   }
 });
@@ -1564,11 +1554,10 @@ async function sendDailyGreetingMessages() {
   try {
     console.log('日付変更通知の送信を開始します');
 
-    // ★修正箇所: JST時刻の取得を安定させる
+    // JST時刻の取得（安定させる）
     const now = new Date();
-    const jstOffset = 9 * 60 * 60 * 1000;
-    const jstTime = now.getTime() + jstOffset;
-    const jstDate = new Date(jstTime);
+    const jstNowStr = new Date(now.getTime()).toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
+    const jstDate = new Date(jstNowStr);
     const todayFormatted = jstDate.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
     const todayDateOnly = jstDate.toISOString().split('T')[0];
 
@@ -1588,7 +1577,7 @@ async function sendDailyGreetingMessages() {
           if (success) {
             memoryStorage.lastSentDates.set(roomId, todayDateOnly);
             console.log(`日付変更通知送信完了: ルーム ${roomId}`);
-            
+
             // 日付が変わったのでメッセージカウントをリセット
             console.log(`メッセージカウントをリセット: ルーム ${roomId}`);
             memoryStorage.messageCounts.set(roomId, {});
@@ -1609,7 +1598,7 @@ async function sendNightMessage() {
   try {
     console.log('夜11時の通知を送信します');
     const message = '11時だよ！\nおやすみの人はおやすみなさい！';
-    
+
     for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
       try {
         await ChatworkBotUtils.sendChatworkMessage(roomId, message);
@@ -1623,11 +1612,11 @@ async function sendNightMessage() {
   }
 }
 
-// 23:59にランキングを送信
+// 23:59にランキングを送信（既存の終日ランキング）
 async function sendDailyRanking() {
   try {
     console.log('今日のランキングを送信します');
-    
+
     for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
       try {
         console.log(`ルーム ${roomId} のランキングを作成中...`);
@@ -1637,13 +1626,13 @@ async function sendDailyRanking() {
 
         const counts = {};
         messages.forEach(msg => {
-          const accId = msg.account.account_id;
-          counts[accId] = (counts[accId] || 0) + 1;
+          const accId = msg.account && msg.account.account_id ? msg.account.account_id : null;
+          if (accId) counts[accId] = (counts[accId] || 0) + 1;
         });
 
         // メモリに保存
         memoryStorage.messageCounts.set(roomId, counts);
-        
+
         const jstNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
         const now = new Date(jstNow);
         memoryStorage.roomResetDates.set(roomId, now.toISOString().split('T')[0]);
@@ -1686,12 +1675,67 @@ async function sendDailyRanking() {
   }
 }
 
+// 23:55に日付変更前のランキングを送信（/romera と同じ取得方法）
+async function sendPreMidnightRanking() {
+  try {
+    console.log('日付変更前 (23:55) のランキングを送信します');
+
+    for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+      try {
+        console.log(`ルーム ${roomId} の事前ランキングを作成中...`);
+
+        // /romera と同じく API から当日の全メッセージを取得
+        const messages = await ChatworkBotUtils.getAllTodayMessages(roomId);
+
+        const counts = {};
+        messages.forEach(msg => {
+          const accId = msg.account && msg.account.account_id ? msg.account.account_id : null;
+          if (accId) counts[accId] = (counts[accId] || 0) + 1;
+        });
+
+        // メモリに保存
+        memoryStorage.messageCounts.set(roomId, counts);
+
+        // ランキング作成
+        const ranking = Object.entries(counts)
+          .sort((a, b) => b[1] - a[1])
+          .map(([accountId, count], index) => ({
+            rank: index + 1,
+            accountId,
+            count
+          }));
+
+        const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
+
+        let rankingMessage = '[info][title]日付変更前ランキング（23:55）[/title]\n';
+        if (ranking.length === 0) {
+          rankingMessage += '今日のメッセージはまだありません。\n';
+        } else {
+          ranking.forEach((item, index) => {
+            rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
+            if (index < ranking.length - 1) rankingMessage += '\n[hr]';
+            rankingMessage += '\n';
+          });
+        }
+        rankingMessage += `\n合計：${totalCount}コメ\n(botを含む)[/info]`;
+
+        await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
+        console.log(`事前ランキング送信完了: ルーム ${roomId}`);
+      } catch (error) {
+        console.error(`ルーム ${roomId} への事前ランキング送信エラー:`, error.message);
+      }
+    }
+  } catch (error) {
+    console.error('事前ランキング送信処理エラー:', error.message);
+  }
+}
+
 // 朝6時の通知
 async function sendMorningMessage() {
   try {
     console.log('朝6時の通知を送信します');
     const message = 'みんなおはよう！！';
-    
+
     for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
       try {
         await ChatworkBotUtils.sendChatworkMessage(roomId, message);
@@ -1709,7 +1753,7 @@ async function sendMorningMessage() {
 async function checkEarthquakeInfo() {
   try {
     const earthquakeInfo = await ChatworkBotUtils.getLatestEarthquakeInfo();
-    
+
     if (earthquakeInfo && earthquakeInfo.id !== memoryStorage.lastEarthquakeId) {
       console.log('新しい地震情報を検出:', earthquakeInfo);
       await ChatworkBotUtils.notifyEarthquake(earthquakeInfo);
@@ -1734,8 +1778,15 @@ cron.schedule('0 0 23 * * *', async () => {
   timezone: "Asia/Tokyo"
 });
 
+// cron: 毎日23時55分に実行（事前ランキング）
+cron.schedule('0 55 23 * * *', async () => {
+  await sendPreMidnightRanking();
+}, {
+  timezone: "Asia/Tokyo"
+});
+
 // cron: 毎日23時59分に実行（日本時間で今日のランキング）
-cron.schedule('59 23 * * *', async () => {
+cron.schedule('0 59 23 * * *', async () => {
   await sendDailyRanking();
 }, {
   timezone: "Asia/Tokyo"
@@ -1768,11 +1819,11 @@ app.listen(port, async () => {
   console.log('- LOG_ROOM_ID:', LOG_ROOM_ID, '(固定)');
   console.log('- DAY_JSON_URL:', DAY_JSON_URL);
   console.log('動作モード: すべてのルームで反応、ログは', LOG_ROOM_ID, 'のみ');
-  
+
   // データベース初期化
   console.log('\nデータベースを初期化します...');
   await initializeDatabase();
-  
+
   // 起動時にメッセージカウントを初期化
   console.log('\n起動時初期化: メッセージカウントを初期化します...');
   for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
