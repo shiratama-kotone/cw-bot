@@ -1371,7 +1371,7 @@ class WebHookMessageProcessor {
       'たまごは': `人外ナー！`,
       'ゆゆゆは': `かわいい．．．はず`,
       'はんせいは': `かっこいい！`,
-      'プロセカ公式Youtube': `https://www.youtube.com/@pj_sekai_colorfulstage',
+      'プロセカ公式Youtube': `https://www.youtube.com/@pj_sekai_colorfulstage`,
       '6': `9`,
       'Git': `hub`,
       '初音': `ミク`,
