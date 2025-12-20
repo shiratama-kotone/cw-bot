@@ -1411,7 +1411,7 @@ class WebHookMessageProcessor {
       'ジャン': `ライリー`,
       '雪平': `実篤`,
       '夏野': `二葉`,
-
+};
     if (responses[messageBody]) {
       await ChatworkBotUtils.sendChatworkMessage(roomId, responses[messageBody]);
     }
