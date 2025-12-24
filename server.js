@@ -1,10 +1,11 @@
 // Chatwork Bot for Render (WebHook版 - 全ルーム対応)
-// server.js - 修正版（レスポンス高速化、地震通知の時刻修正）
+// server.js - 修正版（機能追加・削除版）
 
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
 const { Pool } = require('pg');
+const cheerio = require('cheerio');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -50,7 +51,6 @@ async function initializeDatabase() {
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
 const INFO_API_TOKEN = process.env.INFO_API_TOKEN || '';
-const AI_API_TOKEN = process.env.AI_API_TOKEN || '';
 const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,407676893,415060980,406897783,391699365').split(',');
 const LOG_ROOM_ID = '404646956';
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
@@ -120,23 +120,15 @@ async function getTodaysEventsFromJson() {
     const now = new Date();
     const jstDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
     const monthDay = `${String(jstDate.getMonth() + 1).padStart(2, '0')}-${String(jstDate.getDate()).padStart(2, '0')}`;
-    const day = String(jstDate.getDate()).padStart(2, '0');
 
     const events = [];
 
+    // MM-DD形式のイベントのみチェック
     if (dayEvents[monthDay]) {
       if (Array.isArray(dayEvents[monthDay])) {
         events.push(...dayEvents[monthDay]);
       } else {
         events.push(dayEvents[monthDay]);
-      }
-    }
-
-    if (dayEvents[day]) {
-      if (Array.isArray(dayEvents[day])) {
-        events.push(...dayEvents[day]);
-      } else {
-        events.push(dayEvents[day]);
       }
     }
 
@@ -236,6 +228,7 @@ class ChatworkBotUtils {
     }
   }
 
+  // Wikipedia API修正版
   static async getWikipediaSummary(searchTerm) {
     const now = Date.now();
     const cacheKey = `wiki_${searchTerm}`;
@@ -248,38 +241,70 @@ class ChatworkBotUtils {
     }
 
     try {
-      const params = new URLSearchParams({
+      // OpenSearch APIで検索
+      const searchParams = new URLSearchParams({
+        action: 'opensearch',
+        format: 'json',
+        search: searchTerm,
+        limit: 1,
+        namespace: 0,
+        redirects: 'resolve'
+      });
+
+      const searchResponse = await axios.get(`https://ja.wikipedia.org/w/api.php?${searchParams}`, {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'ChatworkBot/1.0'
+        }
+      });
+
+      const searchData = searchResponse.data;
+      
+      if (!searchData || !searchData[1] || searchData[1].length === 0) {
+        const result = `「${searchTerm}」に関する記事は見つかりませんでした。`;
+        addToCache(cacheKey, { data: result, timestamp: now });
+        return result;
+      }
+
+      const pageTitle = searchData[1][0];
+      const pageUrl = searchData[3][0];
+
+      // TextExtracts APIで要約を取得
+      const extractParams = new URLSearchParams({
         action: 'query',
         format: 'json',
         prop: 'extracts',
         exintro: true,
         explaintext: true,
-        redirects: 1,
-        titles: searchTerm,
-        origin: '*'
+        titles: pageTitle,
+        redirects: 1
       });
-      const response = await axios.get(`https://ja.wikipedia.org/w/api.php?${params}`, {
-        timeout: 10000
+
+      const extractResponse = await axios.get(`https://ja.wikipedia.org/w/api.php?${extractParams}`, {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'ChatworkBot/1.0'
+        }
       });
-      const data = response.data;
-      let result;
-      if (data.query && data.query.pages) {
-        const pages = data.query.pages;
+
+      const extractData = extractResponse.data;
+      
+      if (extractData.query && extractData.query.pages) {
+        const pages = extractData.query.pages;
         const pageId = Object.keys(pages)[0];
+        
         if (pageId && pageId !== '-1' && pages[pageId] && pages[pageId].extract) {
           let summary = pages[pageId].extract;
-          if (summary.length > 500) summary = summary.substring(0, 500) + '...';
-          const pageTitle = pages[pageId].title;
-          const pageUrl = `https://ja.wikipedia.org/wiki/${encodeURIComponent(pageTitle)}`;
-          result = `${summary}\n\n元記事: ${pageUrl}`;
-        } else if (pageId && (pageId === '-1' || pages[pageId].missing !== undefined)) {
-          result = `「${searchTerm}」に関する記事は見つかりませんでした。`;
-        } else {
-          result = `「${searchTerm}」の検索結果を処理できませんでした。`;
+          if (summary.length > 500) {
+            summary = summary.substring(0, 500) + '...';
+          }
+          const result = `${summary}\n\n元記事: ${pageUrl}`;
+          addToCache(cacheKey, { data: result, timestamp: now });
+          return result;
         }
-      } else {
-        result = `「${searchTerm}」の検索結果を処理できませんでした。`;
       }
+
+      const result = `「${searchTerm}」の情報を取得できませんでした。`;
       addToCache(cacheKey, { data: result, timestamp: now });
       return result;
     } catch (error) {
@@ -333,6 +358,63 @@ class ChatworkBotUtils {
       return `[info][title]Scratchプロジェクト情報[/title]タイトル: ${data.title}\n作者: ${data.author.username}\n説明: ${data.description || '説明なし'}\nURL: ${url}[/info]`;
     } catch (error) {
       return 'Scratchプロジェクト情報の取得中にエラーが発生しました。';
+    }
+  }
+
+  // 歌詞取得機能
+  static async getLyrics(url) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+
+      const $ = cheerio.load(response.data);
+      let title = '';
+      let lyrics = '';
+
+      if (url.includes('utaten.com')) {
+        // うたてんの処理
+        const titleMain = $('h2.newLyricTitle__main').text().trim();
+        const titleAfter = $('span.newLyricTitle_afterTxt').text().trim();
+        title = titleMain.replace(titleAfter, '').trim();
+
+        // ルビ（<span class="rt">）を削除
+        $('div.hiragana span.rt').remove();
+        
+        // 歌詞取得
+        lyrics = $('div.hiragana').html() || '';
+        
+        // HTMLタグを改行に変換
+        lyrics = lyrics.replace(/<br\s*\/?>/gi, '\n')
+                      .replace(/<[^>]+>/g, '')
+                      .trim();
+
+      } else if (url.includes('uta-net.com')) {
+        // 歌ネットの処理
+        title = $('h2.ms-2.ms-md-3.kashi-title').text().trim();
+        
+        // 歌詞取得
+        lyrics = $('div#kashi_area[itemprop="text"]').html() || '';
+        
+        // HTMLタグを改行に変換
+        lyrics = lyrics.replace(/<br\s*\/?>/gi, '\n')
+                      .replace(/<[^>]+>/g, '')
+                      .trim();
+      } else {
+        return '対応していないURLです。utaten.comまたはuta-net.comのURLを指定してください。';
+      }
+
+      if (!title || !lyrics) {
+        return '歌詞の取得に失敗しました。URLを確認してください。';
+      }
+
+      return `[info][title]${title}の歌詞[/title]${lyrics}[/info]`;
+    } catch (error) {
+      console.error('歌詞取得エラー:', error.message);
+      return `歌詞の取得中にエラーが発生しました: ${error.message}`;
     }
   }
 
@@ -395,59 +477,6 @@ class ChatworkBotUtils {
     }
   }
 
-  static async uploadImageToChatwork(roomId, imageBuffer, filename) {
-    try {
-      await apiCallLimiter();
-      const FormData = require('form-data');
-      const form = new FormData();
-
-      console.log('アップロード準備:', {
-        roomId,
-        filename,
-        bufferLength: imageBuffer.length
-      });
-
-      form.append('file', imageBuffer, {
-        filename: filename,
-        contentType: 'image/png',
-        knownLength: imageBuffer.length
-      });
-
-      const contentLength = await new Promise((resolve, reject) => {
-        form.getLength((err, length) => {
-          if (err) reject(err);
-          else resolve(length);
-        });
-      });
-
-      console.log('FormDataサイズ:', contentLength);
-
-      const response = await axios.post(
-        `https://api.chatwork.com/v2/rooms/${roomId}/files`,
-        form,
-        {
-          headers: {
-            'X-ChatWorkToken': CHATWORK_API_TOKEN,
-            ...form.getHeaders(),
-            'Content-Length': contentLength
-          },
-          maxContentLength: Infinity,
-          maxBodyLength: Infinity
-        }
-      );
-
-      console.log('アップロード応答:', response.data);
-      return response.data;
-    } catch (error) {
-      console.error(`画像アップロードエラー (${roomId}):`, error.message);
-      if (error.response) {
-        console.error('Response status:', error.response.status);
-        console.error('Response data:', error.response.data);
-      }
-      return null;
-    }
-  }
-
   static async getLatestEarthquakeInfo() {
     try {
       const response = await axios.get('https://api.p2pquake.net/v2/history?codes=551&limit=1');
@@ -476,7 +505,6 @@ class ChatworkBotUtils {
     }
   }
 
-  // 地震情報通知（時刻修正版）
   static async notifyEarthquake(earthquakeInfo, isTest = false) {
     try {
       const scaleMap = {
@@ -492,7 +520,6 @@ class ChatworkBotUtils {
       };
       const scale = scaleMap[earthquakeInfo.maxScale] || (earthquakeInfo.maxScale / 10);
 
-      // ISO 8601形式の時刻文字列を日本時間に変換
       const earthquakeDate = new Date(earthquakeInfo.time);
       const jstDateStr = earthquakeDate.toLocaleString("ja-JP", { 
         timeZone: "Asia/Tokyo",
@@ -504,7 +531,6 @@ class ChatworkBotUtils {
         hour12: false
       });
 
-      // "YYYY/MM/DD HH:MM" 形式から年月日時分を抽出
       const parts = jstDateStr.match(/(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})/);
       if (!parts) {
         console.error('日時のパースに失敗:', jstDateStr);
@@ -533,69 +559,6 @@ class ChatworkBotUtils {
       }
     } catch (error) {
       console.error('地震情報通知エラー:', error.message);
-    }
-  }
-
-  static async createQuoteImage(roomId, targetRoomId, targetMessageId) {
-    try {
-      const message = await this.getMessage(targetRoomId, targetMessageId);
-
-      if (!message) {
-        return { success: false, error: 'メッセージが見つかりませんでした' };
-      }
-
-      const username = message.account.name;
-      const avatar = message.account.avatar_image_url || 'https://www.chatwork.com/assets/images/common/avatar-default.png';
-      const text = message.body;
-
-      console.log('Quote画像生成開始:', { username, avatar: avatar.substring(0, 50), text: (text || '').substring(0, 50) });
-
-      const imageBuffer = await this.generateQuoteImageFromAPI(username, username, text, avatar, true);
-
-      console.log('画像生成完了。Bufferサイズ:', imageBuffer.length);
-
-      const uploadResult = await this.uploadImageToChatwork(roomId, imageBuffer, 'quote.png');
-
-      if (uploadResult) {
-        console.log('アップロード成功:', uploadResult);
-        return { success: true };
-      } else {
-        return { success: false, error: 'アップロードに失敗しました' };
-      }
-    } catch (error) {
-      console.error('Quote画像生成エラー:', error.message);
-      if (error.response) {
-        console.error('Response status:', error.response.status);
-        console.error('Response headers:', error.response.headers);
-        console.error('Response data length:', error.response.data?.length || 0);
-      }
-      return { success: false, error: error.message };
-    }
-  }
-
-  static async updateMemberRole(roomId, accountIds, role) {
-    await apiCallLimiter();
-    try {
-      const params = new URLSearchParams();
-      params.append('members_admin_ids', accountIds.join(','));
-
-      if (role === 'member') {
-        params.append('members_member_ids', accountIds.join(','));
-      } else if (role === 'readonly') {
-        params.append('members_readonly_ids', accountIds.join(','));
-      }
-
-      await axios.put(
-        `https://api.chatwork.com/v2/rooms/${roomId}/members`,
-        params,
-        {
-          headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
-        }
-      );
-      return true;
-    } catch (error) {
-      console.error(`メンバー権限変更エラー (${roomId}):`, error.message);
-      return false;
     }
   }
 
@@ -632,102 +595,6 @@ class ChatworkBotUtils {
     }
   }
 
-  static async talkWithAI(message) {
-    try {
-      if (!AI_API_TOKEN) {
-        return 'AI APIキーが設定されていません。';
-      }
-
-      const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${AI_API_TOKEN}`,
-        {
-          contents: [{
-            parts: [{
-              text: message
-            }]
-          }]
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          timeout: 30000
-        }
-      );
-
-      if (response.data.candidates && response.data.candidates.length > 0) {
-        const content = response.data.candidates[0].content;
-        if (content.parts && content.parts.length > 0) {
-          return content.parts[0].text;
-        }
-      }
-
-      return 'AIからの応答を取得できませんでした。';
-    } catch (error) {
-      console.error('AI会話エラー:', error.message);
-      if (error.response) {
-        console.error('Response data:', error.response.data);
-      }
-      return `AIとの会話中にエラーが発生しました: ${error.message}`;
-    }
-  }
-
-  static async generateQuoteImageFromAPI(username, displayName, text, avatar, color) {
-    try {
-      let avatarData = avatar;
-
-      if (avatar && !avatar.startsWith('data:image')) {
-        try {
-          console.log('アバター画像をダウンロード中:', avatar);
-          const avatarResponse = await axios.get(avatar, {
-            responseType: 'arraybuffer',
-            timeout: 5000
-          });
-
-          const base64Image = Buffer.from(avatarResponse.data).toString('base64');
-          avatarData = `data:image/png;base64,${base64Image}`;
-          console.log('アバター画像をPNG base64に変換しました');
-        } catch (avatarError) {
-          console.error('アバター画像のダウンロードエラー:', avatarError.message);
-          avatarData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-        }
-      }
-
-      const response = await axios.post(
-        'https://api.voids.top/fakequote',
-        {
-          username: username,
-          display_name: displayName,
-          text: text,
-          avatar: avatarData,
-          color: color
-        },
-        {
-          responseType: 'arraybuffer',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'image/png,image/*'
-          },
-          timeout: 10000
-        }
-      );
-
-      if (!response.data || response.data.byteLength === 0) {
-        throw new Error('画像データが空です');
-      }
-
-      return Buffer.from(response.data);
-    } catch (error) {
-      console.error('外部API画像生成エラー:', error.message);
-      if (error.response) {
-        console.error('Response status:', error.response.status);
-        console.error('Response data:', error.response.data?.toString().substring(0, 200));
-      }
-      throw error;
-    }
-  }
-
-  // 今日のメッセージを全て取得（複数回リクエスト - ランキング用のみ使用）
   static async getAllTodayMessages(roomId) {
     try {
       const now = new Date();
@@ -790,6 +657,22 @@ class ChatworkBotUtils {
     } catch (error) {
       console.error(`getAllTodayMessages エラー (${roomId}):`, error.message);
       return [];
+    }
+  }
+
+  // ルーム参加チェック
+  static async isRoomMember(roomId) {
+    try {
+      await apiCallLimiter();
+      await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}`, {
+        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
+      });
+      return true;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return false;
+      }
+      return false;
     }
   }
 }
@@ -898,431 +781,466 @@ class WebHookMessageProcessor {
   }
 
   static async handleCommands(roomId, messageId, accountId, messageBody, isSenderAdmin, isDirectChat, currentMembers) {
-    if (!isDirectChat && messageBody.includes('[toall]') && !isSenderAdmin) {
-      console.log(`[toall]を検出した非管理者: ${accountId} in room ${roomId}`);
-    }
+    try {
+      if (!isDirectChat && messageBody.includes('[toall]') && !isSenderAdmin) {
+        console.log(`[toall]を検出した非管理者: ${accountId} in room ${roomId}`);
+      }
 
-    // Make it a Quote
-    if (messageBody.startsWith('/make-it-a-quote ')) {
-      const params = messageBody.substring('/make-it-a-quote '.length).trim().split(' ');
-      if (params.length === 2) {
-        const [targetRoomId, targetMessageId] = params;
-        const result = await ChatworkBotUtils.createQuoteImage(roomId, targetRoomId, targetMessageId);
+      // Make it a Quote
+      if (messageBody.startsWith('/make-it-a-quote ')) {
+        const params = messageBody.substring('/make-it-a-quote '.length).trim().split(' ');
+        if (params.length === 2) {
+          const [targetRoomId, targetMessageId] = params;
+          const result = await ChatworkBotUtils.createQuoteImage
+            ? await ChatworkBotUtils.createQuoteImage(roomId, targetRoomId, targetMessageId)
+            : { success: false, error: '画像生成機能は未実装です' };
 
-        if (!result.success) {
-          const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]エラー: ${result.error}`;
+          if (!result.success) {
+            const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]エラー: ${result.error}`;
+            await ChatworkBotUtils.sendChatworkMessage(roomId, errorMessage);
+          }
+        } else {
+          const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]使用方法: /make-it-a-quote {ルームID} {メッセージID}`;
           await ChatworkBotUtils.sendChatworkMessage(roomId, errorMessage);
         }
-      } else {
-        const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]使用方法: /make-it-a-quote {ルームID} {メッセージID}`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, errorMessage);
-      }
-      return;
-    }
-
-    if (messageBody === 'おみくじ') {
-      const omikujiResult = ChatworkBotUtils.drawOmikuji(isSenderAdmin);
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nです！[/info]`;
-      await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
-    }
-
-    if (!isDirectChat && !isSenderAdmin) {
-      const emojiCount = ChatworkBotUtils.countChatworkEmojis(messageBody);
-      if (emojiCount >= 50) {
-        const warningMessage = `[To:${accountId}][pname:${accountId}]さん、Chatwork絵文字を${emojiCount}個送信されました。適度な使用をお願いします。`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, warningMessage);
-      }
-    }
-
-    if (messageBody === '/yes-or-no') {
-      const answer = await ChatworkBotUtils.getYesOrNoAnswer();
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、答えは「${answer}」です！`;
-      await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
-    }
-
-    if (messageBody.startsWith('/wiki/')) {
-      const searchTerm = messageBody.substring('/wiki/'.length).trim();
-      if (searchTerm) {
-        const wikipediaSummary = await ChatworkBotUtils.getWikipediaSummary(searchTerm);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、Wikipediaの検索結果です。\n\n${wikipediaSummary}`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
-      }
-    }
-
-    if (messageBody.startsWith('/info/')) {
-      const targetRoomId = messageBody.substring('/info/'.length).trim();
-
-      if (!targetRoomId || !INFO_API_TOKEN) {
-        const errorMsg = !INFO_API_TOKEN
-          ? 'INFO_API_TOKENが設定されていません。'
-          : 'ルームIDを指定してください。';
-        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]${errorMsg}`);
         return;
       }
 
-      try {
-        const roomInfo = await ChatworkBotUtils.getRoomInfoWithToken(targetRoomId, INFO_API_TOKEN);
+      // おみくじ
+      if (messageBody === 'おみくじ') {
+        const omikujiResult = ChatworkBotUtils.drawOmikuji(isSenderAdmin);
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nです！[/info]`;
+        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+        return;
+      }
 
-        if (roomInfo.error === 'not_found') {
-          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]存在しないルームです。`);
+      // 絵文字大量送信の警告
+      if (!isDirectChat && !isSenderAdmin) {
+        const emojiCount = ChatworkBotUtils.countChatworkEmojis(messageBody);
+        if (emojiCount >= 50) {
+          const warningMessage = `[To:${accountId}][pname:${accountId}]さん、Chatwork絵文字を${emojiCount}個送信されました。適度な使用をお願いします。`;
+          await ChatworkBotUtils.sendChatworkMessage(roomId, warningMessage);
+          return;
+        }
+      }
+
+      // Yes/No
+      if (messageBody === '/yes-or-no') {
+        const answer = await ChatworkBotUtils.getYesOrNoAnswer();
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、答えは「${answer}」です！`;
+        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+        return;
+      }
+
+      // Wikipedia検索
+      if (messageBody.startsWith('/wiki/')) {
+        const searchTerm = messageBody.substring('/wiki/'.length).trim();
+        if (searchTerm) {
+          const wikipediaSummary = await ChatworkBotUtils.getWikipediaSummary(searchTerm);
+          const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、Wikipediaの検索結果です。\n\n${wikipediaSummary}`;
+          await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+        }
+        return;
+      }
+
+      // ルーム情報取得 (INFO_API_TOKENを使う)
+      if (messageBody.startsWith('/info/')) {
+        const targetRoomId = messageBody.substring('/info/'.length).trim();
+
+        if (!targetRoomId || !INFO_API_TOKEN) {
+          const errorMsg = !INFO_API_TOKEN
+            ? 'INFO_API_TOKENが設定されていません。'
+            : 'ルームIDを指定してください。';
+          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]${errorMsg}`);
           return;
         }
 
-        if (roomInfo.error) {
-          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得に失敗しました。`);
-          return;
-        }
+        try {
+          const roomInfo = await ChatworkBotUtils.getRoomInfoWithToken(targetRoomId, INFO_API_TOKEN);
 
-        const members = await ChatworkBotUtils.getRoomMembersWithToken(targetRoomId, INFO_API_TOKEN);
-        const isYuyuyuMember = members.some(m => m.account_id === parseInt(YUYUYU_ACCOUNT_ID));
-
-        if (!isYuyuyuMember) {
-          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ゆゆゆの本垢が参加していません。`);
-          return;
-        }
-
-        const roomName = roomInfo.name;
-        const memberCount = members.length;
-        const adminCount = members.filter(m => m.role === 'admin').length;
-        const fileCount = roomInfo.file_num || 0;
-        const messageCount = roomInfo.message_num || 0;
-        const iconPath = roomInfo.icon_path || '';
-
-        let iconLink = 'なし';
-        if (iconPath) {
-          if (iconPath.startsWith('http')) {
-            iconLink = iconPath;
-          } else {
-            iconLink = `https://appdata.chatwork.com${iconPath}`;
+          if (roomInfo.error === 'not_found') {
+            await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]存在しないルームです。`);
+            return;
           }
-        }
 
-        const admins = members.filter(m => m.role === 'admin');
-        let adminList = '';
-        if (admins.length > 0) {
-          adminList = admins.map(admin => `[picon:${admin.account_id}]`).join(' ');
-        } else {
-          adminList = 'なし';
-        }
-
-        const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
-      } catch (error) {
-        console.error('ルーム情報取得エラー:', error.message);
-        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得中にエラーが発生しました。`);
-      }
-      return;
-    }
-
-    if (messageBody.startsWith('/ai/')) {
-      const aiMessage = messageBody.substring('/ai/'.length).trim();
-      if (aiMessage) {
-        const aiResponse = await ChatworkBotUtils.talkWithAI(aiMessage);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、AIの応答です。\n\n${aiResponse}`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
-      } else {
-        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]使用方法: /ai/{メッセージ}`);
-      }
-    }
-
-    if (messageBody.startsWith('/scratch-user/')) {
-      const username = messageBody.substring('/scratch-user/'.length).trim();
-      if (username) {
-        const userStats = await ChatworkBotUtils.getScratchUserStats(username);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、Scratchユーザー「${username}」の情報です。\n\n${userStats}`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
-      }
-    }
-
-    if (messageBody.startsWith('/scratch-project/')) {
-      const projectId = messageBody.substring('/scratch-project/'.length).trim();
-      if (projectId) {
-        const projectInfo = await ChatworkBotUtils.getScratchProjectInfo(projectId);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、Scratchプロジェクト「${projectId}」の情報です。\n\n${projectInfo}`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
-      }
-    }
-
-    if (messageBody === '/today') {
-      const now = new Date();
-      const jstDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
-      const todayFormatted = jstDate.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
-      let messageContent = `[info][title]今日の情報[/title]今日は${todayFormatted}だよ！`;
-      const events = await getTodaysEventsFromJson();
-      if (events.length > 0) {
-        events.forEach(event => {
-          messageContent += `\n今日は${event}だよ！`;
-        });
-      } else {
-        messageContent += `\n今日は特に登録されたイベントはないみたい。`;
-      }
-      messageContent += `[/info]`;
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、\n\n${messageContent}`;
-      await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
-    }
-
-    if (!isDirectChat && messageBody === '/member') {
-      if (currentMembers.length > 0) {
-        let reply = '[info][title]メンバー一覧[/title]\n';
-        currentMembers.forEach(member => {
-          reply += `・${member.name} (${member.role})\n`;
-        });
-        reply += '[/info]';
-        await ChatworkBotUtils.sendChatworkMessage(roomId, reply);
-      }
-    }
-
-    if (!isDirectChat && messageBody === '/member-name') {
-      if (currentMembers.length > 0) {
-        const names = currentMembers.map(m => m.name).join(', ');
-        await ChatworkBotUtils.sendChatworkMessage(roomId, `[info][title]メンバー名一覧[/title]\n${names}[/info]`);
-      }
-    }
-
-    if (!isDirectChat && messageBody === '/info') {
-      try {
-        const roomInfo = await ChatworkBotUtils.getRoomInfo(roomId);
-
-        if (!roomInfo) {
-          await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得に失敗しました。');
-          return;
-        }
-
-        const roomName = roomInfo.name;
-        const memberCount = currentMembers.length;
-        const adminCount = currentMembers.filter(m => m.role === 'admin').length;
-        const fileCount = roomInfo.file_num || 0;
-        const messageCount = roomInfo.message_num || 0;
-        const iconPath = roomInfo.icon_path || '';
-
-        const messages = await ChatworkBotUtils.getRoomMessages(roomId);
-        let messageLink = 'なし';
-        if (messages && messages.length > 0) {
-          const latestMessageId = messages[0].message_id;
-          messageLink = `https://www.chatwork.com/#!rid${roomId}-${latestMessageId}`;
-        }
-
-        let iconLink = 'なし';
-        if (iconPath) {
-          if (iconPath.startsWith('http')) {
-            iconLink = iconPath;
-          } else {
-            iconLink = `https://appdata.chatwork.com${iconPath}`;
+          if (roomInfo.error) {
+            await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得に失敗しました。`);
+            return;
           }
-        }
 
-        const admins = currentMembers.filter(m => m.role === 'admin');
-        let adminList = '';
-        if (admins.length > 0) {
-          adminList = admins.map(admin => `[picon:${admin.account_id}]`).join(' ');
-        } else {
-          adminList = 'なし';
-        }
+          const members = await ChatworkBotUtils.getRoomMembersWithToken(targetRoomId, INFO_API_TOKEN);
+          const isYuyuyuMember = members.some(m => m.account_id === parseInt(YUYUYU_ACCOUNT_ID));
 
-        const infoMessage = `[info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\n最新メッセージ：${messageLink}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+          if (!isYuyuyuMember) {
+            await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ゆゆゆの本垢が参加していません。`);
+            return;
+          }
 
-        await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
-      } catch (error) {
-        console.error('ルーム情報取得エラー:', error.message);
-        await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得中にエラーが発生しました。');
-      }
-    }
+          const roomName = roomInfo.name;
+          const memberCount = members.length;
+          const adminCount = members.filter(m => m.role === 'admin').length;
+          const fileCount = roomInfo.file_num || 0;
+          const messageCount = roomInfo.message_num || 0;
+          const iconPath = roomInfo.icon_path || '';
 
-    // /romeraコマンド: 高速化版（メモリから取得）
-    if (messageBody === '/romera') {
-      try {
-        console.log(`ルーム ${roomId} のランキングを作成中...`);
-        
-        let counts = memoryStorage.messageCounts.get(roomId) || {};
-
-        const ranking = Object.entries(counts)
-          .sort((a, b) => b[1] - a[1])
-          .map(([accountId, count], index) => ({
-            rank: index + 1,
-            accountId,
-            count
-          }));
-
-        const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
-
-        let rankingMessage = '[info][title]メッセージ数ランキング[/title]\n';
-        if (ranking.length === 0) {
-          rankingMessage += '今日のメッセージはまだありません。\n';
-        } else {
-          ranking.forEach((item, index) => {
-            rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
-            if (index < ranking.length - 1) {
-              rankingMessage += '\n[hr]';
+          let iconLink = 'なし';
+          if (iconPath) {
+            if (iconPath.startsWith('http')) {
+              iconLink = iconPath;
+            } else {
+              iconLink = `https://appdata.chatwork.com${iconPath}`;
             }
-            rankingMessage += '\n';
+          }
+
+          const admins = members.filter(m => m.role === 'admin');
+          let adminList = '';
+          if (admins.length > 0) {
+            adminList = admins.map(admin => `[picon:${admin.account_id}]`).join(' ');
+          } else {
+            adminList = 'なし';
+          }
+
+          const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+          await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
+        } catch (error) {
+          console.error('ルーム情報取得エラー:', error.message);
+          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得中にエラーが発生しました。`);
+        }
+        return;
+      }
+
+      // 歌詞取得 (/lyrics {url})
+      if (messageBody.startsWith('/lyrics ')) {
+        const url = messageBody.substring('/lyrics '.length).trim();
+        if (url) {
+          const lyrics = await ChatworkBotUtils.getLyrics(url);
+          const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${lyrics}`;
+          await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+        } else {
+          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]使用方法: /lyrics {utatenまたはuta-netのURL}`);
+        }
+        return;
+      }
+
+      // Scratchユーザー情報
+      if (messageBody.startsWith('/scratch-user/')) {
+        const username = messageBody.substring('/scratch-user/'.length).trim();
+        if (username) {
+          const userStats = await ChatworkBotUtils.getScratchUserStats(username);
+          const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、Scratchユーザー「${username}」の情報です。\n\n${userStats}`;
+          await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+        }
+        return;
+      }
+
+      // Scratchプロジェクト情報
+      if (messageBody.startsWith('/scratch-project/')) {
+        const projectId = messageBody.substring('/scratch-project/'.length).trim();
+        if (projectId) {
+          const projectInfo = await ChatworkBotUtils.getScratchProjectInfo(projectId);
+          const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、Scratchプロジェクト「${projectId}」の情報です。\n\n${projectInfo}`;
+          await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+        }
+        return;
+      }
+
+      // 今日の情報
+      if (messageBody === '/today') {
+        const now = new Date();
+        const jstDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
+        const todayFormatted = jstDate.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
+        let messageContent = `[info][title]今日の情報[/title]今日は${todayFormatted}だよ！`;
+        const events = await getTodaysEventsFromJson();
+        if (events.length > 0) {
+          events.forEach(event => {
+            messageContent += `\n今日は${event}だよ！`;
           });
+        } else {
+          messageContent += `\n今日は特に登録されたイベントはないみたい。`;
         }
-        rankingMessage += `\n合計：${totalCount}コメ\n(botを含む)[/info]`;
-
-        await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
-      } catch (error) {
-        console.error('ランキング取得エラー:', error.message);
-        await ChatworkBotUtils.sendChatworkMessage(roomId, 'ランキングの取得中にエラーが発生しました。');
+        messageContent += `[/info]`;
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、\n\n${messageContent}`;
+        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+        return;
       }
-    }
 
-    if (messageBody === '/komekasegi') {
-      const messages = [
-        'コメ稼ぎだお',
-        '過疎だね',
-        '静かすぎて風の音が聞こえる',
-        'みんな寝落ちした？',
-        'ここ、無人島かな？',
-        '今日も平和だね〜',
-        '誰か生きてる？',
-        '砂漠のオアシス状態',
-        'コメントが凍結してる!?',
-        'しーん……',
-        'この空気、逆に好き',
-        '時が止まったみたい',
-        '過疎 is 神',
-        '電波届いてるよね？',
-        'こっそり独り言タイム',
-        'エコー返ってくる気がする',
-        '幽霊さん、いますか〜？'
-      ];
-
-      for (let i = 0; i < 10; i++) {
-        const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-        await ChatworkBotUtils.sendChatworkMessage(roomId, randomMessage);
-
-        if (i < 9) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+      // メンバー一覧
+      if (!isDirectChat && messageBody === '/member') {
+        if (currentMembers.length > 0) {
+          let reply = '[info][title]メンバー一覧[/title]\n';
+          currentMembers.forEach(member => {
+            reply += `・${member.name} (${member.role})\n`;
+          });
+          reply += '[/info]';
+          await ChatworkBotUtils.sendChatworkMessage(roomId, reply);
         }
+        return;
       }
-    }
 
-    if (!isDirectChat && messageBody === '/disself') {
-      try {
-        const currentUser = currentMembers.find(m => m.account_id === accountId);
-
-        if (!currentUser) {
-          return;
+      // メンバー名一覧
+      if (!isDirectChat && messageBody === '/member-name') {
+        if (currentMembers.length > 0) {
+          const names = currentMembers.map(m => m.name).join(', ');
+          await ChatworkBotUtils.sendChatworkMessage(roomId, `[info][title]メンバー名一覧[/title]\n${names}[/info]`);
         }
-
-        const currentRole = currentUser.role;
-
-        if (currentRole === 'admin') {
-          const admins = currentMembers.filter(m => m.role === 'admin' && m.account_id !== accountId).map(m => m.account_id);
-          const members = currentMembers.filter(m => m.role === 'member').map(m => m.account_id);
-          const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => m.account_id);
-
-          members.push(accountId);
-
-          const params = new URLSearchParams();
-          if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
-          if (members.length > 0) params.append('members_member_ids', members.join(','));
-          if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
-
-          await apiCallLimiter();
-          await axios.put(
-            `https://api.chatwork.com/v2/rooms/${roomId}/members`,
-            params,
-            { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
-          );
-
-          console.log(`${accountId} を管理者からメンバーに降格しました（ルーム ${roomId}）`);
-        } else if (currentRole === 'member') {
-          const admins = currentMembers.filter(m => m.role === 'admin').map(m => m.account_id);
-          const members = currentMembers.filter(m => m.role === 'member' && m.account_id !== accountId).map(m => m.account_id);
-          const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => m.account_id);
-
-          readonly.push(accountId);
-
-          const params = new URLSearchParams();
-          if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
-          if (members.length > 0) params.append('members_member_ids', members.join(','));
-          if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
-
-          await apiCallLimiter();
-          await axios.put(
-            `https://api.chatwork.com/v2/rooms/${roomId}/members`,
-            params,
-            { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
-          );
-
-          console.log(`${accountId} をメンバーから閲覧のみに降格しました（ルーム ${roomId}）`);
-        }
-      } catch (error) {
-        console.error('権限変更エラー:', error.message);
+        return;
       }
-      return;
-    }
 
-    const responses = {
-      'はんせい': `[To:10911090] なかよし\n[pname:${accountId}]に呼ばれてるよ！`,
-      'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよ！`,
-      'からめり': `[To:10337719] からめり\n[pname:${accountId}]に呼ばれてるよ！`,
-      'いろいろあぷり': `https://shiratama-kotone.github.io/any-app/`,
-      '喘げ': `...っ♡///`,
-      'おやすみ': `おやすみなさい！[pname:${accountId}]！`,
-      'おはよう': `[pname:${accountId}] おはよう！`,
-      '/test': `アカウントID:${accountId}`,
-      'プロセカやってくる': `[preview id=1864425247 ht=130]`,
-      'おっ': `ぱい`,
-      'せっ': `くす`,
-      '精': `子`,
-      '114': `514`,
-      'ちん': `ちんㅤ`,
-      '野獣': `やりますねぇ！`,
-      'こ↑': `こ↓`,
-      '富士山': `3776m!`,
-      'TOALL': `[toall...すると思った？`,
-      'botのコードください': `https://github.com/shiratama-kotone/cw-bot`,
-      '1+1=': `1!`,
-      'トイレいってくる': `漏らさないでねー`,
-      'からめりは': `エロ画像マニア！`,
-      'たまごは': `人外ナー！`,
-      'ゆゆゆは': `かわいい．．．はず`,
-      'はんせいは': `かっこいい！`,
-      'プロセカ公式Youtube': `https://www.youtube.com/@pj_sekai_colorfulstage`,
-      '6': `9`,
-      'Git': `hub`,
-      '初音': `ミク`,
-      '鏡音': `リン`,
-      '巡音': `ルカ`,
-      'MEI': `KO`,
-      'KAI': `TO`,
-      '星乃': `一歌`,
-      '天馬': `咲希 または 司`,
-      '望月': `穂波`,
-      '日野森': `志歩 または 雫`,
-      '花里': `みのり`,
-      '桐谷': `遥`,
-      '桃井': `愛莉`,
-      '小豆沢': `こはね`,
-      '白石': `杏`,
-      '東雲': `絵名 または 彰人`,
-      '青柳': `冬弥`,
-      '鳳': `えむ`,
-      '草薙': `寧々`,
-      '神代': `類`,
-      '宵崎': `奏`,
-      '朝比奈': `まふゆ`,
-      '暁山': `瑞希 または 優希`,
-      '高木': `未羽`,
-      '吉崎': `花乃 または 葉太`,
-      '高坂': `朔`,
-      '真堂': `良樹`,
-      '日暮': `アリサ`,
-      '山下': `真里奈`,
-      '早川': `ななみ`,
-      '内山': `唯奈`,
-      '斎藤': `彩香`,
-      '長谷川': `里帆`,
-      '有澤': `日菜子`,
-      '柊': `マグネタイト`,
-      'ジャン': `ライリー`,
-      '雪平': `実篤`,
-      '夏野': `二葉`,
-    };
-    if (responses[messageBody]) {
-      await ChatworkBotUtils.sendChatworkMessage(roomId, responses[messageBody]);
+      // ルーム情報（自分がいるルーム）
+      if (!isDirectChat && messageBody === '/info') {
+        try {
+          const roomInfo = await ChatworkBotUtils.getRoomInfo(roomId);
+
+          if (!roomInfo) {
+            await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得に失敗しました。');
+            return;
+          }
+
+          const roomName = roomInfo.name;
+          const memberCount = currentMembers.length;
+          const adminCount = currentMembers.filter(m => m.role === 'admin').length;
+          const fileCount = roomInfo.file_num || 0;
+          const messageCount = roomInfo.message_num || 0;
+          const iconPath = roomInfo.icon_path || '';
+
+          const messages = await ChatworkBotUtils.getRoomMessages(roomId);
+          let messageLink = 'なし';
+          if (messages && messages.length > 0) {
+            const latestMessageId = messages[0].message_id;
+            messageLink = `https://www.chatwork.com/#!rid${roomId}-${latestMessageId}`;
+          }
+
+          let iconLink = 'なし';
+          if (iconPath) {
+            if (iconPath.startsWith('http')) {
+              iconLink = iconPath;
+            } else {
+              iconLink = `https://appdata.chatwork.com${iconPath}`;
+            }
+          }
+
+          const admins = currentMembers.filter(m => m.role === 'admin');
+          let adminList = '';
+          if (admins.length > 0) {
+            adminList = admins.map(admin => `[picon:${admin.account_id}]`).join(' ');
+          } else {
+            adminList = 'なし';
+          }
+
+          const infoMessage = `[info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\n最新メッセージ：${messageLink}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+
+          await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
+        } catch (error) {
+          console.error('ルーム情報取得エラー:', error.message);
+          await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得中にエラーが発生しました。');
+        }
+        return;
+      }
+
+      // /romera コマンド（メモリから高速に取得）
+      if (messageBody === '/romera') {
+        try {
+          console.log(`ルーム ${roomId} のランキングを作成中...`);
+          
+          let counts = memoryStorage.messageCounts.get(roomId) || {};
+
+          const ranking = Object.entries(counts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([accountId, count], index) => ({
+              rank: index + 1,
+              accountId,
+              count
+            }));
+
+          const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
+
+          let rankingMessage = '[info][title]メッセージ数ランキング[/title]\n';
+          if (ranking.length === 0) {
+            rankingMessage += '今日のメッセージはまだありません。\n';
+          } else {
+            ranking.forEach((item, index) => {
+              rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
+              if (index < ranking.length - 1) {
+                rankingMessage += '\n[hr]';
+              }
+              rankingMessage += '\n';
+            });
+          }
+          rankingMessage += `\n合計：${totalCount}コメ\n(botを含む)[/info]`;
+
+          await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
+        } catch (error) {
+          console.error('ランキング取得エラー:', error.message);
+          await ChatworkBotUtils.sendChatworkMessage(roomId, 'ランキングの取得中にエラーが発生しました。');
+        }
+        return;
+      }
+
+      // /komekasegi - 10回ランダムメッセージ (スパム注意)
+      if (messageBody === '/komekasegi') {
+        const messages = [
+          'コメ稼ぎだお',
+          '過疎だね',
+          '静かすぎて風の音が聞こえる',
+          'みんな寝落ちした？',
+          'ここ、無人島かな？',
+          '今日も平和だね〜',
+          '誰か生きてる？',
+          '砂漠のオアシス状態',
+          'コメントが凍結してる!?',
+          'しーん……',
+          'この空気、逆に好き',
+          '時が止まったみたい',
+          '過疎 is 神',
+          '電波届いてるよね？',
+          'こっそり独り言タイム',
+          'エコー返ってくる気がする',
+          '幽霊さん、いますか〜？'
+        ];
+
+        for (let i = 0; i < 10; i++) {
+          const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+          await ChatworkBotUtils.sendChatworkMessage(roomId, randomMessage);
+
+          if (i < 9) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+        return;
+      }
+
+      // /disself - 自分の権限を落とす（管理者 -> メンバー -> 閲覧のみ）
+      if (!isDirectChat && messageBody === '/disself') {
+        try {
+          const currentUser = currentMembers.find(m => m.account_id === accountId);
+
+          if (!currentUser) {
+            return;
+          }
+
+          const currentRole = currentUser.role;
+
+          if (currentRole === 'admin') {
+            const admins = currentMembers.filter(m => m.role === 'admin' && m.account_id !== accountId).map(m => m.account_id);
+            const members = currentMembers.filter(m => m.role === 'member').map(m => m.account_id);
+            const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => m.account_id);
+
+            members.push(accountId);
+
+            const params = new URLSearchParams();
+            if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
+            if (members.length > 0) params.append('members_member_ids', members.join(','));
+            if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
+
+            await apiCallLimiter();
+            await axios.put(
+              `https://api.chatwork.com/v2/rooms/${roomId}/members`,
+              params,
+              { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+            );
+
+            console.log(`${accountId} を管理者からメンバーに降格しました（ルーム ${roomId}）`);
+          } else if (currentRole === 'member') {
+            const admins = currentMembers.filter(m => m.role === 'admin').map(m => m.account_id);
+            const members = currentMembers.filter(m => m.role === 'member' && m.account_id !== accountId).map(m => m.account_id);
+            const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => m.account_id);
+
+            readonly.push(accountId);
+
+            const params = new URLSearchParams();
+            if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
+            if (members.length > 0) params.append('members_member_ids', members.join(','));
+            if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
+
+            await apiCallLimiter();
+            await axios.put(
+              `https://api.chatwork.com/v2/rooms/${roomId}/members`,
+              params,
+              { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+            );
+
+            console.log(`${accountId} をメンバーから閲覧のみに降格しました（ルーム ${roomId}）`);
+          }
+        } catch (error) {
+          console.error('権限変更エラー:', error.message);
+        }
+        return;
+      }
+
+      // 定義済み定型レスポンス（短文）
+      const responses = {
+        'はんせい': `[To:10911090] なかよし\n[pname:${accountId}]に呼ばれてるよ！`,
+        'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよ！`,
+        'からめり': `[To:10337719] からめり\n[pname:${accountId}]に呼ばれてるよ！`,
+        'いろいろあぷり': `https://shiratama-kotone.github.io/any-app/`,
+        '喘げ': `...っ♡///`,
+        'おやすみ': `おやすみなさい！[pname:${accountId}]！`,
+        'おはよう': `[pname:${accountId}] おはよう！`,
+        '/test': `アカウントID:${accountId}`,
+        'プロセカやってくる': `[preview id=1864425247 ht=130]`,
+        'おっ': `ぱい`,
+        'せっ': `くす`,
+        '精': `子`,
+        '114': `514`,
+        'ちん': `ちんㅤ`,
+        '野獣': `やりますねぇ！`,
+        'こ↑': `こ↓`,
+        '富士山': `3776m!`,
+        'TOALL': `[toall...すると思った？`,
+        'botのコードください': `https://github.com/shiratama-kotone/cw-bot`,
+        '1+1=': `1!`,
+        'トイレいってくる': `漏らさないでねー`,
+        'からめりは': `エロ画像マニア！`,
+        'たまごは': `人外ナー！`,
+        'ゆゆゆは': `かわいい．．．はず`,
+        'はんせいは': `かっこいい！`,
+        'プロセカ公式Youtube': `https://www.youtube.com/@pj_sekai_colorfulstage`,
+        '6': `9`,
+        'Git': `hub`,
+        '初音': `ミク`,
+        '鏡音': `リン`,
+        '巡音': `ルカ`,
+        'MEI': `KO`,
+        'KAI': `TO`,
+        '星乃': `一歌`,
+        '天馬': `咲希 または 司`,
+        '望月': `穂波`,
+        '日野森': `志歩 または 雫`,
+        '花里': `みのり`,
+        '桐谷': `遥`,
+        '桃井': `愛莉`,
+        '小豆沢': `こはね`,
+        '白石': `杏`,
+        '東雲': `絵名 または 彰人`,
+        '青柳': `冬弥`,
+        '鳳': `えむ`,
+        '草薙': `寧々`,
+        '神代': `類`,
+        '宵崎': `奏`,
+        '朝比奈': `まふゆ`,
+        '暁山': `瑞希 または 優希`,
+        '高木': `未羽`,
+        '吉崎': `花乃 または 葉太`,
+        '高坂': `朔`,
+        '真堂': `良樹`,
+        '日暮': `アリサ`,
+        '山下': `真里奈`,
+        '早川': `ななみ`,
+        '内山': `唯奈`,
+        '斎藤': `彩香`,
+        '長谷川': `里帆`,
+        '有澤': `日菜子`,
+        '柊': `マグネタイト`,
+        'ジャン': `ライリー`,
+        '雪平': `実篤`,
+        '夏野': `二葉`,
+      };
+      if (responses[messageBody]) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, responses[messageBody]);
+        return;
+      }
+    } catch (error) {
+      console.error('handleCommands エラー:', error.message);
     }
   }
 
@@ -1357,7 +1275,7 @@ app.post('/webhook', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     status: 'OK',
-    message: 'Chatwork Bot WebHook版 (全ルーム対応)',
+    message: 'Chatwork Bot WebHook版 (全ルーム対応) - 改良版',
     timestamp: new Date().toISOString(),
     mode: 'WebHook - All Rooms',
     storage: 'Memory',
@@ -1462,7 +1380,7 @@ app.get('/eew-test:scale', async (req, res) => {
   }
 });
 
-// Make it a Quote画像生成エンドポイント
+// Make it a Quote画像生成エンドポイント（外部API経由）
 app.get('/miaq', async (req, res) => {
   try {
     const { 'u-name': username, 'd-name': displayName, text, avatar, color } = req.query;
@@ -1486,6 +1404,10 @@ app.get('/miaq', async (req, res) => {
       color: isColor
     });
 
+    if (!ChatworkBotUtils.generateQuoteImageFromAPI) {
+      return res.status(500).json({ status: 'error', message: '画像生成機能が利用できません' });
+    }
+
     const imageBuffer = await ChatworkBotUtils.generateQuoteImageFromAPI(
       finalUsername,
       finalDisplayName,
@@ -1504,6 +1426,65 @@ app.get('/miaq', async (req, res) => {
       message: '画像生成に失敗しました',
       error: error.message
     });
+  }
+});
+
+// 追加: /msg-post エンドポイント（GET/POST）
+// - GET  /msg-post?roomid={ルームID}&msg={メッセージ}
+// - POST /msg-post  Content-Type: application/json  Body: { "roomid": "...", "msg": "..." }
+// ボットが指定ルームに参加していない場合は 304 を返します
+app.get('/msg-post', async (req, res) => {
+  try {
+    const roomId = (req.query.roomid || req.query.room_id || '').toString().trim();
+    const message = (req.query.msg || req.query.message || '').toString();
+
+    if (!roomId || !message) {
+      return res.status(400).json({ status: 'error', message: 'roomid and msg query parameters are required' });
+    }
+
+    // 参加チェック
+    const isMember = await ChatworkBotUtils.isRoomMember(roomId);
+    if (!isMember) {
+      // 要望どおり 304 を返す
+      return res.status(304).json({ status: 'not_member', message: 'Bot is not a member of the specified room' });
+    }
+
+    const messageId = await ChatworkBotUtils.sendChatworkMessage(roomId, message);
+    if (!messageId) {
+      return res.status(502).json({ status: 'error', message: 'Failed to send message' });
+    }
+
+    return res.json({ status: 'success', room_id: roomId, message_id: messageId });
+  } catch (error) {
+    console.error('/msg-post GET error:', error);
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+app.post('/msg-post', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const roomId = (body.roomid || body.room_id || '').toString().trim();
+    const message = (body.msg || body.message || '').toString();
+
+    if (!roomId || !message) {
+      return res.status(400).json({ status: 'error', message: 'JSON body must include roomid and msg (or room_id and message)' });
+    }
+
+    const isMember = await ChatworkBotUtils.isRoomMember(roomId);
+    if (!isMember) {
+      return res.status(304).json({ status: 'not_member', message: 'Bot is not a member of the specified room' });
+    }
+
+    const messageId = await ChatworkBotUtils.sendChatworkMessage(roomId, message);
+    if (!messageId) {
+      return res.status(502).json({ status: 'error', message: 'Failed to send message' });
+    }
+
+    return res.json({ status: 'success', room_id: roomId, message_id: messageId });
+  } catch (error) {
+    console.error('/msg-post POST error:', error);
+    return res.status(500).json({ status: 'error', message: error.message });
   }
 });
 
@@ -1760,7 +1741,6 @@ app.listen(port, async () => {
   console.log('環境変数:');
   console.log('- CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN ? '設定済み' : '未設定');
   console.log('- INFO_API_TOKEN:', INFO_API_TOKEN ? '設定済み' : '未設定');
-  console.log('- AI_API_TOKEN:', AI_API_TOKEN ? '設定済み' : '未設定');
   console.log('- DATABASE_URL:', process.env.DATABASE_URL ? '設定済み' : '未設定');
   console.log('- DIRECT_CHAT_WITH_DATE_CHANGE:', DIRECT_CHAT_WITH_DATE_CHANGE);
   console.log('- LOG_ROOM_ID:', LOG_ROOM_ID, '(固定)');
