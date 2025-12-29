@@ -56,6 +56,16 @@ const LOG_ROOM_ID = '404646956';
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
 const YUYUYU_ACCOUNT_ID = '10544705';
 
+// 追加: 天気予報用設定
+const WEATHER_API_BASE = 'https://weather.tsukumijima.net/api/forecast/city';
+const WEATHER_REGIONS = [
+  { name: '東京', code: '130010' },
+  { name: '大阪', code: '270000' },
+  { name: '名古屋', code: '230010' },
+  { name: '横浜', code: '140010' },
+  { name: '福岡', code: '400010' }
+];
+
 // メモリ内データストレージ
 const memoryStorage = {
   properties: new Map(),
@@ -65,7 +75,7 @@ const memoryStorage = {
   lastEarthquakeId: null,
 };
 
-// Chatwork APIレートリミット制御
+// Chatwork APIレートミット制御
 const MAX_API_CALLS_PER_10SEC = 10;
 const API_WINDOW_MS = 10000;
 let apiCallTimestamps = [];
@@ -361,6 +371,18 @@ class ChatworkBotUtils {
     }
   }
 
+  // 追加: 天気予報取得（気象API: weather.tsukumijima.net）
+  static async getWeatherForecast(cityCode) {
+    try {
+      const url = `${WEATHER_API_BASE}/${cityCode}.json`;
+      const response = await axios.get(url, { timeout: 10000 });
+      return response.data || null;
+    } catch (error) {
+      console.error(`天気予報取得エラー (${cityCode}):`, error.message);
+      return null;
+    }
+  }
+
   // 歌詞取得機能
   static async getLyrics(url) {
     try {
@@ -544,9 +566,9 @@ class ChatworkBotUtils {
 
       let message;
       if (!earthquakeInfo.hypocenter || earthquakeInfo.hypocenter === '' || earthquakeInfo.hypocenter === '不明') {
-        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に震度${scale}の地震が発生しました。\nマグニチュード: ${magnitudeText}。[/info]`;
+        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に震度${scale}の地震が発生しました。\nマグニチュード: ${magnitudeText}。[/info][...]
       } else {
-        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に ${earthquakeInfo.hypocenter} を中心とする震度${scale}の地震が発生しました。\nマグニチュード: ${magnitudeText}。[/info]`;
+        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に ${earthquakeInfo.hypocenter} を中心とする震度${scale}の地震が発生しました。\n�[...]
       }
 
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
@@ -801,7 +823,7 @@ class WebHookMessageProcessor {
 
     if (messageBody === 'おみくじ') {
       const omikujiResult = ChatworkBotUtils.drawOmikuji(isSenderAdmin);
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nです！[/info]`;
+      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nです！[/i[...]
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
@@ -884,7 +906,7 @@ class WebHookMessageProcessor {
           adminList = 'なし';
         }
 
-        const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+        const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${admi[...]
         await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
       } catch (error) {
         console.error('ルーム情報取得エラー:', error.message);
@@ -927,6 +949,50 @@ class WebHookMessageProcessor {
       messageContent += `[/info]`;
       const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、\n\n${messageContent}`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+    }
+
+    // /weather コマンド：午後6時前は今日の天気、午後6時以降は明日の天気を返信
+    if (messageBody === '/weather') {
+      try {
+        const now = new Date();
+        const jstNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+        const hour = jstNow.getHours();
+        const isTomorrow = hour >= 18; // 18時以降は明日の天気
+        const label = isTomorrow ? '明日の天気予報' : '今日の天気予報';
+
+        for (const region of WEATHER_REGIONS) {
+          try {
+            const data = await ChatworkBotUtils.getWeatherForecast(region.code);
+            if (!data) {
+              console.error(`天気データ取得失敗: ${region.name} (${region.code})`);
+              continue;
+            }
+
+            const forecastIndex = isTomorrow ? 1 : 0;
+            const forecast = (data.forecasts && data.forecasts[forecastIndex]) ? data.forecasts[forecastIndex] : (data.forecasts ? data.forecasts[0] : null);
+
+            const telop = forecast?.telop || '不明';
+            const maxTemp = forecast?.temperature?.max?.celsius ?? null;
+            const minTemp = forecast?.temperature?.min?.celsius ?? null;
+            const description = data.description?.text || (forecast?.detail || '');
+
+            let message = `[info][title]${region.name}の${label}[/title]\n`;
+            message += `天気　　　：${telop}\n`;
+            message += `最高気温　：${maxTemp !== null ? `${maxTemp}℃` : '不明'}\n`;
+            if (minTemp !== null && minTemp !== undefined) {
+              message += `最低気温　：${minTemp}℃\n`;
+            }
+            message += `天気概況文：${description}\n\n[/info]`;
+
+            await ChatworkBotUtils.sendChatworkMessage(roomId, message);
+          } catch (errRegion) {
+            console.error(`/weather: ${region.name} の処理中にエラー:`, errRegion.message);
+          }
+        }
+      } catch (err) {
+        console.error('/weather 処理エラー:', err.message);
+      }
+      return;
     }
 
     if (!isDirectChat && messageBody === '/member') {
@@ -987,7 +1053,7 @@ class WebHookMessageProcessor {
           adminList = 'なし';
         }
 
-        const infoMessage = `[info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\n最新メッセージ：${messageLink}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+        const infoMessage = `[info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイ�[...]
 
         await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
       } catch (error) {
@@ -1669,6 +1735,58 @@ async function sendMorningMessage() {
   }
 }
 
+// 追加: 天気予報を整形して送信する関数
+async function sendWeather(isTomorrow = false) {
+  try {
+    const label = isTomorrow ? '明日の天気予報' : '今日の天気予報';
+    console.log(`${label}を送信します (isTomorrow=${isTomorrow})`);
+
+    for (const region of WEATHER_REGIONS) {
+      try {
+        const data = await ChatworkBotUtils.getWeatherForecast(region.code);
+        if (!data) {
+          console.error(`天気データが取得できませんでした: ${region.name} (${region.code})`);
+          continue;
+        }
+
+        // forecasts 配列の 0 が今日、1 が明日
+        const forecastIndex = isTomorrow ? 1 : 0;
+        const forecast = (data.forecasts && data.forecasts[forecastIndex]) ? data.forecasts[forecastIndex] : (data.forecasts ? data.forecasts[0] : null);
+
+        const telop = forecast?.telop || '不明';
+        const maxTemp = forecast?.temperature?.max?.celsius ?? null;
+        const minTemp = forecast?.temperature?.min?.celsius ?? null;
+        // 天気概況文は data.description.text を優先
+        const description = data.description?.text || (forecast?.detail || '');
+
+        // 指定のフォーマットに従ってメッセージ作成
+        let message = `[info][title]${region.name}の${label}[/title]\n`;
+        message += `天気　　　：${telop}\n`;
+        message += `最高気温　：${maxTemp !== null ? `${maxTemp}℃` : '不明'}\n`;
+        if (minTemp !== null && minTemp !== undefined) {
+          // 最低気温が null のときは行を削除する（指定要件）
+          message += `最低気温　：${minTemp}℃\n`;
+        }
+        message += `天気概況文：${description}\n\n[/info]`;
+
+        // 地域ごとに別メッセージで、各指定ルームへ送信
+        for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+          try {
+            await ChatworkBotUtils.sendChatworkMessage(roomId, message);
+            console.log(`${region.name} の天気を送信しました -> ルーム ${roomId}`);
+          } catch (err) {
+            console.error(`${region.name} の天気送信エラー (ルーム ${roomId}):`, err.message);
+          }
+        }
+      } catch (err) {
+        console.error(`地域 ${region.name} の天気処理中にエラー:`, err.message);
+      }
+    }
+  } catch (error) {
+    console.error('天気送信処理エラー:', error.message);
+  }
+}
+
 // 地震情報チェック（1分ごと）
 async function checkEarthquakeInfo() {
   try {
@@ -1712,9 +1830,18 @@ cron.schedule('0 59 23 * * *', async () => {
   timezone: "Asia/Tokyo"
 });
 
-// cron: 毎日6時0分に実行
+// cron: 毎日6時0分に実行（朝のメッセージ + 今日の天気）
 cron.schedule('0 0 6 * * *', async () => {
   await sendMorningMessage();
+  // 今日の天気を送る
+  await sendWeather(false);
+}, {
+  timezone: "Asia/Tokyo"
+});
+
+// cron: 毎日18時0分に実行（明日の天気）
+cron.schedule('0 0 18 * * *', async () => {
+  await sendWeather(true);
 }, {
   timezone: "Asia/Tokyo"
 });
