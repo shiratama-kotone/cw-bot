@@ -1,4 +1,3 @@
-
 // Chatwork Bot for Render (WebHook版 - 全ルーム対応)
 // server.js - 完全版（天気予報機能付き）
 
@@ -42,12 +41,15 @@ async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_webhooks_send_time ON webhooks(send_time);
       CREATE INDEX IF NOT EXISTS idx_webhooks_room_send ON webhooks(room_id, send_time);
     `);
-  console.log(`WebHook保存: ルーム ${roomId}, メッセージID ${messageId}`);
-    } catch (error) {
-      console.error('WebHook保存エラー:', error.message);
-    }
-  }
 
+    console.log('データベーステーブル初期化完了');
+  } catch (error) {
+    console.error('データベース初期化エラー:', error.message);
+  }
+}
+
+
+// ここから52行目以降が続きます
   static async processWebHookMessage(webhookData) {
     try {
       await this.saveWebhookToDatabase(webhookData);
