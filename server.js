@@ -1,55 +1,71 @@
-// Chatwork Bot for Render (WebHook版 - 全ルーム対応)
-// server.js - 完全版（天気予報機能付き）
+// 環境変数から設定を読み込み
+const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
+const INFO_API_TOKEN = process.env.INFO_API_TOKEN || '';
+const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,407676893,415060980,406897783,391699365').split(',');
+const LOG_ROOM_ID = '404646956';
+const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
+const YUYUYU_ACCOUNT_ID = '10544705';
 
-const express = require('express');
-const axios = require('axios');
-const cron = require('node-cron');
-const { Pool } = require('pg');
-const cheerio = require('cheerio');
+// 天気予報の地域設定
+const WEATHER_AREAS = [
+  { name: '東京', code: '130010' },
+  { name: '大阪', code: '270000' },
+  { name: '名古屋', code: '230010' },
+  { name: '横浜', code: '140010' },
+  { name: '福岡', code: '400010' }
+];
 
-const app = express();
-const port = process.env.PORT || 3000;
+// メモリ内データストレージ
+const memoryStorage = {
+  properties: new Map(),
+  lastSentDates: new Map(),
+  messageCounts: new Map(),
+  roomResetDates: new Map(),
+  lastEarthquakeId: null,
+};
 
-// PostgreSQL接続設定
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
-});
+// Chatwork APIレートリミット制御
+const MAX_API_CALLS_PER_10SEC = 10;
+const API_WINDOW_MS = 10000;
+let apiCallTimestamps = [];
 
-// データベース初期化
-async function initializeDatabase() {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS webhooks (
-        id SERIAL PRIMARY KEY,
-        room_id BIGINT NOT NULL,
-        message_id BIGINT NOT NULL,
-        account_id BIGINT NOT NULL,
-        account_name TEXT,
-        body TEXT,
-        send_time BIGINT NOT NULL,
-        update_time BIGINT,
-        webhook_event_type TEXT,
-        webhook_event_time BIGINT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(message_id)
-      )
-    `);
-
-    await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_webhooks_room_id ON webhooks(room_id);
-      CREATE INDEX IF NOT EXISTS idx_webhooks_send_time ON webhooks(send_time);
-      CREATE INDEX IF NOT EXISTS idx_webhooks_room_send ON webhooks(room_id, send_time);
-    `);
-
-    console.log('データベーステーブル初期化完了');
-  } catch (error) {
-    console.error('データベース初期化エラー:', error.message);
+async function apiCallLimiter() {
+  const now = Date.now();
+  apiCallTimestamps = apiCallTimestamps.filter(ts => now - ts < API_WINDOW_MS);
+  if (apiCallTimestamps.length >= MAX_API_CALLS_PER_10SEC) {
+    const waitMs = API_WINDOW_MS - (now - apiCallTimestamps[0]) + 50;
+    await new Promise(res => setTimeout(res, waitMs));
   }
+  apiCallTimestamps.push(Date.now());
 }
 
+// Chatwork絵文字のリスト
+const CHATWORK_EMOJI_CODES = [
+  "roger", "bow", "cracker", "dance", "clap", "y", "sweat", "blush", "inlove",
+  "talk", "yawn", "puke", "emo", "nod", "shake", "^^;", ":/", "whew", "flex",
+  "gogo", "think", "please", "quick", "anger", "devil", "lightbulb", "h", "F",
+  "eat", "^", "coffee", "beer", "handshake"
+].map(code => code.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
+const CHATWORK_EMOJI_REGEX = new RegExp(`\\((${CHATWORK_EMOJI_CODES.join('|')})\\)`, 'g');
 
-// ここから52行目以降が続きます
+// APIキャッシュ
+const API_CACHE = new Map();
+const MAX_CACHE_SIZE = 50;
+
+function addToCache(key, value) {
+  if (API_CACHE.size >= MAX_CACHE_SIZE) {
+    const firstKey = API_CACHE.keys().next().value;
+    API_CACHE.delete(firstKey);
+  }
+  API_CACHE.set(key, value);
+}
+
+// day.json読み込み関数、getTodaysEventsFromJson、ChatworkBotUtilsクラス全体を追加
+// (document index 2の該当部分をそのままコピー)
+
+// WebHookメッセージ処理クラス
+class WebHookMessageProcessor {
+  // ここに static async processWebHookMessage(webhookData) { が来る
   static async processWebHookMessage(webhookData) {
     try {
       await this.saveWebhookToDatabase(webhookData);
