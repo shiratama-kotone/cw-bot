@@ -48,8 +48,676 @@ async function initializeDatabase() {
   }
 }
 
+// 環境変数から設定を読み込み
+const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
+const INFO_API_TOKEN = process.env.INFO_API_TOKEN || '';
+const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,407676893,415060980,406897783,391699365').split(',');
+const LOG_ROOM_ID = '404646956';
+const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
+const YUYUYU_ACCOUNT_ID = '10544705';
 
-// ここから52行目以降が続きます
+// 天気予報の地域設定
+const WEATHER_AREAS = [
+  { name: '東京', code: '130010' },
+  { name: '大阪', code: '270000' },
+  { name: '名古屋', code: '230010' },
+  { name: '横浜', code: '140010' },
+  { name: '福岡', code: '400010' }
+];
+
+// メモリ内データストレージ
+const memoryStorage = {
+  properties: new Map(),
+  lastSentDates: new Map(),
+  messageCounts: new Map(),
+  roomResetDates: new Map(),
+  lastEarthquakeId: null,
+};
+
+// Chatwork APIレートリミット制御
+const MAX_API_CALLS_PER_10SEC = 10;
+const API_WINDOW_MS = 10000;
+let apiCallTimestamps = [];
+
+async function apiCallLimiter() {
+  const now = Date.now();
+  apiCallTimestamps = apiCallTimestamps.filter(ts => now - ts < API_WINDOW_MS);
+  if (apiCallTimestamps.length >= MAX_API_CALLS_PER_10SEC) {
+    const waitMs = API_WINDOW_MS - (now - apiCallTimestamps[0]) + 50;
+    await new Promise(res => setTimeout(res, waitMs));
+  }
+  apiCallTimestamps.push(Date.now());
+}
+
+// Chatwork絵文字のリスト
+const CHATWORK_EMOJI_CODES = [
+  "roger", "bow", "cracker", "dance", "clap", "y", "sweat", "blush", "inlove",
+  "talk", "yawn", "puke", "emo", "nod", "shake", "^^;", ":/", "whew", "flex",
+  "gogo", "think", "please", "quick", "anger", "devil", "lightbulb", "h", "F",
+  "eat", "^", "coffee", "beer", "handshake"
+].map(code => code.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
+const CHATWORK_EMOJI_REGEX = new RegExp(`\\((${CHATWORK_EMOJI_CODES.join('|')})\\)`, 'g');
+
+// APIキャッシュ
+const API_CACHE = new Map();
+const MAX_CACHE_SIZE = 50;
+
+function addToCache(key, value) {
+  if (API_CACHE.size >= MAX_CACHE_SIZE) {
+    const firstKey = API_CACHE.keys().next().value;
+    API_CACHE.delete(firstKey);
+  }
+  API_CACHE.set(key, value);
+}
+
+// day.json読み込み関数
+async function loadDayEvents() {
+  try {
+    const response = await axios.get(DAY_JSON_URL);
+    console.log('day.json読み込み成功');
+    return response.data;
+  } catch (error) {
+    console.error('day.json読み込みエラー:', error.message);
+    return {};
+  }
+}
+
+// 今日のイベント取得
+async function getTodaysEventsFromJson() {
+  try {
+    const dayEvents = await loadDayEvents();
+    const now = new Date();
+    const jstDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
+    const monthDay = `${String(jstDate.getMonth() + 1).padStart(2, '0')}-${String(jstDate.getDate()).padStart(2, '0')}`;
+
+    const events = [];
+
+    // MM-DD形式のイベントのみチェック
+    if (dayEvents[monthDay]) {
+      if (Array.isArray(dayEvents[monthDay])) {
+        events.push(...dayEvents[monthDay]);
+      } else {
+        events.push(dayEvents[monthDay]);
+      }
+    }
+
+    return events;
+  } catch (error) {
+    console.error('今日のイベント取得エラー:', error.message);
+    return [];
+  }
+}
+
+// ユーティリティ関数
+class ChatworkBotUtils {
+  static async getChatworkMembers(roomId) {
+    await apiCallLimiter();
+    try {
+      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/members`, {
+        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
+      });
+      return response.data.map(member => ({
+        account_id: member.account_id,
+        name: member.name,
+        role: member.role
+      }));
+    } catch (error) {
+      console.error(`メンバー取得エラー (${roomId}):`, error.message);
+      return [];
+    }
+  }
+
+  static async getRoomInfo(roomId) {
+    await apiCallLimiter();
+    try {
+      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}`, {
+        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
+      });
+      return response.data;
+    } catch (error) {
+      console.error(`ルーム情報取得エラー (${roomId}):`, error.message);
+      return null;
+    }
+  }
+
+  static async sendChatworkMessage(roomId, message) {
+    await apiCallLimiter();
+    try {
+      const response = await axios.post(`https://api.chatwork.com/v2/rooms/${roomId}/messages`,
+        new URLSearchParams({ body: message }),
+        { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+      );
+      return response.data.message_id;
+    } catch (error) {
+      console.error(`メッセージ送信エラー (${roomId}):`, error.message);
+      return null;
+    }
+  }
+
+  static async sendLogToChatwork(userName, messageBody, sourceRoomId) {
+    try {
+      if (sourceRoomId !== LOG_ROOM_ID) {
+        return;
+      }
+      const logMessage = `[info][title]${userName}[/title]${messageBody}[/info]`;
+      console.log(`ログ送信: ルーム ${LOG_ROOM_ID} へ`);
+      await this.sendChatworkMessage(LOG_ROOM_ID, logMessage);
+      console.log(`ログ送信完了: ルーム ${LOG_ROOM_ID}`);
+    } catch (error) {
+      console.error('Chatworkログ送信エラー:', error.message);
+    }
+  }
+
+  static countChatworkEmojis(text) {
+    const matches = text.match(CHATWORK_EMOJI_REGEX);
+    return matches ? matches.length : 0;
+  }
+
+  static drawOmikuji(isAdmin) {
+    const fortunes = ['大吉', '中吉', '吉', '小吉', '末吉', '凶'];
+    const specialFortune = '超町長調帳朝腸蝶大吉';
+    let specialChance = 0.002;
+    if (isAdmin) specialChance = 0.25;
+    const rand = Math.random();
+    if (rand < specialChance) {
+      return specialFortune;
+    } else {
+      const index = Math.floor(Math.random() * fortunes.length);
+      return fortunes[index];
+    }
+  }
+
+  static async getYesOrNoAnswer() {
+    const answers = ['yes', 'no'];
+    try {
+      const response = await axios.get('https://yesno.wtf/api');
+      return response.data.answer || answers[Math.floor(Math.random() * answers.length)];
+    } catch (error) {
+      return answers[Math.floor(Math.random() * answers.length)];
+    }
+  }
+
+  // Wikipedia API修正版
+  static async getWikipediaSummary(searchTerm) {
+    const now = Date.now();
+    const cacheKey = `wiki_${searchTerm}`;
+
+    if (API_CACHE.has(cacheKey)) {
+      const cachedData = API_CACHE.get(cacheKey);
+      if (now - cachedData.timestamp < 300000) {
+        return cachedData.data;
+      }
+    }
+
+    try {
+      // OpenSearch APIで検索
+      const searchParams = new URLSearchParams({
+        action: 'opensearch',
+        format: 'json',
+        search: searchTerm,
+        limit: 1,
+        namespace: 0,
+        redirects: 'resolve'
+      });
+
+      const searchResponse = await axios.get(`https://ja.wikipedia.org/w/api.php?${searchParams}`, {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'ChatworkBot/1.0'
+        }
+      });
+
+      const searchData = searchResponse.data;
+      
+      if (!searchData || !searchData[1] || searchData[1].length === 0) {
+        const result = `「${searchTerm}」に関する記事は見つかりませんでした。`;
+        addToCache(cacheKey, { data: result, timestamp: now });
+        return result;
+      }
+
+      const pageTitle = searchData[1][0];
+      const pageUrl = searchData[3][0];
+
+      // TextExtracts APIで要約を取得
+      const extractParams = new URLSearchParams({
+        action: 'query',
+        format: 'json',
+        prop: 'extracts',
+        exintro: true,
+        explaintext: true,
+        titles: pageTitle,
+        redirects: 1
+      });
+
+      const extractResponse = await axios.get(`https://ja.wikipedia.org/w/api.php?${extractParams}`, {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'ChatworkBot/1.0'
+        }
+      });
+
+      const extractData = extractResponse.data;
+      
+      if (extractData.query && extractData.query.pages) {
+        const pages = extractData.query.pages;
+        const pageId = Object.keys(pages)[0];
+        
+        if (pageId && pageId !== '-1' && pages[pageId] && pages[pageId].extract) {
+          let summary = pages[pageId].extract;
+          if (summary.length > 500) {
+            summary = summary.substring(0, 500) + '...';
+          }
+          const result = `${summary}\n\n元記事: ${pageUrl}`;
+          addToCache(cacheKey, { data: result, timestamp: now });
+          return result;
+        }
+      }
+
+      const result = `「${searchTerm}」の情報を取得できませんでした。`;
+      addToCache(cacheKey, { data: result, timestamp: now });
+      return result;
+    } catch (error) {
+      console.error('Wikipedia検索エラー:', error.message);
+      return `Wikipedia検索中にエラーが発生しました: ${error.message}`;
+    }
+  }
+
+  static async getScratchUserStats(username) {
+    try {
+      const response = await axios.get(`https://api.scratch.mit.edu/users/${encodeURIComponent(username)}`);
+      const data = response.data;
+      const bio = data.profile?.bio ?? '';
+      const status = data.profile?.status ?? '';
+      const userLink = `https://scratch.mit.edu/users/${encodeURIComponent(username)}/`;
+
+      let result = '';
+
+      if (bio) {
+        result += `[info][title]私について[/title]${bio}[/info]\n\n`;
+      }
+
+      if (status) {
+        result += `[info][title]私が取り組んでいること[/title]${status}[/info]\n\n`;
+      }
+
+      if (!bio && !status) {
+        result = `[info][title]Scratchユーザー情報[/title]ユーザー名: ${username}\nプロフィール情報がありません。[/info]\n\n`;
+      }
+
+      result += `ユーザーページ: ${userLink}`;
+
+      return result;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return `「${username}」というScratchユーザーは見つかりませんでした。`;
+      }
+      return `Scratchユーザー情報の取得中に予期せぬエラーが発生しました。`;
+    }
+  }
+
+  static async getScratchProjectInfo(projectId) {
+    try {
+      await apiCallLimiter();
+      const response = await axios.get(`https://api.scratch.mit.edu/projects/${projectId}`);
+      const data = response.data;
+      if (!data || !data.title) {
+        return 'プロジェクトが見つかりませんでした。';
+      }
+      const url = `https://scratch.mit.edu/projects/${projectId}/`;
+      return `[info][title]Scratchプロジェクト情報[/title]タイトル: ${data.title}\n作者: ${data.author.username}\n説明: ${data.description || '説明なし'}\nURL: ${url}[/info]`;
+    } catch (error) {
+      return 'Scratchプロジェクト情報の取得中にエラーが発生しました。';
+    }
+  }
+
+  // 歌詞取得機能
+  static async getLyrics(url) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+
+      const $ = cheerio.load(response.data);
+      let title = '';
+      let lyrics = '';
+
+      if (url.includes('utaten.com')) {
+        // うたてんの処理
+        const titleMain = $('h2.newLyricTitle__main').text().trim();
+        const titleAfter = $('span.newLyricTitle_afterTxt').text().trim();
+        title = titleMain.replace(titleAfter, '').trim();
+
+        // ルビ（<span class="rt">）を削除
+        $('div.hiragana span.rt').remove();
+        
+        // 歌詞取得
+        lyrics = $('div.hiragana').html() || '';
+        
+        // HTMLタグを改行に変換
+        lyrics = lyrics.replace(/<br\s*\/?>/gi, '\n')
+                      .replace(/<[^>]+>/g, '')
+                      .trim();
+
+      } else if (url.includes('uta-net.com')) {
+        // 歌ネットの処理
+        title = $('h2.ms-2.ms-md-3.kashi-title').text().trim();
+        
+        // 歌詞取得
+        lyrics = $('div#kashi_area[itemprop="text"]').html() || '';
+        
+        // HTMLタグを改行に変換
+        lyrics = lyrics.replace(/<br\s*\/?>/gi, '\n')
+                      .replace(/<[^>]+>/g, '')
+                      .trim();
+      } else {
+        return '対応していないURLです。utaten.comまたはuta-net.comのURLを指定してください。';
+      }
+
+      if (!title || !lyrics) {
+        return '歌詞の取得に失敗しました。URLを確認してください。';
+      }
+
+      return `[info][title]${title}の歌詞[/title]${lyrics}[/info]`;
+    } catch (error) {
+      console.error('歌詞取得エラー:', error.message);
+      return `歌詞の取得中にエラーが発生しました: ${error.message}`;
+    }
+  }
+
+  // 天気予報取得
+  static async getWeatherForecast(areaCode) {
+    try {
+      const response = await axios.get(`https://weather.tsukumijima.net/api/forecast/city/${areaCode}`, {
+        timeout: 10000
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error(`天気予報取得エラー (${areaCode}):`, error.message);
+      return null;
+    }
+  }
+
+  static async initializeMessageCount(roomId) {
+    try {
+      console.log(`ルーム ${roomId} のメッセージカウントを初期化中...`);
+      const messages = await this.getRoomMessages(roomId);
+
+      const now = new Date();
+      const jstDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
+      const todayStart = new Date(jstDate.getFullYear(), jstDate.getMonth(), jstDate.getDate(), 0, 0, 0);
+      const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000);
+
+      const counts = {};
+      messages.forEach(msg => {
+        if (msg.send_time >= todayStartTimestamp) {
+          const accId = msg.account.account_id;
+          counts[accId] = (counts[accId] || 0) + 1;
+        }
+      });
+
+      memoryStorage.messageCounts.set(roomId, counts);
+      memoryStorage.roomResetDates.set(roomId, jstDate.toISOString().split('T')[0]);
+
+      const totalCount = Object.values(counts).reduce((a, b) => a + b, 0);
+      console.log(`ルーム ${roomId} 初期化完了: ${totalCount}件のメッセージ`);
+
+      return counts;
+    } catch (error) {
+      console.error(`ルーム ${roomId} の初期化エラー:`, error.message);
+      return {};
+    }
+  }
+
+  static async getRoomMessages(roomId) {
+    try {
+      await apiCallLimiter();
+      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages`, {
+        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN },
+        params: { force: 1 }
+      });
+
+      return response.data || [];
+    } catch (error) {
+      console.error(`メッセージ取得エラー (${roomId}):`, error.message);
+      return [];
+    }
+  }
+
+  static async getMessage(roomId, messageId) {
+    try {
+      await apiCallLimiter();
+      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages/${messageId}`, {
+        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
+      });
+      return response.data;
+    } catch (error) {
+      console.error(`メッセージ取得エラー (${roomId}/${messageId}):`, error.message);
+      return null;
+    }
+  }
+
+  static async getLatestEarthquakeInfo() {
+    try {
+      const response = await axios.get('https://api.p2pquake.net/v2/history?codes=551&limit=1');
+      const data = response.data;
+
+      if (!data || data.length === 0) {
+        return null;
+      }
+
+      const earthquake = data[0];
+
+      if (!earthquake.earthquake || earthquake.earthquake.maxScale < 30) {
+        return null;
+      }
+
+      return {
+        id: earthquake.id,
+        time: earthquake.earthquake.time,
+        hypocenter: earthquake.earthquake.hypocenter && earthquake.earthquake.hypocenter.name ? earthquake.earthquake.hypocenter.name : null,
+        magnitude: earthquake.earthquake.hypocenter ? earthquake.earthquake.hypocenter.magnitude : null,
+        maxScale: earthquake.earthquake.maxScale
+      };
+    } catch (error) {
+      console.error('地震情報取得エラー:', error.message);
+      return null;
+    }
+  }
+
+  static async notifyEarthquake(earthquakeInfo, isTest = false) {
+    try {
+      const scaleMap = {
+        10: '1',
+        20: '2',
+        30: '3',
+        40: '4',
+        45: '5弱',
+        50: '5強',
+        55: '6弱',
+        60: '6強',
+        70: '7'
+      };
+      const scale = scaleMap[earthquakeInfo.maxScale] || (earthquakeInfo.maxScale / 10);
+
+      const earthquakeDate = new Date(earthquakeInfo.time);
+      const year = earthquakeDate.getFullYear();
+      const month = String(earthquakeDate.getMonth() + 1).padStart(2, '0');
+      const day = String(earthquakeDate.getDate()).padStart(2, '0');
+      const hours = String(earthquakeDate.getHours()).padStart(2, '0');
+      const minutes = String(earthquakeDate.getMinutes()).padStart(2, '0');
+
+      const title = isTest ? '地震情報-テスト' : '地震情報';
+      const magnitudeText = (earthquakeInfo.magnitude === null || earthquakeInfo.magnitude === -1 || earthquakeInfo.magnitude === undefined) ? '調査中' : earthquakeInfo.magnitude;
+
+      let message;
+      if (!earthquakeInfo.hypocenter || earthquakeInfo.hypocenter === '' || earthquakeInfo.hypocenter === '不明') {
+        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に震度${scale}の地震が発生しました。\nマグニチュード: ${magnitudeText}。[/info]`;
+      } else {
+        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に ${earthquakeInfo.hypocenter} を中心とする震度${scale}の地震が発生しました。\nマグニチュード: ${magnitudeText}。[/info]`;
+      }
+
+      for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+        try {
+          await this.sendChatworkMessage(roomId, message);
+          console.log(`地震情報送信完了: ルーム ${roomId}`);
+        } catch (error) {
+          console.error(`ルーム ${roomId} への地震情報送信エラー:`, error.message);
+        }
+      }
+    } catch (error) {
+      console.error('地震情報通知エラー:', error.message);
+    }
+  }
+
+  static async getRoomInfoWithToken(roomId, apiToken) {
+    await apiCallLimiter();
+    try {
+      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}`, {
+        headers: { 'X-ChatWorkToken': apiToken }
+      });
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return { error: 'not_found' };
+      }
+      console.error(`ルーム情報取得エラー (${roomId}):`, error.message);
+      return { error: 'unknown' };
+    }
+  }
+
+  static async getRoomMembersWithToken(roomId, apiToken) {
+    await apiCallLimiter();
+    try {
+      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/members`, {
+        headers: { 'X-ChatWorkToken': apiToken }
+      });
+      return response.data.map(member => ({
+        account_id: member.account_id,
+        name: member.name,
+        role: member.role
+      }));
+    } catch (error) {
+      console.error(`メンバー取得エラー (${roomId}):`, error.message);
+      return [];
+    }
+  }
+
+  static async getAllTodayMessages(roomId) {
+    try {
+      const now = new Date();
+      const jstDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
+      const todayStart = new Date(jstDate.getFullYear(), jstDate.getMonth(), jstDate.getDate(), 0, 0, 0);
+      const todayStartTimestamp = Math.floor(todayStart.getTime() / 1000);
+
+      const allMessagesMap = new Map();
+      let loopCount = 0;
+      const MAX_LOOPS = 50;
+      let lastMessageId = null;
+      let continueFetching = true;
+
+      while (continueFetching && loopCount < MAX_LOOPS) {
+        loopCount++;
+        await apiCallLimiter();
+
+        const params = lastMessageId ? { force: lastMessageId } : { force: 1 };
+        let response;
+        try {
+          response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/messages`, {
+            headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN },
+            params
+          });
+        } catch (err) {
+          console.error(`getAllTodayMessages API error (${roomId}):`, err.message);
+          break;
+        }
+
+        const messages = response.data || [];
+        if (!messages || messages.length === 0) {
+          break;
+        }
+
+        for (const msg of messages) {
+          if (!msg || !msg.message_id) continue;
+          if (!allMessagesMap.has(String(msg.message_id))) {
+            allMessagesMap.set(String(msg.message_id), msg);
+          }
+        }
+
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg && typeof lastMsg.send_time === 'number' && lastMsg.send_time < todayStartTimestamp) {
+          break;
+        }
+
+        const newLastId = messages[messages.length - 1] ? String(messages[messages.length - 1].message_id) : null;
+        if (!newLastId || newLastId === lastMessageId) {
+          break;
+        }
+        lastMessageId = newLastId;
+
+        await new Promise(r => setTimeout(r, 200));
+      }
+
+      const todayMessages = Array.from(allMessagesMap.values()).filter(m => typeof m.send_time === 'number' && m.send_time >= todayStartTimestamp);
+      todayMessages.sort((a, b) => b.send_time - a.send_time);
+
+      return todayMessages;
+    } catch (error) {
+      console.error(`getAllTodayMessages エラー (${roomId}):`, error.message);
+      return [];
+    }
+  }
+
+  static async isRoomMember(roomId) {
+    try {
+      await apiCallLimiter();
+      await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}`, {
+        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
+      });
+      return true;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return false;
+      }
+      return false;
+    }
+  }
+}
+
+// WebHookメッセージ処理クラス
+class WebHookMessageProcessor {
+  static async saveWebhookToDatabase(webhookData) {
+    try {
+      const roomId = webhookData.room_id;
+      const messageId = webhookData.message_id;
+      const accountId = webhookData.account_id;
+      const accountName = webhookData.account?.name || null;
+      const body = webhookData.body || '';
+      const sendTime = webhookData.send_time;
+      const updateTime = webhookData.update_time || null;
+      const webhookEventType = webhookData.webhook_event_type || 'message_created';
+      const webhookEventTime = webhookData.webhook_event_time || null;
+
+      await pool.query(`
+        INSERT INTO webhooks (
+          room_id, message_id, account_id, account_name, body,
+          send_time, update_time, webhook_event_type, webhook_event_time
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (message_id) DO NOTHING
+      `, [
+        roomId, messageId, accountId, accountName, body,
+        sendTime, updateTime, webhookEventType, webhookEventTime
+      ]);
+
+      console.log(`WebHook保存: ルーム ${roomId}, メッセージID ${messageId}`);
+    } catch (error) {
+      console.error('WebHook保存エラー:', error.message);
+    }
+  }
+
   static async processWebHookMessage(webhookData) {
     try {
       await this.saveWebhookToDatabase(webhookData);
@@ -1070,4 +1738,4 @@ app.listen(port, async () => {
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   console.log('初期化完了\n');
-})
+});
