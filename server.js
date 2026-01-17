@@ -997,7 +997,7 @@ class WebHookMessageProcessor {
           adminList = 'なし';
         }
 
-        const infoMessage = `[info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\n最新メッセージ：${messageLink}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+        const infoMessage = `[info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\n最新メッセージ：[修正中]\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
 
         await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
       } catch (error) {
