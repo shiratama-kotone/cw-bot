@@ -500,34 +500,71 @@ class ChatworkBotUtils {
     }
   }
 
-  static async getLatestEarthquakeInfo() {
-    try {
-      const response = await axios.get('https://api.p2pquake.net/v2/history?codes=551&limit=1');
-      const data = response.data;
+// ChatworkBotUtils クラス内の getLatestEarthquakeInfo メソッドを置き換え
+static async getLatestEarthquakeInfo() {
+  try {
+    const response = await axios.get('https://api.p2pquake.net/v2/history?codes=551&limit=1');
+    const data = response.data;
 
-      if (!data || data.length === 0) {
-        return null;
-      }
-
-      const earthquake = data[0];
-
-      if (!earthquake.earthquake || earthquake.earthquake.maxScale < 30) {
-        return null;
-      }
-
-      return {
-        id: earthquake.id,
-        time: earthquake.earthquake.time,
-        hypocenter: earthquake.earthquake.hypocenter && earthquake.earthquake.hypocenter.name ? earthquake.earthquake.hypocenter.name : null,
-        magnitude: earthquake.earthquake.hypocenter ? earthquake.earthquake.hypocenter.magnitude : null,
-        maxScale: earthquake.earthquake.maxScale
-      };
-    } catch (error) {
-      console.error('地震情報取得エラー:', error.message);
+    if (!data || data.length === 0) {
       return null;
     }
-  }
 
+    const earthquake = data[0];
+
+    // 震度1未満は除外
+    if (!earthquake.earthquake || earthquake.earthquake.maxScale < 10) {
+      return null;
+    }
+
+    // 福岡、北海道、大阪が震度1以上の場合は送信
+    const targetRegions = ['福岡', '北海道', '大阪'];
+    let shouldNotify = false;
+
+    // 最大震度が3以上なら無条件で送信
+    if (earthquake.earthquake.maxScale >= 30) {
+      shouldNotify = true;
+    } else {
+      // 震度1-2の場合は対象地域をチェック
+      if (earthquake.earthquake.points && Array.isArray(earthquake.earthquake.points)) {
+        shouldNotify = earthquake.earthquake.points.some(point => {
+          // 震度が10以上(震度1以上)で、対象地域に該当するかチェック
+          if (point.scale >= 10) {
+            return targetRegions.some(region => {
+              // 地域名に対象地域が含まれているかチェック
+              const prefName = point.pref || '';
+              const addrName = point.addr || '';
+              return prefName.includes(region) || addrName.includes(region);
+            });
+          }
+          return false;
+        });
+      }
+      
+      // 震源地名でもチェック
+      if (!shouldNotify && earthquake.earthquake.hypocenter) {
+        const hypocenterName = earthquake.earthquake.hypocenter.name || '';
+        shouldNotify = targetRegions.some(region => hypocenterName.includes(region));
+      }
+    }
+
+    if (!shouldNotify) {
+      return null;
+    }
+
+    return {
+      id: earthquake.id,
+      time: earthquake.earthquake.time,
+      hypocenter: earthquake.earthquake.hypocenter && earthquake.earthquake.hypocenter.name ? earthquake.earthquake.hypocenter.name : null,
+      magnitude: earthquake.earthquake.hypocenter ? earthquake.earthquake.hypocenter.magnitude : null,
+      maxScale: earthquake.earthquake.maxScale,
+      points: earthquake.earthquake.points || []
+    };
+  } catch (error) {
+    console.error('地震情報取得エラー:', error.message);
+    return null;
+  }
+}
   static async notifyEarthquake(earthquakeInfo, isTest = false) {
     try {
       const scaleMap = {
