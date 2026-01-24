@@ -777,20 +777,23 @@ class WebHookMessageProcessor {
         return;
       }
 
-          // ★★★ ここに転送処理を追加 ★★★
-    if (roomId === '415060980' || roomId === 415060980) {
-      const forwardRoomId = '420890621';
-      const forwardMessage = `[info][title][piconname:${accountId}][/title]${messageBody}[/info]`;
-      
-      try {
-        await ChatworkBotUtils.sendChatworkMessage(forwardRoomId, forwardMessage);
-        console.log(`メッセージ転送完了: ${roomId} → ${forwardRoomId}`);
-      } catch (error) {
-        console.error(`メッセージ転送エラー (${roomId} → ${forwardRoomId}):`, error.message);
-      }
-    }
-    // ★★★ 転送処理ここまで ★★★
-
+// ★★★ 転送処理を以下のように修正 ★★★
+if (roomId === '415060980' || roomId === 415060980) {
+  const forwardRoomId = '420890621';
+  const eventType = webhookData.webhook_event_type || 'message_created';
+  
+  // 編集の場合は(編集)を追加
+  const editLabel = eventType === 'message_updated' ? '(編集)' : '';
+  const forwardMessage = `[info][title][piconname:${accountId}]${editLabel}[/title]${messageBody}[/info]`;
+  
+  try {
+    await ChatworkBotUtils.sendChatworkMessage(forwardRoomId, forwardMessage);
+    console.log(`メッセージ転送完了 [${eventType}]: ${roomId} → ${forwardRoomId}`);
+  } catch (error) {
+    console.error(`メッセージ転送エラー (${roomId} → ${forwardRoomId}):`, error.message);
+  }
+}
+// ★★★ 転送処理ここまで ★★★
     this.updateMessageCount(roomId, accountId);
 
     console.log(`ログ送信チェック: sourceRoomId=${roomId}, LOG_ROOM_ID=${LOG_ROOM_ID}`);
