@@ -777,6 +777,25 @@ class WebHookMessageProcessor {
         return;
       }
 
+          // ★★★ ここに転送処理を追加 ★★★
+    if (roomId === '415060980' || roomId === 415060980) {
+      const forwardRoomId = '420890621';
+      const forwardMessage = `[info][title][piconname:${accountId}][/title]${messageBody}[/info]`;
+      
+      try {
+        await ChatworkBotUtils.sendChatworkMessage(forwardRoomId, forwardMessage);
+        console.log(`メッセージ転送完了: ${roomId} → ${forwardRoomId}`);
+      } catch (error) {
+        console.error(`メッセージ転送エラー (${roomId} → ${forwardRoomId}):`, error.message);
+      }
+    }
+    // ★★★ 転送処理ここまで ★★★
+
+    this.updateMessageCount(roomId, accountId);
+
+    console.log(`ログ送信チェック: sourceRoomId=${roomId}, LOG_ROOM_ID=${LOG_ROOM_ID}`);
+    await ChatworkBotUtils.sendLogToChatwork(userName, messageBody, roomId);
+
       this.updateMessageCount(roomId, accountId);
 
       console.log(`ログ送信チェック: sourceRoomId=${roomId}, LOG_ROOM_ID=${LOG_ROOM_ID}`);
