@@ -1272,11 +1272,17 @@ if (roomId === '415060980' || roomId === 415060980) {
 app.use(express.json());
 
 // WebHookエンドポイント
+// app.post('/webhook', ...) の部分を修正
 app.post('/webhook', async (req, res) => {
   try {
     console.log('WebHook受信:', JSON.stringify(req.body, null, 2));
     const webhookEvent = req.body.webhook_event || req.body;
+    
     if (webhookEvent && webhookEvent.room_id) {
+      // webhook_event_type を追加して渡す
+      webhookEvent.webhook_event_type = req.body.webhook_event_type || 'message_created';
+      webhookEvent.webhook_event_time = req.body.webhook_event_time;
+      
       await WebHookMessageProcessor.processWebHookMessage(webhookEvent);
       res.status(200).json({ status: 'success', message: 'WebHook processed' });
     } else {
@@ -1288,7 +1294,6 @@ app.post('/webhook', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
 // メッセージ送信エンドポイント
 app.get('/msg-post', async (req, res) => {
   try {
