@@ -1194,6 +1194,7 @@ if (roomId === '415060980' || roomId === 415060980) {
       'はんせい': `[To:10911090] なかよし\n[pname:${accountId}]に呼ばれてるよ！`,
       'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよ！`,
       'からめり': `[To:10337719] からめり\n[pname:${accountId}]に呼ばれてるよ！`,
+      '学生':`[To:9553691] 学生\n[pname:${accountId}]に呼ばれてるよ！`,
       'いろいろあぷり': `https://shiratama-kotone.github.io/any-app/`,
       '喘げ': `...っ♡///`,
       'おやすみ': `おやすみなさい！[pname:${accountId}]！`,
