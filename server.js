@@ -1660,7 +1660,7 @@ async function sendTodayWeather() {
       if (minTemp) {
         message += `\n最低気温　：${minTemp}`;
       }
-      message += `\n天気概況文：${description}[/info]`;
+      message += `\n天気概況文：(以下略)[/info]`;
 
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
         try {
