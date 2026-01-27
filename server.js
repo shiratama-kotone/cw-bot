@@ -794,6 +794,34 @@ if (roomId === '415060980' || roomId === 415060980) {
   }
 }
 // ★★★ 転送処理ここまで ★★★
+// ★★★ ここから追加★★★
+// ルーム415060980でメンバー参加を検知してウェルカムメッセージ送信
+if ((roomId === '415060980' || roomId === 415060980) && 
+    messageBody.includes('[dtext:chatroom_member_is]') && 
+    messageBody.includes('[dtext:chatroom_added]')) {
+  
+  // メッセージから参加ユーザーのIDを抽出
+  const piconnameMatch = messageBody.match(/\[piconname:(\d+)\]/);
+  
+  if (piconnameMatch && piconnameMatch[1]) {
+    const newUserId = piconnameMatch[1];
+    const welcomeMessage = `[To:${newUserId}]さん
+この部屋へようこそ！
+この部屋は色々とおかしいけどよろしくね！`;
+    
+    try {
+      // 少し待ってから送信（参加メッセージの直後に送るため）
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await ChatworkBotUtils.sendChatworkMessage(roomId, welcomeMessage);
+      console.log(`ウェルカムメッセージ送信完了: ユーザー ${newUserId}`);
+    } catch (error) {
+      console.error(`ウェルカムメッセージ送信エラー:`, error.message);
+    }
+  }
+}
+// ★★★ 追加ここまで★★★
+
+      
     this.updateMessageCount(roomId, accountId);
 
     console.log(`ログ送信チェック: sourceRoomId=${roomId}, LOG_ROOM_ID=${LOG_ROOM_ID}`);
