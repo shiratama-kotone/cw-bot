@@ -626,22 +626,23 @@ static async getLatestEarthquakeInfo() {
     }
   }
 
-  static async getRoomMembersWithToken(roomId, apiToken) {
-    await apiCallLimiter();
-    try {
-      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/members`, {
-        headers: { 'X-ChatWorkToken': apiToken }
-      });
-      return response.data.map(member => ({
-        account_id: member.account_id,
-        name: member.name,
-        role: member.role
-      }));
-    } catch (error) {
-      console.error(`メンバー取得エラー (${roomId}):`, error.message);
-      return [];
-    }
+static async getRoomMembersWithToken(roomId, apiToken) {
+  await apiCallLimiter();
+  try {
+    const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}/members`, {
+      headers: { 'X-ChatWorkToken': apiToken }
+    });
+    console.log(`メンバー取得成功 (${roomId}): ${response.data.length}人`);
+    return response.data.map(member => ({
+      account_id: member.account_id,
+      name: member.name,
+      role: member.role
+    }));
+  } catch (error) {
+    console.error(`メンバー取得エラー (${roomId}):`, error.message, error.response?.status);
+    return [];
   }
+}
 
   static async getAllTodayMessages(roomId) {
     try {
@@ -805,7 +806,7 @@ if ((roomId === '415060980' || roomId === 415060980) &&
   
   if (piconnameMatch && piconnameMatch[1]) {
     const newUserId = piconnameMatch[1];
-    const welcomeMessage = `[To:${newUserId}]さん
+    const welcomeMessage = `[To:${newUserId}][pname:${newUserId}]さん
 この部屋へようこそ！
 この部屋は色々とおかしいけどよろしくね！`;
     
@@ -925,70 +926,75 @@ if ((roomId === '415060980' || roomId === 415060980) &&
       }
     }
 
-    if (messageBody.startsWith('/info/')) {
-      const targetRoomId = messageBody.substring('/info/'.length).trim();
+if (messageBody.startsWith('/info/')) {
+  const targetRoomId = messageBody.substring('/info/'.length).trim();
 
-      if (!targetRoomId || !INFO_API_TOKEN) {
-        const errorMsg = !INFO_API_TOKEN
-          ? 'INFO_API_TOKENが設定されていません。'
-          : 'ルームIDを指定してください。';
-        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]${errorMsg}`);
-        return;
-      }
+  if (!targetRoomId || !INFO_API_TOKEN) {
+    const errorMsg = !INFO_API_TOKEN
+      ? 'INFO_API_TOKENが設定されていません。'
+      : 'ルームIDを指定してください。';
+    await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]${errorMsg}`);
+    return;
+  }
 
-      try {
-        const roomInfo = await ChatworkBotUtils.getRoomInfoWithToken(targetRoomId, INFO_API_TOKEN);
+  try {
+    const roomInfo = await ChatworkBotUtils.getRoomInfoWithToken(targetRoomId, INFO_API_TOKEN);
 
-        if (roomInfo.error === 'not_found') {
-          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]存在しないルームです。`);
-          return;
-        }
-
-        if (roomInfo.error) {
-          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得に失敗しました。`);
-          return;
-        }
-
-        const members = await ChatworkBotUtils.getRoomMembersWithToken(targetRoomId, INFO_API_TOKEN);
-        const isYuyuyuMember = members.some(m => m.account_id === parseInt(YUYUYU_ACCOUNT_ID));
-
-        if (!isYuyuyuMember) {
-          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ゆゆゆの本垢が参加していません。`);
-          return;
-        }
-
-        const roomName = roomInfo.name;
-        const memberCount = members.length;
-        const adminCount = members.filter(m => m.role === 'admin').length;
-        const fileCount = roomInfo.file_num || 0;
-        const messageCount = roomInfo.message_num || 0;
-        const iconPath = roomInfo.icon_path || '';
-
-        let iconLink = 'なし';
-        if (iconPath) {
-          if (iconPath.startsWith('http')) {
-            iconLink = iconPath;
-          } else {
-            iconLink = `https://appdata.chatwork.com${iconPath}`;
-          }
-        }
-
-        const admins = members.filter(m => m.role === 'admin');
-        let adminList = '';
-        if (admins.length > 0) {
-          adminList = admins.map(admin => `[picon:${admin.account_id}]`).join(' ');
-        } else {
-          adminList = 'なし';
-        }
-
-        const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
-      } catch (error) {
-        console.error('ルーム情報取得エラー:', error.message);
-        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得中にエラーが発生しました。`);
-      }
+    if (roomInfo.error === 'not_found') {
+      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]存在しないルームです。`);
       return;
     }
+
+    if (roomInfo.error) {
+      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得に失敗しました。`);
+      return;
+    }
+
+    const members = await ChatworkBotUtils.getRoomMembersWithToken(targetRoomId, INFO_API_TOKEN);
+    
+    // ★修正：型を統一して比較★
+    const yuyuyuId = String(YUYUYU_ACCOUNT_ID);
+    const isYuyuyuMember = members.some(m => String(m.account_id) === yuyuyuId);
+
+    console.log(`/info/ チェック: ルーム ${targetRoomId}, メンバー数 ${members.length}, ゆゆゆ参加: ${isYuyuyuMember}`);
+
+    if (!isYuyuyuMember) {
+      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ゆゆゆの本垢が参加していません。`);
+      return;
+    }
+
+    const roomName = roomInfo.name;
+    const memberCount = members.length;
+    const adminCount = members.filter(m => m.role === 'admin').length;
+    const fileCount = roomInfo.file_num || 0;
+    const messageCount = roomInfo.message_num || 0;
+    const iconPath = roomInfo.icon_path || '';
+
+    let iconLink = 'なし';
+    if (iconPath) {
+      if (iconPath.startsWith('http')) {
+        iconLink = iconPath;
+      } else {
+        iconLink = `https://appdata.chatwork.com${iconPath}`;
+      }
+    }
+
+    const admins = members.filter(m => m.role === 'admin');
+    let adminList = '';
+    if (admins.length > 0) {
+      adminList = admins.map(admin => `[picon:${admin.account_id}]`).join(' ');
+    } else {
+      adminList = 'なし';
+    }
+
+    const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+    await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
+  } catch (error) {
+    console.error('ルーム情報取得エラー:', error.message);
+    await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得中にエラーが発生しました: ${error.message}`);
+  }
+  return;
+}
 
     if (messageBody.startsWith('/scratch-user/')) {
       const username = messageBody.substring('/scratch-user/'.length).trim();
@@ -1229,7 +1235,6 @@ if ((roomId === '415060980' || roomId === 415060980) &&
       'おはよう': `[pname:${accountId}] おはよう！`,
       '/test': `アカウントID:${accountId}`,
       'プロセカやってくる': `[preview id=1864425247 ht=130]`,
-      'おっ': `ぱい`,
       'せっ': `くす`,
       '精': `子`,
       '114': `514`,
@@ -1728,7 +1733,7 @@ async function sendTomorrowWeather() {
       if (minTemp) {
         message += `\n最低気温　：${minTemp}`;
       }
-      message += `\n天気概況文：${description}[/info]`;
+      message += `\n天気概況文：(以下略)[/info]`;
 
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
         try {
