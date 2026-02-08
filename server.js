@@ -1328,47 +1328,449 @@ app.post('/webhook', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-// メッセージ送信エンドポイント
+// メッセージ送信エンドポイント（HTMLフォーム対応版）
 app.get('/msg-post', async (req, res) => {
+  const html = `
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chatworkメッセージ送信</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 40px;
+      max-width: 600px;
+      width: 100%;
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 30px;
+      text-align: center;
+      font-size: 28px;
+    }
+    .form-group {
+      margin-bottom: 25px;
+    }
+    label {
+      display: block;
+      color: #555;
+      font-weight: 600;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    input[type="text"],
+    textarea {
+      width: 100%;
+      padding: 12px 15px;
+      border: 2px solid #e0e0e0;
+      border-radius: 10px;
+      font-size: 15px;
+      transition: all 0.3s;
+      font-family: inherit;
+    }
+    input[type="text"]:focus,
+    textarea:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+    textarea {
+      resize: vertical;
+      min-height: 150px;
+    }
+    button {
+      width: 100%;
+      padding: 15px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+    }
+    button:active {
+      transform: translateY(0);
+    }
+    .message {
+      padding: 15px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      display: none;
+    }
+    .message.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+      display: block;
+    }
+    .message.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+      display: block;
+    }
+    .hint {
+      font-size: 12px;
+      color: #888;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📨 Chatworkメッセージ送信</h1>
+    <div id="messageArea"></div>
+    <form action="/msg-post" method="POST">
+      <div class="form-group">
+        <label for="roomid">ルームID</label>
+        <input type="text" id="roomid" name="roomid" required placeholder="例: 123456789">
+      </div>
+      <div class="form-group">
+        <label for="msg">メッセージ内容</label>
+        <textarea id="msg" name="msg" required placeholder="送信したいメッセージを入力してください..."></textarea>
+        <div class="hint">💡 改行もそのまま送信されます。返信・引用タグも自動変換されます。</div>
+      </div>
+      <button type="submit">送信する</button>
+    </form>
+  </div>
+</body>
+</html>
+  `;
+  res.send(html);
+});
+
+app.post('/msg-post', async (req, res) => {
   try {
-    const { roomid, msg } = req.query;
+    const { roomid, msg } = req.body;
 
     if (!roomid || !msg) {
-      return res.status(400).json({ 
-        status: 'error', 
-        message: 'roomidとmsgパラメータが必要です' 
-      });
+      const html = `
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>エラー</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 40px;
+      max-width: 600px;
+      width: 100%;
+      text-align: center;
+    }
+    .error {
+      color: #721c24;
+      font-size: 18px;
+      margin-bottom: 20px;
+    }
+    a {
+      display: inline-block;
+      padding: 12px 30px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      text-decoration: none;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="error">❌ ルームIDとメッセージ内容は必須です</div>
+    <a href="/msg-post">戻る</a>
+  </div>
+</body>
+</html>
+      `;
+      return res.status(400).send(html);
     }
 
     const isMember = await ChatworkBotUtils.isRoomMember(roomid);
     
     if (!isMember) {
-      return res.status(304).json({ 
-        status: 'error', 
-        message: 'ルームに参加していません' 
-      });
+      const html = `
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>エラー</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 40px;
+      max-width: 600px;
+      width: 100%;
+      text-align: center;
+    }
+    .error {
+      color: #721c24;
+      font-size: 18px;
+      margin-bottom: 20px;
+    }
+    a {
+      display: inline-block;
+      padding: 12px 30px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      text-decoration: none;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="error">⚠️ ルーム ${roomid} に参加していません</div>
+    <a href="/msg-post">戻る</a>
+  </div>
+</body>
+</html>
+      `;
+      return res.status(304).send(html);
     }
 
-    const messageId = await ChatworkBotUtils.sendChatworkMessage(roomid, msg);
+    // メッセージ内容を変換
+    let convertedMsg = msg;
+    
+    // [返信 aid=... to=...] → [rp aid=... to=...]
+    convertedMsg = convertedMsg.replace(/\[返信\s+aid=(\d+)\s+to=([^\]]+)\]/g, '[rp aid=$1 to=$2]');
+    
+    // [引用 aid=... time=...]...[/引用] → [qt][qtmeta aid=... time=...]...[/qt]
+    convertedMsg = convertedMsg.replace(/\[引用\s+aid=(\d+)\s+time=(\d+)\]([\s\S]*?)\[\/引用\]/g, '[qt][qtmeta aid=$1 time=$2]$3[/qt]');
+
+    const messageId = await ChatworkBotUtils.sendChatworkMessage(roomid, convertedMsg);
     
     if (messageId) {
-      res.json({ 
-        status: 'success', 
-        message: 'メッセージを送信しました',
-        messageId: messageId
-      });
+      const html = `
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>送信成功</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 40px;
+      max-width: 600px;
+      width: 100%;
+      text-align: center;
+    }
+    .success {
+      color: #155724;
+      font-size: 24px;
+      margin-bottom: 20px;
+    }
+    .info {
+      color: #666;
+      margin-bottom: 30px;
+    }
+    a {
+      display: inline-block;
+      padding: 12px 30px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      text-decoration: none;
+      border-radius: 10px;
+      font-weight: 600;
+      margin: 5px;
+    }
+    .message-preview {
+      background: #f8f9fa;
+      border-radius: 10px;
+      padding: 15px;
+      margin: 20px 0;
+      text-align: left;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-size: 14px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="success">✅ メッセージ送信成功！</div>
+    <div class="info">
+      ルームID: ${roomid}<br>
+      メッセージID: ${messageId}
+    </div>
+    <div class="message-preview">${convertedMsg.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+    <a href="/msg-post">続けて送信</a>
+    <a href="/">ホームに戻る</a>
+  </div>
+</body>
+</html>
+      `;
+      res.send(html);
     } else {
-      res.status(500).json({ 
-        status: 'error', 
-        message: 'メッセージ送信に失敗しました' 
-      });
+      const html = `
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>エラー</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 40px;
+      max-width: 600px;
+      width: 100%;
+      text-align: center;
+    }
+    .error {
+      color: #721c24;
+      font-size: 18px;
+      margin-bottom: 20px;
+    }
+    a {
+      display: inline-block;
+      padding: 12px 30px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      text-decoration: none;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="error">❌ メッセージ送信に失敗しました</div>
+    <a href="/msg-post">戻る</a>
+  </div>
+</body>
+</html>
+      `;
+      res.status(500).send(html);
     }
   } catch (error) {
     console.error('メッセージ送信エラー:', error.message);
-    res.status(500).json({ status: 'error', message: error.message });
+    const html = `
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>エラー</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 40px;
+      max-width: 600px;
+      width: 100%;
+      text-align: center;
+    }
+    .error {
+      color: #721c24;
+      font-size: 18px;
+      margin-bottom: 20px;
+    }
+    a {
+      display: inline-block;
+      padding: 12px 30px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      text-decoration: none;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="error">❌ エラー: ${error.message}</div>
+    <a href="/msg-post">戻る</a>
+  </div>
+</body>
+</html>
+    `;
+    res.status(500).send(html);
   }
 });
-
 // ヘルスチェック
 app.get('/', (req, res) => {
   res.json({
