@@ -756,106 +756,102 @@ class WebHookMessageProcessor {
     }
   }
 
-  static async processWebHookMessage(webhookData) {
-    try {
-      await this.saveWebhookToDatabase(webhookData);
+  // 修正版の processWebHookMessage メソッド
+// 514行目から650行目あたりを以下に置き換えてください
 
-      const roomId = webhookData.room_id;
-      const messageBody = webhookData.body;
-      const messageId = webhookData.message_id;
-      const accountId = webhookData.account_id;
-      const account = webhookData.account || null;
-
-      let userName = '';
-      if (account && account.name) {
-        userName = account.name;
-      } else if (accountId) {
-        userName = `ID:${accountId}`;
-      }
-
-      if (!roomId || !accountId || !messageBody) {
-        console.log('不完全なWebHookデータ:', webhookData);
-        return;
-      }
-
-// ★★★ 転送処理を以下のように修正 ★★★
-if (roomId === '415060980' || roomId === 415060980) {
-  const forwardRoomId = '420890621';
-  const eventType = webhookData.webhook_event_type || 'message_created';
-  
-  // 編集の場合は(編集)を追加
-  const editLabel = eventType === 'message_updated' ? '(編集)' : '';
-  const forwardMessage = `[info][title][piconname:${accountId}]${editLabel}[/title]${messageBody}[/info]`;
-  
+static async processWebHookMessage(webhookData) {
   try {
-    await ChatworkBotUtils.sendChatworkMessage(forwardRoomId, forwardMessage);
-    console.log(`メッセージ転送完了 [${eventType}]: ${roomId} → ${forwardRoomId}`);
-  } catch (error) {
-    console.error(`メッセージ転送エラー (${roomId} → ${forwardRoomId}):`, error.message);
-  }
-}
-// ★★★ 転送処理ここまで ★★★
-// ★★★ ここから追加★★★
-// ルーム415060980でメンバー参加を検知してウェルカムメッセージ送信
-if ((roomId === '415060980' || roomId === 415060980) && 
-    messageBody.includes('[dtext:chatroom_member_is]') && 
-    messageBody.includes('[dtext:chatroom_added]')) {
-  
-  // メッセージから参加ユーザーのIDを抽出
-  const piconnameMatch = messageBody.match(/\[piconname:(\d+)\]/);
-  
-  if (piconnameMatch && piconnameMatch[1]) {
-    const newUserId = piconnameMatch[1];
-    const welcomeMessage = `[To:${newUserId}][pname:${newUserId}]ちゃん
+    await this.saveWebhookToDatabase(webhookData);
+
+    const roomId = webhookData.room_id;
+    const messageBody = webhookData.body;
+    const messageId = webhookData.message_id;
+    const accountId = webhookData.account_id;
+    const account = webhookData.account || null;
+
+    let userName = '';
+    if (account && account.name) {
+      userName = account.name;
+    } else if (accountId) {
+      userName = `ID:${accountId}`;
+    }
+
+    if (!roomId || !accountId || !messageBody) {
+      console.log('不完全なWebHookデータ:', webhookData);
+      return;
+    }
+
+    // ★★★ 転送処理 ★★★
+    if (roomId === '415060980' || roomId === 415060980) {
+      const forwardRoomId = '420890621';
+      const eventType = webhookData.webhook_event_type || 'message_created';
+      
+      // 編集の場合は(編集)を追加
+      const editLabel = eventType === 'message_updated' ? '(編集)' : '';
+      const forwardMessage = `[info][title][piconname:${accountId}]${editLabel}[/title]${messageBody}[/info]`;
+      
+      try {
+        await ChatworkBotUtils.sendChatworkMessage(forwardRoomId, forwardMessage);
+        console.log(`メッセージ転送完了 [${eventType}]: ${roomId} → ${forwardRoomId}`);
+      } catch (error) {
+        console.error(`メッセージ転送エラー (${roomId} → ${forwardRoomId}):`, error.message);
+      }
+    }
+
+    // ★★★ ウェルカムメッセージ ★★★
+    if ((roomId === '415060980' || roomId === 415060980) && 
+        messageBody.includes('[dtext:chatroom_member_is]') && 
+        messageBody.includes('[dtext:chatroom_added]')) {
+      
+      const piconnameMatch = messageBody.match(/\[piconname:(\d+)\]/);
+      
+      if (piconnameMatch && piconnameMatch[1]) {
+        const newUserId = piconnameMatch[1];
+        const welcomeMessage = `[To:${newUserId}][pname:${newUserId}]ちゃん
 この部屋へようこそ！
 この部屋は色々とおかしいけどよろしくね！`;
-    
-    try {
-      // 少し待ってから送信（参加メッセージの直後に送るため）
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      await ChatworkBotUtils.sendChatworkMessage(roomId, welcomeMessage);
-      console.log(`ウェルカムメッセージ送信完了: ユーザー ${newUserId}`);
-    } catch (error) {
-      console.error(`ウェルカムメッセージ送信エラー:`, error.message);
+        
+        try {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          await ChatworkBotUtils.sendChatworkMessage(roomId, welcomeMessage);
+          console.log(`ウェルカムメッセージ送信完了: ユーザー ${newUserId}`);
+        } catch (error) {
+          console.error(`ウェルカムメッセージ送信エラー:`, error.message);
+        }
+      }
     }
-  }
-}
-// ★★★ 追加ここまで★★★
 
-      
+    // メッセージカウント更新
     this.updateMessageCount(roomId, accountId);
 
+    // ログ送信
     console.log(`ログ送信チェック: sourceRoomId=${roomId}, LOG_ROOM_ID=${LOG_ROOM_ID}`);
     await ChatworkBotUtils.sendLogToChatwork(userName, messageBody, roomId);
 
-      this.updateMessageCount(roomId, accountId);
+    // メンバー情報取得
+    let currentMembers = [];
+    let isSenderAdmin = true;
+    const isDirectChat = webhookData.room_type === 'direct';
 
-      console.log(`ログ送信チェック: sourceRoomId=${roomId}, LOG_ROOM_ID=${LOG_ROOM_ID}`);
-      await ChatworkBotUtils.sendLogToChatwork(userName, messageBody, roomId);
-
-      let currentMembers = [];
-      let isSenderAdmin = true;
-      const isDirectChat = webhookData.room_type === 'direct';
-
-      if (!isDirectChat) {
-        currentMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
-        isSenderAdmin = this.isUserAdmin(accountId, currentMembers);
-      }
-
-      await this.handleCommands(
-        roomId,
-        messageId,
-        accountId,
-        (messageBody || '').trim(),
-        isSenderAdmin,
-        isDirectChat,
-        currentMembers
-      );
-    } catch (error) {
-      console.error('WebHookメッセージ処理エラー:', error.message);
+    if (!isDirectChat) {
+      currentMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
+      isSenderAdmin = this.isUserAdmin(accountId, currentMembers);
     }
-  }
 
+    // コマンド処理
+    await this.handleCommands(
+      roomId,
+      messageId,
+      accountId,
+      (messageBody || '').trim(),
+      isSenderAdmin,
+      isDirectChat,
+      currentMembers
+    );
+  } catch (error) {
+    console.error('WebHookメッセージ処理エラー:', error.message);
+  }
+}
   static updateMessageCount(roomId, accountId) {
     try {
       const now = new Date();
