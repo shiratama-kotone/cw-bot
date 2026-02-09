@@ -566,66 +566,65 @@ static async getLatestEarthquakeInfo() {
   }
 }
   static async notifyEarthquake(earthquakeInfo, isTest = false) {
-    try {
-      const scaleMap = {
-        10: '1',
-        20: '2',
-        30: '3',
-        40: '4',
-        45: '5弱',
-        50: '5強',
-        55: '6弱',
-        60: '6強',
-        70: '7'
-      };
-      const scale = scaleMap[earthquakeInfo.maxScale] || (earthquakeInfo.maxScale / 10);
+  try {
+    const scaleMap = {
+      10: '1',
+      20: '2',
+      30: '3',
+      40: '4',
+      45: '5弱',
+      50: '5強',
+      55: '6弱',
+      60: '6強',
+      70: '7'
+    };
+    const scale = scaleMap[earthquakeInfo.maxScale] || (earthquakeInfo.maxScale / 10);
 
-      const earthquakeDate = new Date(earthquakeInfo.time);
-      const year = earthquakeDate.getFullYear();
-      const month = String(earthquakeDate.getMonth() + 1).padStart(2, '0');
-      const day = String(earthquakeDate.getDate()).padStart(2, '0');
-      const hours = String(earthquakeDate.getHours()).padStart(2, '0');
-      const minutes = String(earthquakeDate.getMinutes()).padStart(2, '0');
+    const earthquakeDate = new Date(earthquakeInfo.time);
+    const year = earthquakeDate.getFullYear();
+    const month = String(earthquakeDate.getMonth() + 1).padStart(2, '0');
+    const day = String(earthquakeDate.getDate()).padStart(2, '0');
+    const hours = String(earthquakeDate.getHours()).padStart(2, '0');
+    const minutes = String(earthquakeDate.getMinutes()).padStart(2, '0');
 
-      const title = isTest ? '地震情報-テストだよ' : '地震情報だよ';
-      const magnitudeText = (earthquakeInfo.magnitude === null || earthquakeInfo.magnitude === -1 || earthquakeInfo.magnitude === undefined) ? 'まだわかんない' : earthquakeInfo.magnitude;
+    const title = isTest ? '地震情報-テストだよ' : '地震情報だよ';
+    const magnitudeText = (earthquakeInfo.magnitude === null || earthquakeInfo.magnitude === -1 || earthquakeInfo.magnitude === undefined) ? 'まだわかんない' : earthquakeInfo.magnitude;
 
-      let message;
-      if (!earthquakeInfo.hypocenter || earthquakeInfo.hypocenter === '' || earthquakeInfo.hypocenter === '不明') {
-        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に震度${scale}の地震が発生したよ。\nマグニチュードは${magnitudeText}\n引き続き情報に注意してね！[/info]`;
-      } else {
-        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に ${earthquakeInfo.hypocenter} で震度${scale}の地震が発生したよ。\nマグニチュードは${magnitudeText}\n引き続き情報に注意してね！[/info]`;
-      
-
-      for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
-        try {
-          await this.sendChatworkMessage(roomId, message);
-          console.log(`地震情報送信完了: ルーム ${roomId}`);
-        } catch (error) {
-          console.error(`ルーム ${roomId} への地震情報送信エラー:`, error.message);
-        }
-      }
-    } catch (error) {
-      console.error('地震情報通知エラー:', error.message);
+    let message;
+    if (!earthquakeInfo.hypocenter || earthquakeInfo.hypocenter === '' || earthquakeInfo.hypocenter === '不明') {
+      message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に震度${scale}の地震が発生したよ。\nマグニチュードは${magnitudeText}\n引き続き情報に注意してね！[/info]`;
+    } else {
+      message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に ${earthquakeInfo.hypocenter} で震度${scale}の地震が発生したよ。\nマグニチュードは${magnitudeText}\n引き続き情報に注意してね！[/info]`;
     }
-  }
 
-  static async getRoomInfoWithToken(roomId, apiToken) {
-    await apiCallLimiter();
-    try {
-      const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}`, {
-        headers: { 'X-ChatWorkToken': apiToken }
-      });
-      return response.data;
-    } catch (error) {
-      if (error.response?.status === 404) {
-        return { error: 'not_found' };
+    for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+      try {
+        await this.sendChatworkMessage(roomId, message);
+        console.log(`地震情報送信完了: ルーム ${roomId}`);
+      } catch (error) {
+        console.error(`ルーム ${roomId} への地震情報送信エラー:`, error.message);
       }
-      console.error(`ルーム情報取得エラー (${roomId}):`, error.message);
-      return { error: 'unknown' };
     }
+  } catch (error) {
+    console.error('地震情報通知エラー:', error.message);
   }
+}
 
+static async getRoomInfoWithToken(roomId, apiToken) {
+  await apiCallLimiter();
+  try {
+    const response = await axios.get(`https://api.chatwork.com/v2/rooms/${roomId}`, {
+      headers: { 'X-ChatWorkToken': apiToken }
+    });
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return { error: 'not_found' };
+    }
+    console.error(`ルーム情報取得エラー (${roomId}):`, error.message);
+    return { error: 'unknown' };
+  }
+}
 static async getRoomMembersWithToken(roomId, apiToken) {
   await apiCallLimiter();
   try {
