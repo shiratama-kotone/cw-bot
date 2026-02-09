@@ -214,10 +214,10 @@ class ChatworkBotUtils {
   }
 
   static drawOmikuji(isAdmin) {
-    const fortunes = ['大吉', '中吉', '吉', '小吉', '末吉', '凶'];
-    const specialFortune = '超町長調帳朝腸蝶大吉';
+    const fortunes = ['大吉', '中吉', '吉', '小吉', '末吉', '凶', '凶', '凶'];
+    const specialFortune = '湊音すぺしゃるっ！';
     let specialChance = 0.002;
-    if (isAdmin) specialChance = 0.25;
+    if (isAdmin) specialChance = 0.002;
     const rand = Math.random();
     if (rand < specialChance) {
       return specialFortune;
@@ -270,7 +270,7 @@ class ChatworkBotUtils {
       const searchData = searchResponse.data;
       
       if (!searchData || !searchData[1] || searchData[1].length === 0) {
-        const result = `「${searchTerm}」に関する記事は見つかりませんでした。`;
+        const result = `「${searchTerm}」に関する記事は見つからなかったよ`;
         addToCache(cacheKey, { data: result, timestamp: now });
         return result;
       }
@@ -307,18 +307,18 @@ class ChatworkBotUtils {
           if (summary.length > 500) {
             summary = summary.substring(0, 500) + '...';
           }
-          const result = `${summary}\n\n元記事: ${pageUrl}`;
+          const result = `${summary}\n\n元記事は ${pageUrl} だよっ！`;
           addToCache(cacheKey, { data: result, timestamp: now });
           return result;
         }
       }
 
-      const result = `「${searchTerm}」の情報を取得できませんでした。`;
+      const result = `「${searchTerm}」の情報を取得できなかったよ`;
       addToCache(cacheKey, { data: result, timestamp: now });
       return result;
     } catch (error) {
       console.error('Wikipedia検索エラー:', error.message);
-      return `Wikipedia検索中にエラーが発生しました: ${error.message}`;
+      return `Wikipedia検索中にエラーが発生したよ: ${error.message}`;
     }
   }
 
@@ -341,7 +341,7 @@ class ChatworkBotUtils {
       }
 
       if (!bio && !status) {
-        result = `[info][title]Scratchユーザー情報[/title]ユーザー名: ${username}\nプロフィール情報がありません。[/info]\n\n`;
+        result = `[info][title]Scratchユーザー情報[/title]ユーザー名: ${username}\nプロフィール情報がないよっ！[/info]\n\n`;
       }
 
       result += `ユーザーページ: ${userLink}`;
@@ -349,9 +349,9 @@ class ChatworkBotUtils {
       return result;
     } catch (error) {
       if (error.response?.status === 404) {
-        return `「${username}」というScratchユーザーは見つかりませんでした。`;
+        return `「${username}」というScratchユーザーは見つからなかったよ`;
       }
-      return `Scratchユーザー情報の取得中に予期せぬエラーが発生しました。`;
+      return `Scratchユーザー情報の取得してるときに予期してなかったエラーが起こっちゃった。`;
     }
   }
 
@@ -361,12 +361,12 @@ class ChatworkBotUtils {
       const response = await axios.get(`https://api.scratch.mit.edu/projects/${projectId}`);
       const data = response.data;
       if (!data || !data.title) {
-        return 'プロジェクトが見つかりませんでした。';
+        return 'プロジェクトが見つからなかったよ';
       }
       const url = `https://scratch.mit.edu/projects/${projectId}/`;
       return `[info][title]Scratchプロジェクト情報[/title]タイトル: ${data.title}\n作者: ${data.author.username}\n説明: ${data.description || '説明なし'}\nURL: ${url}[/info]`;
     } catch (error) {
-      return 'Scratchプロジェクト情報の取得中にエラーが発生しました。';
+      return 'Scratchプロジェクト情報の取得中にエラーが発生したよ';
     }
   }
 
@@ -413,17 +413,17 @@ class ChatworkBotUtils {
                       .replace(/<[^>]+>/g, '')
                       .trim();
       } else {
-        return '対応していないURLです。utaten.comまたはuta-net.comのURLを指定してください。';
+        return '対応していないURLだよっ！utaten.comまたはuta-net.comのURLを指定してねっ！';
       }
 
       if (!title || !lyrics) {
-        return '歌詞の取得に失敗しました。URLを確認してください。';
+        return '歌詞の取得に失敗しちゃった。URLを確認してくれるとうれしいな';
       }
 
-      return `[info][title]${title}の歌詞[/title]${lyrics}[/info]`;
+      return `[info][title]${title}の歌詞だよっ！[/title]${lyrics}[/info]`;
     } catch (error) {
       console.error('歌詞取得エラー:', error.message);
-      return `歌詞の取得中にエラーが発生しました: ${error.message}`;
+      return `歌詞の取得中にエラーが発生しちゃった: ${error.message}`;
     }
   }
 
@@ -587,15 +587,15 @@ static async getLatestEarthquakeInfo() {
       const hours = String(earthquakeDate.getHours()).padStart(2, '0');
       const minutes = String(earthquakeDate.getMinutes()).padStart(2, '0');
 
-      const title = isTest ? '地震情報-テスト' : '地震情報';
-      const magnitudeText = (earthquakeInfo.magnitude === null || earthquakeInfo.magnitude === -1 || earthquakeInfo.magnitude === undefined) ? '調査中' : earthquakeInfo.magnitude;
+      const title = isTest ? '地震情報-テストだよ' : '地震情報だよ';
+      const magnitudeText = (earthquakeInfo.magnitude === null || earthquakeInfo.magnitude === -1 || earthquakeInfo.magnitude === undefined) ? 'まだわかんない' : earthquakeInfo.magnitude;
 
       let message;
       if (!earthquakeInfo.hypocenter || earthquakeInfo.hypocenter === '' || earthquakeInfo.hypocenter === '不明') {
-        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に震度${scale}の地震が発生しました。\nマグニチュード: ${magnitudeText}。[/info]`;
+        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に震度${scale}の地震が発生したよ。\nマグニチュードは${magnitudeText}\n引き続き情報に注意してね！[/info]`;
       } else {
-        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に ${earthquakeInfo.hypocenter} を中心とする震度${scale}の地震が発生しました。\nマグニチュード: ${magnitudeText}。[/info]`;
-      }
+        message = `[info][title]${title}[/title]${year}年${month}月${day}日 ${hours}:${minutes} に ${earthquakeInfo.hypocenter} で震度${scale}の地震が発生したよ。\nマグニチュードは${magnitudeText}\n引き続き情報に注意してね！[/info]`;
+      
 
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
         try {
@@ -806,7 +806,7 @@ if ((roomId === '415060980' || roomId === 415060980) &&
   
   if (piconnameMatch && piconnameMatch[1]) {
     const newUserId = piconnameMatch[1];
-    const welcomeMessage = `[To:${newUserId}][pname:${newUserId}]さん
+    const welcomeMessage = `[To:${newUserId}][pname:${newUserId}]ちゃん
 この部屋へようこそ！
 この部屋は色々とおかしいけどよろしくね！`;
     
@@ -891,7 +891,7 @@ if ((roomId === '415060980' || roomId === 415060980) &&
         const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${lyrics}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       } else {
-        const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]使用方法: /lyric {utaten.comまたはuta-net.comのURL}`;
+        const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]\nつかいかたは /lyric {utaten.comまたはuta-net.comのURL} だよ`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, errorMessage);
       }
       return;
@@ -899,21 +899,21 @@ if ((roomId === '415060980' || roomId === 415060980) &&
 
     if (messageBody === 'おみくじ') {
       const omikujiResult = ChatworkBotUtils.drawOmikuji(isSenderAdmin);
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nです！[/info]`;
+      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nだよっ！[/info]`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
     if (!isDirectChat && !isSenderAdmin) {
       const emojiCount = ChatworkBotUtils.countChatworkEmojis(messageBody);
       if (emojiCount >= 50) {
-        const warningMessage = `[To:${accountId}][pname:${accountId}]さん、Chatwork絵文字を${emojiCount}個送信されました。適度な使用をお願いします。`;
+        const warningMessage = `[To:${accountId}][pname:${accountId}]ちゃん\nChatworkの絵文字を${emojiCount}個送信しちゃったね。できるだけ少ないかずで使おう。`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, warningMessage);
       }
     }
 
     if (messageBody === '/yes-or-no') {
       const answer = await ChatworkBotUtils.getYesOrNoAnswer();
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、答えは「${answer}」です！`;
+      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n答えは「${answer}」だよっ！`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
@@ -921,7 +921,7 @@ if ((roomId === '415060980' || roomId === 415060980) &&
       const searchTerm = messageBody.substring('/wiki/'.length).trim();
       if (searchTerm) {
         const wikipediaSummary = await ChatworkBotUtils.getWikipediaSummary(searchTerm);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、Wikipediaの検索結果です。\n\n${wikipediaSummary}`;
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nWikipediaの検索結果だよっ！\n\n${wikipediaSummary}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       }
     }
@@ -931,8 +931,8 @@ if (messageBody.startsWith('/info/')) {
 
   if (!targetRoomId || !INFO_API_TOKEN) {
     const errorMsg = !INFO_API_TOKEN
-      ? 'INFO_API_TOKENが設定されていません。'
-      : 'ルームIDを指定してください。';
+      ? 'ズモモエラー！！ChatworkAPIのエラーが出たぞ！ますたー！対応しろ！'
+      : 'ルームIDを指定してくれるとうれしいな';
     await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]${errorMsg}`);
     return;
   }
@@ -941,12 +941,12 @@ if (messageBody.startsWith('/info/')) {
     const roomInfo = await ChatworkBotUtils.getRoomInfoWithToken(targetRoomId, INFO_API_TOKEN);
 
     if (roomInfo.error === 'not_found') {
-      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]存在しないルームです。`);
+      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n存在しないルームかも。`);
       return;
     }
 
     if (roomInfo.error) {
-      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得に失敗しました。`);
+      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nルーム情報持ってくるのに失敗しちゃった。`);
       return;
     }
 
@@ -959,7 +959,7 @@ if (messageBody.startsWith('/info/')) {
     console.log(`/info/ チェック: ルーム ${targetRoomId}, メンバー数 ${members.length}, ゆゆゆ参加: ${isYuyuyuMember}`);
 
     if (!isYuyuyuMember) {
-      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ゆゆゆの本垢が参加していません。`);
+      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nますたーが参加してないかも。`);
       return;
     }
 
@@ -987,11 +987,11 @@ if (messageBody.startsWith('/info/')) {
       adminList = 'なし';
     }
 
-    const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+    const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n[info][title]${roomName}の情報だよっ！[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
     await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
   } catch (error) {
     console.error('ルーム情報取得エラー:', error.message);
-    await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ルーム情報の取得中にエラーが発生しました: ${error.message}`);
+    await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nルーム情報の取得中にエラーが発生しちゃった: ${error.message}`);
   }
   return;
 }
@@ -1000,7 +1000,7 @@ if (messageBody.startsWith('/info/')) {
       const username = messageBody.substring('/scratch-user/'.length).trim();
       if (username) {
         const userStats = await ChatworkBotUtils.getScratchUserStats(username);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、Scratchユーザー「${username}」の情報です。\n\n${userStats}`;
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nScratchのユーザー「${username}」の情報だよっ！\n\n${userStats}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       }
     }
@@ -1009,7 +1009,7 @@ if (messageBody.startsWith('/info/')) {
       const projectId = messageBody.substring('/scratch-project/'.length).trim();
       if (projectId) {
         const projectInfo = await ChatworkBotUtils.getScratchProjectInfo(projectId);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、Scratchプロジェクト「${projectId}」の情報です。\n\n${projectInfo}`;
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nScratchの作品「${projectId}」の情報だよっ！。\n\n${projectInfo}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       }
     }
@@ -1018,17 +1018,17 @@ if (messageBody.startsWith('/info/')) {
       const now = new Date();
       const jstDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
       const todayFormatted = jstDate.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
-      let messageContent = `[info][title]今日の情報[/title]今日は${todayFormatted}だよ！`;
+      let messageContent = `[info][title]今日の情報だよ[/title]今日は${todayFormatted}だよっ！`;
       const events = await getTodaysEventsFromJson();
       if (events.length > 0) {
         events.forEach(event => {
-          messageContent += `\n今日は${event}だよ！`;
+          messageContent += `\n今日は${event}だよっ！`;
         });
       } else {
         messageContent += `\n今日は特に登録されたイベントはないみたい。`;
       }
       messageContent += `[/info]`;
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]さん、\n\n${messageContent}`;
+      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n\n${messageContent}`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
@@ -1090,12 +1090,12 @@ if (messageBody.startsWith('/info/')) {
           adminList = 'なし';
         }
 
-        const infoMessage = `[info][title]${roomName}の情報[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\n最新メッセージ：[修正中]\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+        const infoMessage = `[info][title]この部屋の情報だよ[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\n最新メッセージ：[修正中]\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
 
         await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
       } catch (error) {
         console.error('ルーム情報取得エラー:', error.message);
-        await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得中にエラーが発生しました。');
+        await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得中にエラーが発生しちゃった。');
       }
     }
 
@@ -1115,9 +1115,9 @@ if (messageBody.startsWith('/info/')) {
 
         const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
 
-        let rankingMessage = '[info][title]メッセージ数ランキング[/title]\n';
+        let rankingMessage = '[info][title]メッセージ数ランキングだよ[/title]\n';
         if (ranking.length === 0) {
-          rankingMessage += '今日のメッセージはまだありません。\n';
+          rankingMessage += '今日のメッセージはまだないみたい\n';
         } else {
           ranking.forEach((item, index) => {
             rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
@@ -1127,7 +1127,7 @@ if (messageBody.startsWith('/info/')) {
             rankingMessage += '\n';
           });
         }
-        rankingMessage += `\n合計：${totalCount}コメ\n(botを含む)[/info]`;
+        rankingMessage += `\n合計：${totalCount}コメ\n(ぼく込みで)[/info]`;
 
         await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
       } catch (error) {
@@ -1138,23 +1138,23 @@ if (messageBody.startsWith('/info/')) {
 
     if (messageBody === '/komekasegi') {
       const messages = [
-        'コメ稼ぎだお',
-        '過疎だね',
-        '静かすぎて風の音が聞こえる',
-        'みんな寝落ちした？',
-        'ここ、無人島かな？',
-        '今日も平和だね〜',
-        '誰か生きてる？',
+        'コメ稼ぎだよっ！',
+        '過疎だね…',
+        '静かすぎて風の音が聞こえる気がした',
+        'みんな寝落ちしちゃった？',
+        'ここって無人島かな？',
+        '今日も平和だね',
+        '誰か生きてるかな',
         '砂漠のオアシス状態',
-        'コメントが凍結してる!?',
+        'コメントが凍結してる…',
         'しーん……',
         'この空気、逆に好き',
         '時が止まったみたい',
-        '過疎 is 神',
-        '電波届いてるよね？',
-        'こっそり独り言タイム',
+        '過疎はよくない',
+        'え 電波届いてるよね？',
+        'こっそり独り言タイム！',
         'エコー返ってくる気がする',
-        '幽霊さん、いますか〜？'
+        '幽霊さん、どこにいますか？'
       ];
 
       for (let i = 0; i < 10; i++) {
@@ -1225,71 +1225,28 @@ if (messageBody.startsWith('/info/')) {
     }
 
     const responses = {
-      'はんせい': `[To:10911090] なかよし\n[pname:${accountId}]に呼ばれてるよ！`,
-      'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよ！`,
-      'からめり': `[To:10337719] からめり\n[pname:${accountId}]に呼ばれてるよ！`,
-      '学生':`[To:9553691] 学生\n[pname:${accountId}]に呼ばれてるよ！`,
-      'いろいろあぷり': `https://shiratama-kotone.github.io/any-app/`,
-      '喘げ': `...っ♡///`,
-      'おやすみ': `おやすみなさい！[pname:${accountId}]！`,
-      'おはよう': `[pname:${accountId}] おはよう！`,
-      '/test': `アカウントID:${accountId}`,
-      'プロセカやってくる': `[preview id=1864425247 ht=130]`,
+      'はんせい': `[To:10911090] はんせい\n[pname:${accountId}]に呼ばれてるよっ！`,
+      'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよっ！`,
+      'からめり': `[To:10337719] からめり\n[pname:${accountId}]に呼ばれてるよっ！`,
+      '学生':`[To:9553691] がっくせい\n[pname:${accountId}]に呼ばれてるよっ！`,
+      'みおん':`はーい！`,
+      'いろいろあぷり': `https://shiratama-kotone.github.io/any-app/\nどーぞ！`,
+      '喘げ': `そう簡単に喘ぐとでも思った？残念！ぼくは喘ぎません...っ♡///`,
+      'おやすみ': `おやすみ！`,
+      'おはよう': `おはよう！`,
+      '/test': `アカウントIDは${accountId}だよっ！`,
+      'プロセカやってくる': `がんばれ！`,
       'せっ': `くす`,
       '精': `子`,
       '114': `514`,
       'ちん': `ちんㅤ`,
-      '野獣': `やりますねぇ！`,
-      'こ↑': `こ↓`,
       '富士山': `3776m!`,
-      'TOALL': `[toall...すると思った？`,
-      'botのコードください': `https://github.com/shiratama-kotone/cw-bot`,
+      'TOALL': `[toall...するわけないじゃん！`,
+      'botのコードください': `https://github.com/shiratama-kotone/cw-bot\nどーぞ！`,
       '1+1=': `1!`,
-      'トイレいってくる': `漏らさないでねー`,
-      'からめりは': `エロ画像マニア！`,
-      'たまごは': `人外ナー！`,
-      'ゆゆゆは': `かわいい．．．はず`,
-      'はんせいは': `かっこいい！`,
-      'プロセカ公式Youtube': `https://www.youtube.com/@pj_sekai_colorfulstage`,
+      'トイレいってくる': `漏らさないでねっ！`,
       '6': `9`,
       'Git': `hub`,
-      '初音': `ミク`,
-      '鏡音': `リン`,
-      '巡音': `ルカ`,
-      'MEI': `KO`,
-      'KAI': `TO`,
-      '星乃': `一歌`,
-      '天馬': `咲希 または 司`,
-      '望月': `穂波`,
-      '日野森': `志歩 または 雫`,
-      '花里': `みのり`,
-      '桐谷': `遥`,
-      '桃井': `愛莉`,
-      '小豆沢': `こはね`,
-      '白石': `杏`,
-      '東雲': `絵名 または 彰人`,
-      '青柳': `冬弥`,
-      '鳳': `えむ`,
-      '草薙': `寧々`,
-      '神代': `類`,
-      '宵崎': `奏`,
-      '朝比奈': `まふゆ`,
-      '暁山': `瑞希 または 優希`,
-      '高木': `未羽`,
-      '吉崎': `花乃 または 葉太`,
-      '高坂': `朔`,
-      '真堂': `良樹`,
-      '日暮': `アリサ`,
-      '山下': `真里奈`,
-      '早川': `ななみ`,
-      '内山': `唯奈`,
-      '斎藤': `彩香`,
-      '長谷川': `里帆`,
-      '有澤': `日菜子`,
-      '柊': `マグネタイト`,
-      'ジャン': `ライリー`,
-      '雪平': `実篤`,
-      '夏野': `二葉`,
     };
     if (responses[messageBody]) {
       await ChatworkBotUtils.sendChatworkMessage(roomId, responses[messageBody]);
@@ -1522,7 +1479,7 @@ app.get('/msg-post', async (req, res) => {
       <div class="form-group">
         <label for="msg">メッセージ内容</label>
         <textarea id="msg" name="msg" required placeholder="送信したいメッセージを入力してください..."></textarea>
-        <div class="hint">💡 改行もそのまま送信されます。返信・引用タグも自動変換されます。</div>
+        <div class="hint">💡 改行もそのまま送信されます。返信・引用タグも自動変換されます。<br><b>あなたは湊音だと言うことを忘れないでください。</b></div>
       </div>
       <button type="submit" id="submitBtn">送信する</button>
     </form>
@@ -1637,7 +1594,7 @@ app.post('/msg-post', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     status: 'OK',
-    message: 'Chatwork Bot WebHook版 (全ルーム対応)',
+    message: 'ぼくは元気に稼働中！',
     timestamp: new Date().toISOString(),
     mode: 'WebHook - All Rooms',
     storage: 'Memory',
@@ -1670,9 +1627,9 @@ app.post('/test-message', async (req, res) => {
 app.get('/status', async (req, res) => {
   try {
     res.json({
-      status: 'OK',
-      mode: 'WebHook - All Rooms',
-      storage: 'Memory',
+      status: '元気！',
+      mode: '全部のルームをみてるよ！',
+      storage: 'ぼくの頭のなかにぜーんぶ入ってる！',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       logRoomId: LOG_ROOM_ID,
@@ -1717,7 +1674,7 @@ app.get('/eew-test:scale', async (req, res) => {
     if (isNaN(scale) || scale < 10 || scale > 70) {
       return res.status(400).json({
         status: 'error',
-        message: '震度は10〜70の範囲で指定してください（10=震度1, 70=震度7）'
+        message: '震度は10〜70の範囲で指定してね（10=震度1, 70=震度7）'
       });
     }
 
@@ -1725,7 +1682,7 @@ app.get('/eew-test:scale', async (req, res) => {
     const testEarthquakeInfo = {
       id: `test_${Date.now()}`,
       time: now.toISOString(),
-      hypocenter: 'テスト震源地',
+      hypocenter: 'ぼくの夢の中',
       magnitude: null,
       maxScale: scale
     };
@@ -1756,11 +1713,11 @@ async function sendDailyGreetingMessages() {
       try {
         const lastSentDate = memoryStorage.lastSentDates.get(roomId);
         if (lastSentDate !== todayDateOnly) {
-          let message = `[info][title]日付変更！[/title]今日は${todayFormatted}だよ！`;
+          let message = `[info][title]日付変更だよ[/title]今日は${todayFormatted}だよっ！`;
           const events = await getTodaysEventsFromJson();
           if (events.length > 0) {
             events.forEach(event => {
-              message += `\n今日は${event}だよ！`;
+              message += `\n今日は${event}だよっ！`;
             });
           }
           message += `[/info]`;
@@ -1787,7 +1744,7 @@ async function sendDailyGreetingMessages() {
 async function sendNightMessage() {
   try {
     console.log('夜11時の通知を送信します');
-    const message = '11時だよ！\nおやすみの人はおやすみなさい！';
+    const message = '11時だよ！ぼくはもう眠くなってきちゃった…';
 
     for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
       try {
@@ -1799,6 +1756,24 @@ async function sendNightMessage() {
     }
   } catch (error) {
     console.error('夜11時通知処理エラー:', error.message);
+  }
+}
+// おはようせかい
+async function ohayosekai() {
+  try {
+    console.log('おはようせかい');
+    const message = 'おはようせかい';
+
+    for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+      try {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, message);
+        console.log(`おはようせかい完了: ルーム ${roomId}`);
+      } catch (error) {
+        console.error(`ルーム ${roomId} へのおはようせかいエラー:`, error.message);
+      }
+    }
+  } catch (error) {
+    console.error('おはようせかいエラー:', error.message);
   }
 }
 
@@ -1835,9 +1810,9 @@ async function sendDailyRanking() {
 
         const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
 
-        let rankingMessage = '今日のコメ数ランキングだよ！\n[info][title]メッセージ数ランキング[/title]\n';
+        let rankingMessage = '今日のコメ数ランキングだよっ！\n[info][title]コメ数ランキング！[/title]\n';
         if (ranking.length === 0) {
-          rankingMessage += '今日のメッセージはまだありません。\n';
+          rankingMessage += '今日のメッセージはまだないみたい。\n';
         } else {
           ranking.forEach((item, index) => {
             rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
@@ -1847,7 +1822,7 @@ async function sendDailyRanking() {
             rankingMessage += '\n';
           });
         }
-        rankingMessage += `\n合計：${totalCount}コメ\n(botを含む)[/info]`;
+        rankingMessage += `\n合計：${totalCount}コメ\n(ぼく込み)[/info]`;
 
         await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
         console.log(`ランキング送信完了: ルーム ${roomId}`);
@@ -1889,9 +1864,9 @@ async function sendPreMidnightRanking() {
 
         const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
 
-        let rankingMessage = '[info][title]日付変更前ランキング（23:55）[/title]\n';
+        let rankingMessage = '[info][title]日付変更の前のランキング[/title]\n';
         if (ranking.length === 0) {
-          rankingMessage += '今日のメッセージはまだありません。\n';
+          rankingMessage += '今日のメッセージはまだないみたい。\n';
         } else {
           ranking.forEach((item, index) => {
             rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
@@ -1899,7 +1874,7 @@ async function sendPreMidnightRanking() {
             rankingMessage += '\n';
           });
         }
-        rankingMessage += `\n合計：${totalCount}コメ\n(botを含む)[/info]`;
+        rankingMessage += `\n合計：${totalCount}コメ\n(ぼく込み)[/info]`;
 
         await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
         console.log(`事前ランキング送信完了: ルーム ${roomId}`);
@@ -1916,7 +1891,7 @@ async function sendPreMidnightRanking() {
 async function sendMorningMessage() {
   try {
     console.log('朝6時の通知を送信します');
-    const message = 'みんなおはよう！！';
+    const message = 'みんなおはよう！\nぼくはまだ眠いなぁ';
 
     for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
       try {
@@ -1953,11 +1928,11 @@ async function sendTodayWeather() {
       const minTemp = today.temperature.min && today.temperature.min.celsius ? `${today.temperature.min.celsius}℃` : null;
       const description = weatherData.description.text || '情報なし';
 
-      let message = `[info][title]${area.name}の今日の天気予報[/title]天気　　　：${telop}\n最高気温　：${maxTemp}`;
+      let message = `[info][title]たぶん${area.name}の今日の天気予報[/title]天気は${telop}だよ\n最高気温は${maxTemp}だよ`;
       if (minTemp) {
-        message += `\n最低気温　：${minTemp}`;
+        message += `\n最低気温はたぶん${minTemp}だよ`;
       }
-      message += `\n天気概況文：(以下略)[/info]`;
+      message += `\n天気概況文はいらない！\nぼくの判断。[/info]`;
 
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
         try {
@@ -1993,11 +1968,11 @@ async function sendTomorrowWeather() {
       const minTemp = tomorrow.temperature.min && tomorrow.temperature.min.celsius ? `${tomorrow.temperature.min.celsius}℃` : null;
       const description = weatherData.description.text || '情報なし';
 
-      let message = `[info][title]${area.name}の明日の天気予報[/title]天気　　　：${telop}\n最高気温　：${maxTemp}`;
+      let message = `[info][title]たぶん${area.name}の明日の天気予報[/title]天気は${telop}だよ\n最高気温は${maxTemp}だよ`;
       if (minTemp) {
-        message += `\n最低気温　：${minTemp}`;
+        message += `\n最低気温はたぶん${minTemp}だよ`;
       }
-      message += `\n天気概況文：(以下略)[/info]`;
+      message += `\n天気概況文はいらない！\nぼくの判断。[/info]`;
 
       for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
         try {
@@ -2028,6 +2003,13 @@ async function checkEarthquakeInfo() {
     console.error('地震情報チェックエラー:', error.message);
   }
 }
+
+// cron: おはようせかい
+cron.schedule('0 0 0 * * *', async () => {
+  await ohayosekai();
+}, {
+  timezone: "Asia/Tokyo"
+});
 
 // cron: 毎日0時0分に実行
 cron.schedule('0 0 0 * * *', async () => {
@@ -2080,24 +2062,24 @@ cron.schedule('*/1 * * * *', async () => {
 
 // サーバー起動
 app.listen(port, async () => {
-  console.log(`Chatwork Bot WebHook版 (全ルーム対応) がポート${port}で起動しました`);
+  console.log(`湊音がポート${port}で起動しました`);
   console.log('WebHook URL: https://your-app-name.onrender.com/webhook');
   console.log('環境変数:');
-  console.log('- CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN ? '設定済み' : '未設定');
-  console.log('- INFO_API_TOKEN:', INFO_API_TOKEN ? '設定済み' : '未設定');
-  console.log('- DATABASE_URL:', process.env.DATABASE_URL ? '設定済み' : '未設定');
-  console.log('- DIRECT_CHAT_WITH_DATE_CHANGE:', DIRECT_CHAT_WITH_DATE_CHANGE);
-  console.log('- LOG_ROOM_ID:', LOG_ROOM_ID, '(固定)');
-  console.log('- DAY_JSON_URL:', DAY_JSON_URL);
-  console.log('動作モード: すべてのルームで反応、ログは', LOG_ROOM_ID, 'のみ');
+  console.log('- CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN ? '設定済みだよ' : '未設定かも');
+  console.log('- INFO_API_TOKEN:', INFO_API_TOKEN ? '設定済みだよ' : '未設定かも');
+  console.log('- DATABASE_URLは', process.env.DATABASE_URL ? '設定済みだよ' : '未設定かも');
+  console.log('- DIRECT_CHAT_WITH_DATE_CHANGEは', DIRECT_CHAT_WITH_DATE_CHANGE);
+  console.log('- LOG_ROOM_IDは', LOG_ROOM_ID, '(固定)');
+  console.log('- DAY_JSON_URLは', DAY_JSON_URL);
+  console.log('動作モードはすべてのルームで反応、ログは', LOG_ROOM_ID, 'のみだよ');
 
-  console.log('\nデータベースを初期化します...');
+  console.log('\nデータベースを初期化するね...');
   await initializeDatabase();
 
-  console.log('\n起動時初期化: メッセージカウントを初期化します...');
+  console.log('\nメッセージカウントを初期化するね...');
   for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
     await ChatworkBotUtils.initializeMessageCount(roomId);
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
-  console.log('初期化完了\n');
+  console.log('起動かんりょ！\n');
 });
