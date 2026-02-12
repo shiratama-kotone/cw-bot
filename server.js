@@ -928,7 +928,18 @@ if (messageBody.startsWith('/info/')) {
     const errorMsg = !INFO_API_TOKEN
       ? 'ズモモエラー！！ChatworkAPIのエラーが出たぞ！ますたー！対応しろ！'
       : 'ルームIDを指定してくれるとうれしいな';
-    await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]${errorMsg}`);
+    await ChatworkBotUtils.sendChatworkMessage(roomId,
+      `[rp aid=${accountId} to=${roomId}-${messageId}]${errorMsg}`);
+    return;
+  }
+
+  // ダイレクトチャットの場合は送信者を管理者扱いにする（本人しかいないので）
+  // グループの場合は既存の isSenderAdmin を使う
+  const canUseInfoCommand = isDirectChat ? true : isSenderAdmin;
+
+  if (!canUseInfoCommand) {
+    await ChatworkBotUtils.sendChatworkMessage(roomId,
+      `[rp aid=${accountId} to=${roomId}-${messageId}]このコマンドは管理者だけが使えるよ`);
     return;
   }
 
@@ -936,57 +947,66 @@ if (messageBody.startsWith('/info/')) {
     const roomInfo = await ChatworkBotUtils.getRoomInfoWithToken(targetRoomId, INFO_API_TOKEN);
 
     if (roomInfo.error === 'not_found') {
-      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n存在しないルームかも。`);
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n存在しないルームかも。`);
       return;
     }
 
     if (roomInfo.error) {
-      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nルーム情報持ってくるのに失敗しちゃった。`);
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nルーム情報持ってくるのに失敗しちゃった。`);
       return;
     }
 
     const members = await ChatworkBotUtils.getRoomMembersWithToken(targetRoomId, INFO_API_TOKEN);
-    
-    // ★修正：型を統一して比較★
+
     const yuyuyuId = String(YUYUYU_ACCOUNT_ID);
     const isYuyuyuMember = members.some(m => String(m.account_id) === yuyuyuId);
 
-    console.log(`/info/ チェック: ルーム ${targetRoomId}, メンバー数 ${members.length}, ゆゆゆ参加: ${isYuyuyuMember}`);
+    console.log(`/info/ チェック: ルーム ${targetRoomId}, メンバー数 ${members.length}, ゆゆゆ参加: ${isYuyuyuMember}, DM: ${isDirectChat}`);
 
     if (!isYuyuyuMember) {
-      await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nますたーが参加してないかも。`);
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nますたーが参加してないかも。`);
       return;
     }
 
-    const roomName = roomInfo.name;
-    const memberCount = members.length;
-    const adminCount = members.filter(m => m.role === 'admin').length;
-    const fileCount = roomInfo.file_num || 0;
+    const roomName     = roomInfo.name;
+    const memberCount  = members.length;
+    const adminCount   = members.filter(m => m.role === 'admin').length;
+    const fileCount    = roomInfo.file_num    || 0;
     const messageCount = roomInfo.message_num || 0;
-    const iconPath = roomInfo.icon_path || '';
+    const iconPath     = roomInfo.icon_path   || '';
 
     let iconLink = 'なし';
     if (iconPath) {
-      if (iconPath.startsWith('http')) {
-        iconLink = iconPath;
-      } else {
-        iconLink = `https://appdata.chatwork.com${iconPath}`;
-      }
+      iconLink = iconPath.startsWith('http')
+        ? iconPath
+        : `https://appdata.chatwork.com${iconPath}`;
     }
 
     const admins = members.filter(m => m.role === 'admin');
-    let adminList = '';
-    if (admins.length > 0) {
-      adminList = admins.map(admin => `[picon:${admin.account_id}]`).join(' ');
-    } else {
-      adminList = 'なし';
-    }
+    const adminList = admins.length > 0
+      ? admins.map(admin => `[picon:${admin.account_id}]`).join(' ')
+      : 'なし';
 
-    const infoMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n[info][title]${roomName}の情報だよっ！[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${targetRoomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+    const infoMessage =
+      `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n` +
+      `[info][title]${roomName}の情報だよっ！[/title]` +
+      `部屋名：${roomName}\n` +
+      `メンバー数：${memberCount}人\n` +
+      `管理者数：${adminCount}人\n` +
+      `ルームID：${targetRoomId}\n` +
+      `ファイル数：${fileCount}\n` +
+      `メッセージ数：${messageCount}\n` +
+      `アイコン：${iconLink}\n` +
+      `管理者一覧：${adminList}[/info]`;
+
     await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
   } catch (error) {
     console.error('ルーム情報取得エラー:', error.message);
-    await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nルーム情報の取得中にエラーが発生しちゃった: ${error.message}`);
+    await ChatworkBotUtils.sendChatworkMessage(roomId,
+      `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nルーム情報の取得中にエラーが発生しちゃった: ${error.message}`);
   }
   return;
 }
@@ -1162,6 +1182,116 @@ if (messageBody.startsWith('/info/')) {
       }
     }
 
+    // ----------------------------------------
+// ① /kick {アカウントID} - 管理者専用
+// ----------------------------------------
+// handleCommands 内、例えば /disself の if文の前あたりに追加
+
+if (!isDirectChat && messageBody.startsWith('/kick ') && isSenderAdmin) {
+  const targetId = String(messageBody.substring('/kick '.length).trim());
+  if (targetId) {
+    try {
+      const targetMember = currentMembers.find(m => String(m.account_id) === targetId);
+      if (!targetMember) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]そのIDのメンバーはこの部屋にいないみたい`);
+        return;
+      }
+
+      // キック対象を除いたメンバーリストを作成
+      const admins  = currentMembers.filter(m => m.role === 'admin'    && String(m.account_id) !== targetId).map(m => String(m.account_id));
+      const members = currentMembers.filter(m => m.role === 'member'   && String(m.account_id) !== targetId).map(m => String(m.account_id));
+      const readonly= currentMembers.filter(m => m.role === 'readonly' && String(m.account_id) !== targetId).map(m => String(m.account_id));
+
+      // 管理者が0人になる場合は拒否（ルームが壊れるので）
+      if (admins.length === 0) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]管理者が0人になっちゃうからキックできないよ`);
+        return;
+      }
+
+      const params = new URLSearchParams();
+      if (admins.length  > 0) params.append('members_admin_ids',    admins.join(','));
+      if (members.length > 0) params.append('members_member_ids',   members.join(','));
+      if (readonly.length> 0) params.append('members_readonly_ids', readonly.join(','));
+
+      await apiCallLimiter();
+      await axios.put(
+        `https://api.chatwork.com/v2/rooms/${roomId}/members`,
+        params,
+        { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+      );
+
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[pname:${targetId}]をキックしたよっ！`);
+      console.log(`キック完了: ${targetId} from room ${roomId}`);
+    } catch (error) {
+      console.error('キックエラー:', error.message);
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}]キックに失敗しちゃった: ${error.message}`);
+    }
+  }
+  return;
+}
+
+    // ----------------------------------------
+// ② /mute {アカウントID} - 管理者専用
+// ----------------------------------------
+if (!isDirectChat && messageBody.startsWith('/mute ') && isSenderAdmin) {
+  const targetId = String(messageBody.substring('/mute '.length).trim());
+  if (targetId) {
+    try {
+      const targetMember = currentMembers.find(m => String(m.account_id) === targetId);
+      if (!targetMember) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]そのIDのメンバーはこの部屋にいないみたい`);
+        return;
+      }
+
+      if (targetMember.role === 'readonly') {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${targetId}]はもう閲覧のみだよ`);
+        return;
+      }
+
+      // ミュート対象を除いたリストを作成し、readonlyに追加
+      const admins  = currentMembers.filter(m => m.role === 'admin'    && String(m.account_id) !== targetId).map(m => String(m.account_id));
+      const members = currentMembers.filter(m => m.role === 'member'   && String(m.account_id) !== targetId).map(m => String(m.account_id));
+      const readonly= currentMembers.filter(m => m.role === 'readonly').map(m => String(m.account_id));
+      readonly.push(targetId);
+
+      // 管理者が0人になる場合は拒否
+      if (admins.length === 0) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]管理者が0人になっちゃうからミュートできないよ`);
+        return;
+      }
+
+      const params = new URLSearchParams();
+      if (admins.length  > 0) params.append('members_admin_ids',    admins.join(','));
+      if (members.length > 0) params.append('members_member_ids',   members.join(','));
+      if (readonly.length> 0) params.append('members_readonly_ids', readonly.join(','));
+
+      await apiCallLimiter();
+      await axios.put(
+        `https://api.chatwork.com/v2/rooms/${roomId}/members`,
+        params,
+        { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+      );
+
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[pname:${targetId}]を閲覧のみにしたよっ！`);
+      console.log(`ミュート完了: ${targetId} in room ${roomId}`);
+    } catch (error) {
+      console.error('ミュートエラー:', error.message);
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}]ミュートに失敗しちゃった: ${error.message}`);
+    }
+  }
+  return;
+}
+
+    
     if (!isDirectChat && messageBody === '/disself') {
       try {
         const currentUser = currentMembers.find(m => m.account_id === accountId);
