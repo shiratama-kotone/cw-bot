@@ -1339,8 +1339,8 @@ class WebHookMessageProcessor {
       memoryStorage.toggles.gakusei = !memoryStorage.toggles.gakusei;
       const state = memoryStorage.toggles.gakusei;
       const msg = state
-        ? '学生の確率UPがONになりました。'
-        : '学生の確率UPがOFFになりました。';
+        ? '学生の確率UPがONになったよ！\n確率は、25%だよ！'
+        : '学生の確率UPがOFFになったよ！';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/gakusei トグル: ${state ? 'ON' : 'OFF'}`);
       return;
@@ -1351,8 +1351,8 @@ class WebHookMessageProcessor {
       memoryStorage.toggles.nyanko_a = !memoryStorage.toggles.nyanko_a;
       const state = memoryStorage.toggles.nyanko_a;
       const msg = state
-        ? 'nyanko_aの確率UPがONになりました。'
-        : 'nyanko_aの確率UPがOFFになりました。';
+        ? 'nyanko_aの確率UPがONになったよ！\n確率は、100%だよ！'
+        : 'nyanko_aの確率UPがOFFになったよ！';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/nyanko_a トグル: ${state ? 'ON' : 'OFF'}`);
       return;
@@ -1363,8 +1363,8 @@ class WebHookMessageProcessor {
       memoryStorage.toggles.netto = !memoryStorage.toggles.netto;
       const state = memoryStorage.toggles.netto;
       const msg = state
-        ? '熱湯の確率UPがONになりました。'
-        : '熱湯の確率UPがOFFになりました。';
+        ? '熱湯の確率UPがONになったよ！\n確率は、50%だよ！'
+        : '熱湯の確率UPがOFFになったよ！';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/netto トグル: ${state ? 'ON' : 'OFF'}`);
       return;
@@ -1375,8 +1375,8 @@ class WebHookMessageProcessor {
       memoryStorage.toggles.admin = !memoryStorage.toggles.admin;
       const state = memoryStorage.toggles.admin;
       const msg = state
-        ? '管理者の確率UPがONになりました。'
-        : '管理者の確率UPがOFFになりました。';
+        ? '管理者の確率UPがONになったよ！\n確率は、25%だよ！'
+        : '管理者の確率UPがOFFになったよ！';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/admin トグル: ${state ? 'ON' : 'OFF'}`);
       return;
@@ -1387,8 +1387,8 @@ class WebHookMessageProcessor {
       memoryStorage.toggles.yuyuyu = !memoryStorage.toggles.yuyuyu;
       const state = memoryStorage.toggles.yuyuyu;
       const msg = state
-        ? 'ゆゆゆの確率UPがONになりました。'
-        : 'ゆゆゆの確率UPがOFFになりました。';
+        ? 'ゆゆゆの確率UPがONになったよ！\n確率は、75%だよ！'
+        : 'ゆゆゆの確率UPがOFFになったよ！';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/yuyuyu トグル: ${state ? 'ON' : 'OFF'}`);
       return;
