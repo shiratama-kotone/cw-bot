@@ -58,11 +58,11 @@ const YUYUYU_ACCOUNT_ID = '10544705';
 
 // 天気予報の地域設定
 const WEATHER_AREAS = [
-  { name: '東京', code: '130010' },
-  { name: '大阪', code: '270000' },
-  { name: '名古屋', code: '230010' },
-  { name: '横浜', code: '140010' },
-  { name: '福岡', code: '400010' }
+  { name: 'とーきょー', code: '130010' },
+  { name: 'おーさかー', code: '270000' },
+  { name: 'さっぽろー', code: '016010' },
+  { name: 'なぁーはー', code: '471010' },
+  { name: 'ふくおかー', code: '400010' }
 ];
 
 // メモリ内データストレージ
