@@ -251,12 +251,15 @@ class ChatworkBotUtils {
     const t = memoryStorage.toggles;
     const id = String(accountId);
 
+    console.log(`地雷確率計算: accountId=${id}, isAdmin=${isSenderAdmin}, toggles=${JSON.stringify(t)}`);
+
     if (t.gakusei && id === '9553691')  probability = Math.max(probability, 0.25);
     if (t.nyanko_a && id === '9487124') probability = Math.max(probability, 1.0);
     if (t.netto && id === '11092754')   probability = Math.max(probability, 0.50);
     if (t.admin && isSenderAdmin)       probability = Math.max(probability, 0.25);
     if (t.yuyuyu && id === '10911090')  probability = Math.max(probability, 0.75);
 
+    console.log(`地雷最終確率: ${probability}`);
     return probability;
   }
 
@@ -762,6 +765,8 @@ class WebHookMessageProcessor {
       const accountId = webhookData.account_id;
       const account = webhookData.account || null;
 
+      console.log(`WebHook処理開始: roomId=${roomId}, accountId=${accountId}, messageLength=${messageBody?.length || 0}`);
+
       let userName = '';
       if (account && account.name) {
         userName = account.name;
@@ -831,12 +836,16 @@ class WebHookMessageProcessor {
       }
 
       // ★★★ 地雷踏んだね (LOG_ROOM_IDのみ) ★★★
+      console.log(`地雷チェック: roomId=${roomId} (型=${typeof roomId}), LOG_ROOM_ID=${LOG_ROOM_ID} (型=${typeof LOG_ROOM_ID}), 一致=${String(roomId) === LOG_ROOM_ID}`);
       if (String(roomId) === LOG_ROOM_ID) {
         const jiraiProb = ChatworkBotUtils.getJiraiProbability(accountId, isSenderAdmin);
-        if (Math.random() < jiraiProb) {
+        console.log(`地雷確率: ${jiraiProb} (accountId=${accountId}, isAdmin=${isSenderAdmin})`);
+        const rand = Math.random();
+        console.log(`地雷判定: rand=${rand}, prob=${jiraiProb}, 発動=${rand < jiraiProb}`);
+        if (rand < jiraiProb) {
           const jiraiMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]地雷踏んだね。`;
           await ChatworkBotUtils.sendChatworkMessage(roomId, jiraiMsg);
-          console.log(`地雷踏んだね送信: roomId=${roomId}, accountId=${accountId}, prob=${jiraiProb}`);
+          console.log(`地雷踏んだね送信完了: roomId=${roomId}, accountId=${accountId}`);
         }
       }
 
@@ -878,8 +887,11 @@ class WebHookMessageProcessor {
   }
 
   static async handleCommands(roomId, messageId, accountId, messageBody, isSenderAdmin, isDirectChat, currentMembers) {
+    // [toall]検出（非管理者のみ）
     if (!isDirectChat && messageBody.includes('[toall]') && !isSenderAdmin) {
       console.log(`[toall]を検出した非管理者: ${accountId} in room ${roomId}`);
+      const warningMsg = `[To:${accountId}][pname:${accountId}]ちゃん\n[toall]は管理者しか使えないよ！`;
+      await ChatworkBotUtils.sendChatworkMessage(roomId, warningMsg);
     }
 
     // 歌詞取得コマンド
@@ -902,9 +914,11 @@ class WebHookMessageProcessor {
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
-    if (!isDirectChat && !isSenderAdmin) {
+    // Chatwork絵文字カウント警告
+    if (!isDirectChat) {
       const emojiCount = ChatworkBotUtils.countChatworkEmojis(messageBody);
-      if (emojiCount >= 50) {
+      console.log(`絵文字カウント: ${emojiCount}個 (roomId=${roomId}, accountId=${accountId}, isAdmin=${isSenderAdmin})`);
+      if (emojiCount >= 50 && !isSenderAdmin) {
         const warningMessage = `[To:${accountId}][pname:${accountId}]ちゃん\nChatworkの絵文字を${emojiCount}個送信しちゃったね。できるだけ少ないかずで使おう。`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, warningMessage);
       }
@@ -1334,13 +1348,21 @@ class WebHookMessageProcessor {
 
     // ★★★ 地雷トグルコマンド ★★★
 
+    // /jirai-test コマンド（デバッグ用）
+    if (messageBody === '/jirai-test') {
+      const jiraiProb = ChatworkBotUtils.getJiraiProbability(accountId, isSenderAdmin);
+      const testMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]地雷テスト\n現在の確率: ${(jiraiProb * 100).toFixed(2)}%\nルームID: ${roomId}\nLOG_ROOM_ID: ${LOG_ROOM_ID}\n一致: ${String(roomId) === LOG_ROOM_ID}`;
+      await ChatworkBotUtils.sendChatworkMessage(roomId, testMsg);
+      return;
+    }
+
     // /gakusei トグル
     if (messageBody === '/gakusei') {
       memoryStorage.toggles.gakusei = !memoryStorage.toggles.gakusei;
       const state = memoryStorage.toggles.gakusei;
       const msg = state
-        ? '学生の確率UPがONになったよ！\n確率は、25%だよ！'
-        : '学生の確率UPがOFFになったよ！';
+        ? '学生の確率UPがONになりました。'
+        : '学生の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/gakusei トグル: ${state ? 'ON' : 'OFF'}`);
       return;
@@ -1351,8 +1373,8 @@ class WebHookMessageProcessor {
       memoryStorage.toggles.nyanko_a = !memoryStorage.toggles.nyanko_a;
       const state = memoryStorage.toggles.nyanko_a;
       const msg = state
-        ? 'nyanko_aの確率UPがONになったよ！\n確率は、100%だよ！'
-        : 'nyanko_aの確率UPがOFFになったよ！';
+        ? 'nyanko_aの確率UPがONになりました。'
+        : 'nyanko_aの確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/nyanko_a トグル: ${state ? 'ON' : 'OFF'}`);
       return;
@@ -1363,8 +1385,8 @@ class WebHookMessageProcessor {
       memoryStorage.toggles.netto = !memoryStorage.toggles.netto;
       const state = memoryStorage.toggles.netto;
       const msg = state
-        ? '熱湯の確率UPがONになったよ！\n確率は、50%だよ！'
-        : '熱湯の確率UPがOFFになったよ！';
+        ? '熱湯の確率UPがONになりました。'
+        : '熱湯の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/netto トグル: ${state ? 'ON' : 'OFF'}`);
       return;
@@ -1375,8 +1397,8 @@ class WebHookMessageProcessor {
       memoryStorage.toggles.admin = !memoryStorage.toggles.admin;
       const state = memoryStorage.toggles.admin;
       const msg = state
-        ? '管理者の確率UPがONになったよ！\n確率は、25%だよ！'
-        : '管理者の確率UPがOFFになったよ！';
+        ? '管理者の確率UPがONになりました。'
+        : '管理者の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/admin トグル: ${state ? 'ON' : 'OFF'}`);
       return;
@@ -1387,8 +1409,8 @@ class WebHookMessageProcessor {
       memoryStorage.toggles.yuyuyu = !memoryStorage.toggles.yuyuyu;
       const state = memoryStorage.toggles.yuyuyu;
       const msg = state
-        ? 'ゆゆゆの確率UPがONになったよ！\n確率は、75%だよ！'
-        : 'ゆゆゆの確率UPがOFFになったよ！';
+        ? 'ゆゆゆの確率UPがONになりました。'
+        : 'ゆゆゆの確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/yuyuyu トグル: ${state ? 'ON' : 'OFF'}`);
       return;
