@@ -51,7 +51,7 @@ async function initializeDatabase() {
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
 const INFO_API_TOKEN = process.env.INFO_API_TOKEN || '';
-const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,407676893,415060980,406897783,391699365').split(',');
+const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,415060980,406897783,391699365').split(',');
 const LOG_ROOM_ID = '404646956';
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
 const YUYUYU_ACCOUNT_ID = '10544705';
