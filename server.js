@@ -51,18 +51,18 @@ async function initializeDatabase() {
 // 環境変数から設定を読み込み
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
 const INFO_API_TOKEN = process.env.INFO_API_TOKEN || '';
-const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,415060980,406897783,391699365').split(',');
+const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,407676893,415060980,406897783,391699365').split(',');
 const LOG_ROOM_ID = '404646956';
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
 const YUYUYU_ACCOUNT_ID = '10544705';
 
 // 天気予報の地域設定
 const WEATHER_AREAS = [
-  { name: 'とーきょー', code: '130010' },
-  { name: 'おーさかー', code: '270000' },
-  { name: 'さっぽろー', code: '016010' },
-  { name: 'なぁーはー', code: '471010' },
-  { name: 'ふくおかー', code: '400010' }
+  { name: '東京', code: '130010' },
+  { name: '大阪', code: '270000' },
+  { name: '名古屋', code: '230010' },
+  { name: '横浜', code: '140010' },
+  { name: '福岡', code: '400010' }
 ];
 
 // メモリ内データストレージ
@@ -2063,6 +2063,58 @@ async function checkEarthquakeInfo() {
   }
 }
 
+// 3/11 14:45 東日本大震災追悼メッセージ
+async function send311Memorial() {
+  try {
+    console.log('3/11 追悼メッセージを送信します');
+    
+    const now = new Date();
+    const jstDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+    const currentYear = jstDate.getFullYear();
+    const yearsSince = currentYear - 2011;
+    
+    const message = `今日は3月11日。東日本大震災から${yearsSince}年が経ちました。
+2011年3月11日14時46分、日本は観測史上最大級の地震と大津波に見舞われ、多くの尊い命が失われました。
+今もなお、あの日の記憶や想いを胸に生きている方々がいます。
+
+普段の何気ない日常が、決して当たり前ではないことを改めて考える日でもあります。
+震災で亡くなられた方々、そして被災されたすべての方々に心を寄せたいと思います。
+
+まもなく14時46分です。
+犠牲になられた方々へ、黙祷を捧げましょう。`;
+
+    for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+      try {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, message);
+        console.log(`3/11追悼メッセージ送信完了: ルーム ${roomId}`);
+      } catch (error) {
+        console.error(`ルーム ${roomId} への3/11追悼メッセージ送信エラー:`, error.message);
+      }
+    }
+  } catch (error) {
+    console.error('3/11追悼メッセージ送信処理エラー:', error.message);
+  }
+}
+
+// 3/11 14:46 黙祷メッセージ
+async function send311Silence() {
+  try {
+    console.log('3/11 黙祷メッセージを送信します');
+    const message = '黙祷';
+
+    for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+      try {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, message);
+        console.log(`3/11黙祷メッセージ送信完了: ルーム ${roomId}`);
+      } catch (error) {
+        console.error(`ルーム ${roomId} への3/11黙祷メッセージ送信エラー:`, error.message);
+      }
+    }
+  } catch (error) {
+    console.error('3/11黙祷メッセージ送信処理エラー:', error.message);
+  }
+}
+
 // cron: おはようせかい
 cron.schedule('0 0 0 * * *', async () => {
   await ohayosekai();
@@ -2101,6 +2153,16 @@ cron.schedule('0 0 18 * * *', async () => {
 // cron: 1分ごとに地震情報をチェック
 cron.schedule('*/1 * * * *', async () => {
   await checkEarthquakeInfo();
+}, { timezone: "Asia/Tokyo" });
+
+// cron: 3月11日14:45 東日本大震災追悼メッセージ
+cron.schedule('45 14 11 3 *', async () => {
+  await send311Memorial();
+}, { timezone: "Asia/Tokyo" });
+
+// cron: 3月11日14:46 黙祷
+cron.schedule('46 14 11 3 *', async () => {
+  await send311Silence();
 }, { timezone: "Asia/Tokyo" });
 
 // サーバー起動
