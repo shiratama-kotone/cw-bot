@@ -16,9 +16,10 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
-// データベース初期化
+// データベース初期化（すべてのテーブル作成）
 async function initializeDatabase() {
   try {
+    // 既存のwebhooksテーブル
     await pool.query(`
       CREATE TABLE IF NOT EXISTS webhooks (
         id SERIAL PRIMARY KEY,
@@ -42,9 +43,100 @@ async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_webhooks_room_send ON webhooks(room_id, send_time);
     `);
 
+    // メッセージログテーブル (ルーム415060980のみ、1日保管)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS message_logs (
+        id SERIAL PRIMARY KEY,
+        room_id BIGINT NOT NULL,
+        account_id BIGINT NOT NULL,
+        message_body TEXT,
+        send_time BIGINT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_message_logs_created ON message_logs(created_at);
+      CREATE INDEX IF NOT EXISTS idx_message_logs_room ON message_logs(room_id);
+    `);
+
+    // 地雷トグル状態テーブル
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS jirai_toggles (
+        id SERIAL PRIMARY KEY,
+        toggle_name VARCHAR(50) UNIQUE NOT NULL,
+        is_enabled BOOLEAN DEFAULT FALSE,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 初期データ挿入
+    const toggles = ['gakusei', 'nyanko_a', 'netto', 'admin', 'yuyuyu'];
+    for (const toggle of toggles) {
+      await pool.query(
+        'INSERT INTO jirai_toggles (toggle_name, is_enabled) VALUES ($1, $2) ON CONFLICT (toggle_name) DO NOTHING',
+        [toggle, false]
+      );
+    }
+
+    // アラームテーブル
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS alarms (
+        id SERIAL PRIMARY KEY,
+        room_id BIGINT NOT NULL,
+        scheduled_time TIMESTAMP NOT NULL,
+        message TEXT NOT NULL,
+        created_by BIGINT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alarms_scheduled ON alarms(scheduled_time);
+    `);
+
+    // 累計発言数テーブル
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS total_message_counts (
+        id SERIAL PRIMARY KEY,
+        room_id BIGINT NOT NULL,
+        account_id BIGINT NOT NULL,
+        message_count BIGINT DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(room_id, account_id)
+      )
+    `);
+
     console.log('データベーステーブル初期化完了');
   } catch (error) {
     console.error('データベース初期化エラー:', error.message);
+  }
+}
+
+// データベースから地雷トグル状態を読み込み
+async function loadJiraiToggles() {
+  try {
+    const result = await pool.query('SELECT toggle_name, is_enabled FROM jirai_toggles');
+    const toggles = {};
+    result.rows.forEach(row => {
+      toggles[row.toggle_name] = row.is_enabled;
+    });
+    return toggles;
+  } catch (error) {
+    console.error('地雷トグル読み込みエラー:', error.message);
+    return { gakusei: false, nyanko_a: false, netto: false, admin: false, yuyuyu: false };
+  }
+}
+
+// 地雷トグル状態を保存
+async function saveJiraiToggle(toggleName, isEnabled) {
+  try {
+    await pool.query(
+      'UPDATE jirai_toggles SET is_enabled = $1, updated_at = NOW() WHERE toggle_name = $2',
+      [isEnabled, toggleName]
+    );
+  } catch (error) {
+    console.error('地雷トグル保存エラー:', error.message);
   }
 }
 
@@ -52,9 +144,11 @@ async function initializeDatabase() {
 const CHATWORK_API_TOKEN = process.env.CHATWORK_API_TOKEN || '';
 const INFO_API_TOKEN = process.env.INFO_API_TOKEN || '';
 const DIRECT_CHAT_WITH_DATE_CHANGE = (process.env.DIRECT_CHAT_WITH_DATE_CHANGE || '405497983,407676893,415060980,406897783,391699365').split(',');
-const LOG_ROOM_ID = '404646956';
+const LOG_ROOM_ID = '415060980'; // ウェルカムメッセージ&地雷の部屋（ログ送信元）
+const LOG_DESTINATION_ROOM_ID = '420890621'; // ログ送信先
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
 const YUYUYU_ACCOUNT_ID = '10544705';
+const BOT_ACCOUNT_ID = '10386947'; // botのアカウントID
 
 // 天気予報の地域設定
 const WEATHER_AREAS = [
@@ -207,9 +301,9 @@ class ChatworkBotUtils {
         return;
       }
       const logMessage = `[info][title]${userName}[/title]${messageBody}[/info]`;
-      console.log(`ログ送信: ルーム ${LOG_ROOM_ID} へ`);
-      await this.sendChatworkMessage(LOG_ROOM_ID, logMessage);
-      console.log(`ログ送信完了: ルーム ${LOG_ROOM_ID}`);
+      console.log(`ログ送信: ルーム ${LOG_DESTINATION_ROOM_ID} へ`);
+      await this.sendChatworkMessage(LOG_DESTINATION_ROOM_ID, logMessage);
+      console.log(`ログ送信完了: ルーム ${LOG_DESTINATION_ROOM_ID}`);
     } catch (error) {
       console.error('Chatworkログ送信エラー:', error.message);
     }
@@ -245,19 +339,20 @@ class ChatworkBotUtils {
   }
 
   // ★ 地雷確率計算
-  static getJiraiProbability(accountId, isSenderAdmin) {
+  // 地雷確率計算（データベースから読み込み）
+  static async getJiraiProbability(accountId, isSenderAdmin) {
     let probability = 0.0005; // 基本0.05%
 
-    const t = memoryStorage.toggles;
+    const toggles = await loadJiraiToggles();
     const id = String(accountId);
 
-    console.log(`地雷確率計算: accountId=${id}, isAdmin=${isSenderAdmin}, toggles=${JSON.stringify(t)}`);
+    console.log(`地雷確率計算: accountId=${id}, isAdmin=${isSenderAdmin}, toggles=${JSON.stringify(toggles)}`);
 
-    if (t.gakusei && id === '9553691')  probability = Math.max(probability, 0.25);
-    if (t.nyanko_a && id === '9487124') probability = Math.max(probability, 1.0);
-    if (t.netto && id === '11092754')   probability = Math.max(probability, 0.50);
-    if (t.admin && isSenderAdmin)       probability = Math.max(probability, 0.25);
-    if (t.yuyuyu && id === '10911090')  probability = Math.max(probability, 0.75);
+    if (toggles.gakusei && id === '9553691')  probability = Math.max(probability, 0.25);
+    if (toggles.nyanko_a && id === '9487124') probability = Math.max(probability, 1.0);
+    if (toggles.netto && id === '11092754')   probability = Math.max(probability, 0.50);
+    if (toggles.admin && isSenderAdmin)       probability = Math.max(probability, 0.25);
+    if (toggles.yuyuyu && id === '10911090')  probability = Math.max(probability, 0.75);
 
     console.log(`地雷最終確率: ${probability}`);
     return probability;
@@ -425,8 +520,64 @@ class ChatworkBotUtils {
         lyrics = lyrics.replace(/<br\s*\/?>/gi, '\n')
                       .replace(/<[^>]+>/g, '')
                       .trim();
+      } else if (url.includes('atwiki.jp')) {
+        // @wikiの処理
+        // 曲名を「曲紹介」セクションから取得
+        const songIntroH3 = $('h3:contains("曲紹介")');
+        if (songIntroH3.length > 0) {
+          let currentElement = songIntroH3.next();
+          while (currentElement.length > 0 && !currentElement.is('h3')) {
+            const text = currentElement.text();
+            const match = text.match(/曲名：[『「]?(.+?)[』」]?[（(]/);
+            if (match) {
+              title = match[1].replace(/<u>|<\/u>/g, '').trim();
+              break;
+            }
+            currentElement = currentElement.next();
+          }
+        }
+        
+        // タイトルが見つからなければページタイトルから取得
+        if (!title) {
+          title = $('title').text().trim();
+          if (title.includes(' - ')) {
+            title = title.split(' - ')[0].trim();
+          }
+        }
+
+        // 歌詞セクションを抽出
+        const lyricsStart = $('h3:contains("歌詞")');
+        const relatedStart = $('h3:contains("関連動画")');
+        
+        if (lyricsStart.length === 0) {
+          return '歌詞セクションが見つからなかったよ';
+        }
+
+        // 歌詞セクションと関連動画セクションの間のdivを取得
+        let lyricsHtml = '';
+        let currentElement = lyricsStart.next();
+        
+        while (currentElement.length > 0) {
+          if (currentElement.is('h3') && currentElement.text().includes('関連動画')) {
+            break;
+          }
+          if (currentElement.is('div') || currentElement.is('br')) {
+            lyricsHtml += $.html(currentElement);
+          }
+          currentElement = currentElement.next();
+        }
+
+        // HTMLを整形
+        lyrics = lyricsHtml
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<div>/gi, '')
+          .replace(/<\/div>/gi, '\n')
+          .replace(/<[^>]+>/g, '')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+
       } else {
-        return '対応していないURLだよっ！utaten.comまたはuta-net.comのURLを指定してねっ！';
+        return '対応していないURLだよっ！utaten.com、uta-net.com、またはatwiki.jpのURLを指定してねっ！';
       }
 
       if (!title || !lyrics) {
@@ -437,6 +588,82 @@ class ChatworkBotUtils {
     } catch (error) {
       console.error('歌詞取得エラー:', error.message);
       return `歌詞の取得中にエラーが発生しちゃった: ${error.message}`;
+    }
+  }
+
+  // 歌詞タイピング情報取得
+  static async getSongTypingInfo(songId) {
+    try {
+      const response = await axios.get(
+        'https://shiratama-kotone.github.io/typing-game/song-typing/lyrics-data.js',
+        { timeout: 10000 }
+      );
+      
+      const jsCode = response.data;
+      
+      // lyricsDataを抽出（正規表現で安全に）
+      const match = jsCode.match(/const\s+lyricsData\s*=\s*(\[[\s\S]*?\]);/);
+      if (!match) {
+        return '歌詞データの解析に失敗しちゃった';
+      }
+
+      // JSONとして評価（安全にパース）
+      let lyricsData;
+      try {
+        // Function constructorを使って安全にコードを実行
+        const func = new Function(`return ${match[1]};`);
+        lyricsData = func();
+      } catch (e) {
+        return '歌詞データの解析に失敗しちゃった';
+      }
+
+      // 曲IDで検索
+      const song = lyricsData.find(s => s.id === songId);
+      if (!song) {
+        return `曲ID「${songId}」が見つからなかったよ`;
+      }
+
+      // 総打数計算
+      let totalCount = 0;
+      song.lyrics.forEach(line => {
+        totalCount += line.kana.length;
+      });
+
+      // ライン数
+      const lineCount = song.lyrics.length;
+
+      // YouTubeから動画の長さを取得
+      let duration = '取得中...';
+      try {
+        const ytResponse = await axios.get(
+          `https://www.youtube.com/watch?v=${song.youtubeId}`,
+          { timeout: 5000 }
+        );
+        
+        const durationMatch = ytResponse.data.match(/"lengthSeconds":"(\d+)"/);
+        if (durationMatch) {
+          const seconds = parseInt(durationMatch[1]);
+          const minutes = Math.floor(seconds / 60);
+          const secs = seconds % 60;
+          duration = `${minutes}:${String(secs).padStart(2, '0')}`;
+        }
+      } catch (e) {
+        duration = '取得失敗';
+      }
+
+      // 必要平均タイプ速度計算（打/秒）
+      let avgSpeed = '計算中...';
+      if (duration !== '取得中...' && duration !== '取得失敗') {
+        const [min, sec] = duration.split(':').map(Number);
+        const totalSeconds = min * 60 + sec;
+        const speed = (totalCount / totalSeconds).toFixed(2);
+        avgSpeed = `${speed}打/秒`;
+      }
+
+      return `[info][title]${song.title}の歌詞タイピング情報[/title]総打数：${totalCount}\n曲の長さ：${duration}\n必要平均タイプ速度：${avgSpeed}\nライン数：${lineCount}[/info]`;
+    } catch (error) {
+      console.error('歌詞タイピング情報取得エラー:', error.message);
+      return `歌詞タイピング情報の取得中にエラーが発生しちゃった: ${error.message}`;
     }
   }
 
@@ -510,6 +737,21 @@ class ChatworkBotUtils {
     } catch (error) {
       console.error(`メッセージ取得エラー (${roomId}/${messageId}):`, error.message);
       return null;
+    }
+  }
+
+  static async deleteMessage(roomId, messageId) {
+    await apiCallLimiter();
+    try {
+      await axios.delete(
+        `https://api.chatwork.com/v2/rooms/${roomId}/messages/${messageId}`,
+        { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+      );
+      console.log(`メッセージ削除成功: ${roomId}/${messageId}`);
+      return true;
+    } catch (error) {
+      console.error(`メッセージ削除エラー (${roomId}/${messageId}):`, error.message);
+      return false;
     }
   }
 
@@ -755,17 +997,64 @@ class WebHookMessageProcessor {
     }
   }
 
+  // メッセージログをデータベースに保存（ルーム415060980のみ、編集は除外）
+  static async saveMessageLog(webhookData) {
+    try {
+      const roomId = String(webhookData.room_id);
+      const eventType = webhookData.webhook_event_type || 'message_created';
+      
+      // ルーム415060980のみ、かつ新規メッセージのみ
+      if (roomId !== LOG_ROOM_ID || eventType !== 'message_created') {
+        return;
+      }
+
+      const accountId = webhookData.account_id;
+      const messageBody = webhookData.body || '';
+      const sendTime = webhookData.send_time;
+
+      await pool.query(
+        'INSERT INTO message_logs (room_id, account_id, message_body, send_time) VALUES ($1, $2, $3, $4)',
+        [roomId, accountId, messageBody, sendTime]
+      );
+
+      console.log(`メッセージログ保存: ルーム ${roomId}, アカウント ${accountId}`);
+    } catch (error) {
+      console.error('メッセージログ保存エラー:', error.message);
+    }
+  }
+
+  // 累計発言数を更新
+  static async updateTotalMessageCount(roomId, accountId) {
+    try {
+      await pool.query(`
+        INSERT INTO total_message_counts (room_id, account_id, message_count)
+        VALUES ($1, $2, 1)
+        ON CONFLICT (room_id, account_id)
+        DO UPDATE SET message_count = total_message_counts.message_count + 1, updated_at = NOW()
+      `, [roomId, accountId]);
+    } catch (error) {
+      console.error('累計発言数更新エラー:', error.message);
+    }
+  }
+
   static async processWebHookMessage(webhookData) {
     try {
       await this.saveWebhookToDatabase(webhookData);
+      await this.saveMessageLog(webhookData);
 
       const roomId = webhookData.room_id;
       const messageBody = webhookData.body;
       const messageId = webhookData.message_id;
       const accountId = webhookData.account_id;
       const account = webhookData.account || null;
+      const eventType = webhookData.webhook_event_type || 'message_created';
 
-      console.log(`WebHook処理開始: roomId=${roomId}, accountId=${accountId}, messageLength=${messageBody?.length || 0}`);
+      console.log(`WebHook処理開始: roomId=${roomId}, accountId=${accountId}, eventType=${eventType}, messageLength=${messageBody?.length || 0}`);
+
+      // 新規メッセージのみ累計発言数を更新
+      if (eventType === 'message_created') {
+        await this.updateTotalMessageCount(roomId, accountId);
+      }
 
       let userName = '';
       if (account && account.name) {
@@ -897,13 +1186,110 @@ class WebHookMessageProcessor {
     // 歌詞取得コマンド
     if (messageBody.startsWith('/lyric ')) {
       const url = messageBody.substring('/lyric '.length).trim();
-      if (url && (url.includes('utaten.com') || url.includes('uta-net.com'))) {
+      if (url && (url.includes('utaten.com') || url.includes('uta-net.com') || url.includes('atwiki.jp'))) {
         const lyrics = await ChatworkBotUtils.getLyrics(url);
         const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${lyrics}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       } else {
-        const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]\nつかいかたは /lyric {utaten.comまたはuta-net.comのURL} だよ`;
+        const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]\nつかいかたは /lyric {utaten.com、uta-net.com、またはatwiki.jpのURL} だよ`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, errorMessage);
+      }
+      return;
+    }
+
+    // ★★★ Botメッセージ削除機能 ★★★
+    const deleteKeywords = ['削除', 'delete', '/del', 'けして'];
+    if (deleteKeywords.some(keyword => messageBody.includes(keyword))) {
+      // 返信先メッセージIDを抽出
+      const rpMatch = messageBody.match(/\[rp aid=(\d+) to=(\d+)-(\d+)\]/);
+      if (rpMatch) {
+        const targetMessageId = rpMatch[3];
+        // メッセージを取得して送信者を確認
+        const targetMessage = await ChatworkBotUtils.getMessage(roomId, targetMessageId);
+        if (targetMessage && String(targetMessage.account.account_id) === BOT_ACCOUNT_ID) {
+          // Botのメッセージなら削除
+          const deleted = await ChatworkBotUtils.deleteMessage(roomId, targetMessageId);
+          if (deleted) {
+            console.log(`Botメッセージ削除成功: ${targetMessageId}`);
+          }
+        }
+      }
+    }
+
+    // ★★★ /song-typing-info コマンド ★★★
+    if (messageBody.startsWith('/song-typing-info ')) {
+      const songId = messageBody.substring('/song-typing-info '.length).trim();
+      if (songId) {
+        const info = await ChatworkBotUtils.getSongTypingInfo(songId);
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${info}`;
+        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+      } else {
+        const errorMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]\nつかいかたは /song-typing-info {曲ID} だよ`;
+        await ChatworkBotUtils.sendChatworkMessage(roomId, errorMessage);
+      }
+      return;
+    }
+
+    // ★★★ /alarm コマンド ★★★
+    if (messageBody.startsWith('/alarm ')) {
+      const argsPart = messageBody.substring('/alarm '.length).trim();
+      const match = argsPart.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})\s+(.+)$/);
+      
+      if (!match) {
+        const errorMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]使い方: /alarm YYYY-MM-DD HH:MM メッセージ内容\n例: /alarm 2026-03-23 23:30 おやすみ！`;
+        await ChatworkBotUtils.sendChatworkMessage(roomId, errorMsg);
+        return;
+      }
+      
+      const [, date, time, message] = match;
+      const scheduledTime = new Date(`${date}T${time}:00+09:00`);
+      
+      try {
+        await pool.query(
+          'INSERT INTO alarms (room_id, scheduled_time, message, created_by) VALUES ($1, $2, $3, $4)',
+          [roomId, scheduledTime, message, accountId]
+        );
+        
+        const confirmMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]アラームを設定したよ！\n${scheduledTime.toLocaleString('ja-JP', {timeZone: 'Asia/Tokyo'})} に「${message}」を送信するね`;
+        await ChatworkBotUtils.sendChatworkMessage(roomId, confirmMsg);
+      } catch (error) {
+        console.error('アラーム設定エラー:', error.message);
+        const errorMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]アラーム設定に失敗しちゃった: ${error.message}`;
+        await ChatworkBotUtils.sendChatworkMessage(roomId, errorMsg);
+      }
+      return;
+    }
+
+    // ★★★ /message-total コマンド ★★★
+    if (messageBody === '/message-total') {
+      try {
+        const result = await pool.query(
+          'SELECT account_id, message_count FROM total_message_counts WHERE room_id = $1 ORDER BY message_count DESC',
+          [roomId]
+        );
+
+        if (result.rows.length === 0) {
+          const msg = `[rp aid=${accountId} to=${roomId}-${messageId}]この部屋の累計発言数はまだないみたい`;
+          await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
+          return;
+        }
+
+        let rankingMessage = '[info][title]累計発言数ランキング[/title]\n';
+        result.rows.forEach((row, index) => {
+          rankingMessage += `${index + 1}位：[piconname:${row.account_id}] ${row.message_count}コメ`;
+          if (index < result.rows.length - 1) {
+            rankingMessage += '\n[hr]';
+          }
+          rankingMessage += '\n';
+        });
+
+        const totalCount = result.rows.reduce((sum, row) => sum + parseInt(row.message_count), 0);
+        rankingMessage += `\n合計：${totalCount}コメ[/info]`;
+
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${rankingMessage}`;
+        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+      } catch (error) {
+        console.error('累計発言数取得エラー:', error.message);
       }
       return;
     }
@@ -1356,69 +1742,90 @@ class WebHookMessageProcessor {
       return;
     }
 
+    // /jirai-force コマンド（強制発動テスト用）
+    if (messageBody === '/jirai-force') {
+      const jiraiMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]地雷踏んだね。（強制発動テスト）`;
+      await ChatworkBotUtils.sendChatworkMessage(roomId, jiraiMsg);
+      console.log(`地雷強制発動: roomId=${roomId}, accountId=${accountId}`);
+      return;
+    }
+
+    // /gakusei トグル
+    // ★★★ 地雷トグルコマンド（データベースに保存） ★★★
+
     // /gakusei トグル
     if (messageBody === '/gakusei') {
-      memoryStorage.toggles.gakusei = !memoryStorage.toggles.gakusei;
-      const state = memoryStorage.toggles.gakusei;
-      const msg = state
-        ? '学生の確率UPがONになりました。'
+      const toggles = await loadJiraiToggles();
+      const newState = !toggles.gakusei;
+      await saveJiraiToggle('gakusei', newState);
+      
+      const msg = newState
+        ? '学生の確率UPがONになりました。(確率：25%)'
         : '学生の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
-      console.log(`/gakusei トグル: ${state ? 'ON' : 'OFF'}`);
+      console.log(`/gakusei トグル: ${newState ? 'ON' : 'OFF'}`);
       return;
     }
 
     // /nyanko_a トグル
     if (messageBody === '/nyanko_a') {
-      memoryStorage.toggles.nyanko_a = !memoryStorage.toggles.nyanko_a;
-      const state = memoryStorage.toggles.nyanko_a;
-      const msg = state
-        ? 'nyanko_aの確率UPがONになりました。'
+      const toggles = await loadJiraiToggles();
+      const newState = !toggles.nyanko_a;
+      await saveJiraiToggle('nyanko_a', newState);
+      
+      const msg = newState
+        ? 'nyanko_aの確率UPがONになりました。(確率：100%)'
         : 'nyanko_aの確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
-      console.log(`/nyanko_a トグル: ${state ? 'ON' : 'OFF'}`);
+      console.log(`/nyanko_a トグル: ${newState ? 'ON' : 'OFF'}`);
       return;
     }
 
     // /netto トグル
     if (messageBody === '/netto') {
-      memoryStorage.toggles.netto = !memoryStorage.toggles.netto;
-      const state = memoryStorage.toggles.netto;
-      const msg = state
-        ? '熱湯の確率UPがONになりました。'
+      const toggles = await loadJiraiToggles();
+      const newState = !toggles.netto;
+      await saveJiraiToggle('netto', newState);
+      
+      const msg = newState
+        ? '熱湯の確率UPがONになりました。(確率：50%)'
         : '熱湯の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
-      console.log(`/netto トグル: ${state ? 'ON' : 'OFF'}`);
+      console.log(`/netto トグル: ${newState ? 'ON' : 'OFF'}`);
       return;
     }
 
     // /admin トグル
     if (messageBody === '/admin') {
-      memoryStorage.toggles.admin = !memoryStorage.toggles.admin;
-      const state = memoryStorage.toggles.admin;
-      const msg = state
-        ? '管理者の確率UPがONになりました。'
+      const toggles = await loadJiraiToggles();
+      const newState = !toggles.admin;
+      await saveJiraiToggle('admin', newState);
+      
+      const msg = newState
+        ? '管理者の確率UPがONになりました。(確率：25%)'
         : '管理者の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
-      console.log(`/admin トグル: ${state ? 'ON' : 'OFF'}`);
+      console.log(`/admin トグル: ${newState ? 'ON' : 'OFF'}`);
       return;
     }
 
     // /yuyuyu トグル
     if (messageBody === '/yuyuyu') {
-      memoryStorage.toggles.yuyuyu = !memoryStorage.toggles.yuyuyu;
-      const state = memoryStorage.toggles.yuyuyu;
-      const msg = state
-        ? 'ゆゆゆの確率UPがONになりました。'
+      const toggles = await loadJiraiToggles();
+      const newState = !toggles.yuyuyu;
+      await saveJiraiToggle('yuyuyu', newState);
+      
+      const msg = newState
+        ? 'ゆゆゆの確率UPがONになりました。(確率：75%)'
         : 'ゆゆゆの確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
-      console.log(`/yuyuyu トグル: ${state ? 'ON' : 'OFF'}`);
+      console.log(`/yuyuyu トグル: ${newState ? 'ON' : 'OFF'}`);
       return;
     }
 
     const responses = {
       'はんせい': `[To:10911090] はんせい\n[pname:${accountId}]に呼ばれてるよっ！`,
-      'ゆゆゆ': `[To:10544705] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよっ！`,
+      'ゆゆゆ': `[To:10911090] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよっ！`,
       'からめり': `[To:10337719] からめり\n[pname:${accountId}]に呼ばれてるよっ！`,
       '学生':`[To:9553691] がっくせい\n[pname:${accountId}]に呼ばれてるよっ！`,
       'みおん':`はーい！`,
@@ -1687,16 +2094,20 @@ app.post('/test-message', async (req, res) => {
 // 統計・管理用エンドポイント
 app.get('/status', async (req, res) => {
   try {
+    const toggles = await loadJiraiToggles();
+    
     res.json({
       status: '元気！',
       mode: '全部のルームをみてるよ！',
-      storage: 'ぼくの頭のなかにぜーんぶ入ってる！',
+      storage: 'PostgreSQL + Memory',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       logRoomId: LOG_ROOM_ID,
+      logDestinationRoomId: LOG_DESTINATION_ROOM_ID,
+      botAccountId: BOT_ACCOUNT_ID,
       dayJsonUrl: DAY_JSON_URL,
       directChatRooms: DIRECT_CHAT_WITH_DATE_CHANGE,
-      toggles: memoryStorage.toggles,
+      jiraiToggles: toggles,
       memoryUsage: {
         apiCacheSize: API_CACHE.size,
         lastSentDatesSize: memoryStorage.lastSentDates.size,
@@ -2115,6 +2526,42 @@ async function send311Silence() {
   }
 }
 
+// 2日前のメッセージログを削除（ルーム415060980のみ）
+async function cleanupOldMessageLogs() {
+  try {
+    const twoDaysAgo = new Date();
+    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+    
+    const result = await pool.query(
+      'DELETE FROM message_logs WHERE created_at < $1 AND room_id = $2',
+      [twoDaysAgo, LOG_ROOM_ID]
+    );
+    
+    console.log(`古いメッセージログを削除: ${result.rowCount}件`);
+  } catch (error) {
+    console.error('メッセージログ削除エラー:', error.message);
+  }
+}
+
+// アラームチェック＆送信
+async function checkAndSendAlarms() {
+  try {
+    const now = new Date();
+    const result = await pool.query(
+      'SELECT * FROM alarms WHERE scheduled_time <= $1',
+      [now]
+    );
+    
+    for (const alarm of result.rows) {
+      await ChatworkBotUtils.sendChatworkMessage(alarm.room_id, alarm.message);
+      await pool.query('DELETE FROM alarms WHERE id = $1', [alarm.id]);
+      console.log(`アラーム送信完了: ID ${alarm.id}`);
+    }
+  } catch (error) {
+    console.error('アラームチェックエラー:', error.message);
+  }
+}
+
 // cron: おはようせかい
 cron.schedule('0 0 0 * * *', async () => {
   await ohayosekai();
@@ -2123,6 +2570,11 @@ cron.schedule('0 0 0 * * *', async () => {
 // cron: 毎日0時0分に実行
 cron.schedule('0 0 0 * * *', async () => {
   await sendDailyGreetingMessages();
+}, { timezone: "Asia/Tokyo" });
+
+// cron: 毎日0時5分に古いログ削除
+cron.schedule('5 0 0 * * *', async () => {
+  await cleanupOldMessageLogs();
 }, { timezone: "Asia/Tokyo" });
 
 // cron: 毎日23時0分に実行
@@ -2155,6 +2607,11 @@ cron.schedule('*/1 * * * *', async () => {
   await checkEarthquakeInfo();
 }, { timezone: "Asia/Tokyo" });
 
+// cron: 1分ごとにアラームをチェック
+cron.schedule('*/1 * * * *', async () => {
+  await checkAndSendAlarms();
+}, { timezone: "Asia/Tokyo" });
+
 // cron: 3月11日14:45 東日本大震災追悼メッセージ
 cron.schedule('45 14 11 3 *', async () => {
   await send311Memorial();
@@ -2174,12 +2631,11 @@ app.listen(port, async () => {
   console.log('- INFO_API_TOKEN:', INFO_API_TOKEN ? '設定済みだよ' : '未設定かも');
   console.log('- DATABASE_URLは', process.env.DATABASE_URL ? '設定済みだよ' : '未設定かも');
   console.log('- DIRECT_CHAT_WITH_DATE_CHANGEは', DIRECT_CHAT_WITH_DATE_CHANGE);
-  console.log('- LOG_ROOM_IDは', LOG_ROOM_ID, '(固定)');
+  console.log('- LOG_ROOM_IDは', LOG_ROOM_ID, '(ウェルカム&地雷の部屋、ログ送信元)');
+  console.log('- LOG_DESTINATION_ROOM_IDは', LOG_DESTINATION_ROOM_ID, '(ログ送信先)');
+  console.log('- BOT_ACCOUNT_IDは', BOT_ACCOUNT_ID);
   console.log('- DAY_JSON_URLは', DAY_JSON_URL);
-  console.log('動作モードはすべてのルームで反応、ログは', LOG_ROOM_ID, 'のみだよ');
-
-  console.log('\nデータベースを初期化するね...');
-  await initializeDatabase();
+  console.log('動作モードはすべてのルームで反応、ログは', LOG_ROOM_ID, 'から', LOG_DESTINATION_ROOM_ID, 'へ送信だよ');
 
   console.log('\nメッセージカウントを初期化するね...');
   for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
