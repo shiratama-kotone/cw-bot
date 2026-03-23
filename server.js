@@ -193,11 +193,12 @@ async function apiCallLimiter() {
 
 // Chatwork絵文字のリスト
 const CHATWORK_EMOJI_CODES = [
-  "roger", "bow", "cracker", "dance", "clap", "y", "sweat", "blush", "inlove",
-  "talk", "yawn", "puke", "emo", "nod", "shake", "^^;", ":/", "whew", "flex",
-  "gogo", "think", "please", "quick", "anger", "devil", "lightbulb", "h", "F",
-  "eat", "^", "coffee", "beer", "handshake"
-].map(code => code.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'));
+  ":)", ":(", ":D", "8-)", ":o", ";)", ";(", "sweat", ":|", ":*", ":p", "blush",
+  ":^)", "|-)", "inlove", "]:)", "talk", "yawn", "puke", "emo", "8-|", ":#)",
+  "nod", "shake", "^^;", "whew", "clap", "bow", "roger", "flex", "dance", ":/",
+  "gogo", "think", "please", "quick", "anger", "devil", "lightbulb", "*", "h",
+  "F", "cracker", "eat", "^", "coffee", "beer", "handshake", "y", "ec14"
+].map(code => code.replace(/[-\/\\^$*+?.()|[\]{}:*]/g, '\\$&'));
 const CHATWORK_EMOJI_REGEX = new RegExp(`\\((${CHATWORK_EMOJI_CODES.join('|')})\\)`, 'g');
 
 // APIキャッシュ
@@ -712,6 +713,42 @@ class ChatworkBotUtils {
     }
   }
 
+  // 累計発言数をデータベースとAPIから初期化
+  static async initializeTotalMessageCounts(roomId) {
+    try {
+      console.log(`ルーム ${roomId} の累計発言数を初期化中...`);
+      
+      // まずデータベースから既存のwebhooksデータを集計
+      const dbResult = await pool.query(
+        'SELECT account_id, COUNT(*) as count FROM webhooks WHERE room_id = $1 AND webhook_event_type = $2 GROUP BY account_id',
+        [roomId, 'message_created']
+      );
+
+      const counts = {};
+      dbResult.rows.forEach(row => {
+        counts[row.account_id] = parseInt(row.count);
+      });
+
+      // データベースに保存
+      for (const [accountId, count] of Object.entries(counts)) {
+        await pool.query(`
+          INSERT INTO total_message_counts (room_id, account_id, message_count)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (room_id, account_id)
+          DO UPDATE SET message_count = GREATEST(total_message_counts.message_count, $3), updated_at = NOW()
+        `, [roomId, accountId, count]);
+      }
+
+      const totalCount = Object.values(counts).reduce((a, b) => a + b, 0);
+      console.log(`ルーム ${roomId} 累計発言数初期化完了: ${totalCount}件`);
+
+      return counts;
+    } catch (error) {
+      console.error(`ルーム ${roomId} の累計発言数初期化エラー:`, error.message);
+      return {};
+    }
+  }
+
   static async getRoomMessages(roomId) {
     try {
       await apiCallLimiter();
@@ -1176,11 +1213,37 @@ class WebHookMessageProcessor {
   }
 
   static async handleCommands(roomId, messageId, accountId, messageBody, isSenderAdmin, isDirectChat, currentMembers) {
-    // [toall]検出（非管理者のみ）
-    if (!isDirectChat && messageBody.includes('[toall]') && !isSenderAdmin) {
-      console.log(`[toall]を検出した非管理者: ${accountId} in room ${roomId}`);
-      const warningMsg = `[To:${accountId}][pname:${accountId}]ちゃん\n[toall]は管理者しか使えないよ！`;
+    // TOALL検出（非管理者のみ、権限を閲覧のみに変更）
+    if (!isDirectChat && messageBody.toLowerCase().includes('toall') && !isSenderAdmin) {
+      console.log(`TOALLを検出した非管理者: ${accountId} in room ${roomId}`);
+      
+      // 警告メッセージ送信
+      const warningMsg = `[info]TOALLを検知したよ！\nフィルターが作動するよ！[/info]`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, warningMsg);
+      
+      // 権限を閲覧のみに変更
+      try {
+        const admins = currentMembers.filter(m => m.role === 'admin').map(m => String(m.account_id));
+        const members = currentMembers.filter(m => m.role === 'member' && String(m.account_id) !== String(accountId)).map(m => String(m.account_id));
+        const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => String(m.account_id));
+        readonly.push(String(accountId));
+
+        const params = new URLSearchParams();
+        if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
+        if (members.length > 0) params.append('members_member_ids', members.join(','));
+        if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
+
+        await apiCallLimiter();
+        await axios.put(
+          `https://api.chatwork.com/v2/rooms/${roomId}/members`,
+          params,
+          { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+        );
+
+        console.log(`TOALL使用者を閲覧のみに変更: ${accountId} in room ${roomId}`);
+      } catch (error) {
+        console.error('権限変更エラー:', error.message);
+      }
     }
 
     // 歌詞取得コマンド
@@ -1300,13 +1363,38 @@ class WebHookMessageProcessor {
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
-    // Chatwork絵文字カウント警告
+    // Chatwork絵文字カウント警告（非管理者のみ、権限を閲覧のみに変更）
     if (!isDirectChat) {
       const emojiCount = ChatworkBotUtils.countChatworkEmojis(messageBody);
       console.log(`絵文字カウント: ${emojiCount}個 (roomId=${roomId}, accountId=${accountId}, isAdmin=${isSenderAdmin})`);
       if (emojiCount >= 50 && !isSenderAdmin) {
-        const warningMessage = `[To:${accountId}][pname:${accountId}]ちゃん\nChatworkの絵文字を${emojiCount}個送信しちゃったね。できるだけ少ないかずで使おう。`;
+        // 警告メッセージ送信
+        const warningMessage = `[info]Chatworkの絵文字を${emojiCount}個検知したよ！\nフィルターが作動するよ！[/info]`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, warningMessage);
+        
+        // 権限を閲覧のみに変更
+        try {
+          const admins = currentMembers.filter(m => m.role === 'admin').map(m => String(m.account_id));
+          const members = currentMembers.filter(m => m.role === 'member' && String(m.account_id) !== String(accountId)).map(m => String(m.account_id));
+          const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => String(m.account_id));
+          readonly.push(String(accountId));
+
+          const params = new URLSearchParams();
+          if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
+          if (members.length > 0) params.append('members_member_ids', members.join(','));
+          if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
+
+          await apiCallLimiter();
+          await axios.put(
+            `https://api.chatwork.com/v2/rooms/${roomId}/members`,
+            params,
+            { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+          );
+
+          console.log(`絵文字多用者を閲覧のみに変更: ${accountId} in room ${roomId}`);
+        } catch (error) {
+          console.error('権限変更エラー:', error.message);
+        }
       }
     }
 
@@ -1751,10 +1839,15 @@ class WebHookMessageProcessor {
     }
 
     // /gakusei トグル
-    // ★★★ 地雷トグルコマンド（データベースに保存） ★★★
+    // ★★★ 地雷トグルコマンド（管理者専用、データベースに保存） ★★★
 
-    // /gakusei トグル
+    // /gakusei トグル（管理者専用）
     if (messageBody === '/gakusei') {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      
       const toggles = await loadJiraiToggles();
       const newState = !toggles.gakusei;
       await saveJiraiToggle('gakusei', newState);
@@ -1767,8 +1860,13 @@ class WebHookMessageProcessor {
       return;
     }
 
-    // /nyanko_a トグル
+    // /nyanko_a トグル（管理者専用）
     if (messageBody === '/nyanko_a') {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      
       const toggles = await loadJiraiToggles();
       const newState = !toggles.nyanko_a;
       await saveJiraiToggle('nyanko_a', newState);
@@ -1781,8 +1879,13 @@ class WebHookMessageProcessor {
       return;
     }
 
-    // /netto トグル
+    // /netto トグル（管理者専用）
     if (messageBody === '/netto') {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      
       const toggles = await loadJiraiToggles();
       const newState = !toggles.netto;
       await saveJiraiToggle('netto', newState);
@@ -1795,8 +1898,13 @@ class WebHookMessageProcessor {
       return;
     }
 
-    // /admin トグル
+    // /admin トグル（管理者専用）
     if (messageBody === '/admin') {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      
       const toggles = await loadJiraiToggles();
       const newState = !toggles.admin;
       await saveJiraiToggle('admin', newState);
@@ -1809,8 +1917,13 @@ class WebHookMessageProcessor {
       return;
     }
 
-    // /yuyuyu トグル
+    // /yuyuyu トグル（管理者専用）
     if (messageBody === '/yuyuyu') {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      
       const toggles = await loadJiraiToggles();
       const newState = !toggles.yuyuyu;
       await saveJiraiToggle('yuyuyu', newState);
@@ -2641,6 +2754,12 @@ app.listen(port, async () => {
   for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
     await ChatworkBotUtils.initializeMessageCount(roomId);
     await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+
+  console.log('\n累計発言数を初期化するね...');
+  for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+    await ChatworkBotUtils.initializeTotalMessageCounts(roomId);
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
 
   // ★★★ 起動通知 ★★★
