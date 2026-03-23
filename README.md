@@ -1,128 +1,179 @@
-# 湊音 Chatwork Bot - 完全版
+# 湊音 Chatwork Bot セットアップ手順
 
-## 🎉 すべての新機能実装完了！
+## 1. 事前準備
 
-このserver.jsには、要求されたすべての新機能が実装されています。
+### 必要なもの
+- Chatwork APIトークン（2種類）
+  - CHATWORK_API_TOKEN: メイン用
+  - INFO_API_TOKEN: ルーム情報取得用
+- Neon PostgreSQLアカウント
+- Renderアカウント
+- GitHubアカウント
 
-## 📋 実装済み機能一覧
+## 2. データベース設定
 
-### ✅ 基本設定変更
-- **LOG_ROOM_ID**: `415060980` (ウェルカムメッセージ&地雷の部屋、ログ送信元)
-- **LOG_DESTINATION_ROOM_ID**: `420890621` (ログ送信先)
-- **BOT_ACCOUNT_ID**: `10386947`
-- **地雷トグルに確率表示**: ON時に確率をパーセント表示
-- **'ゆゆゆ'返信先**: `10911090`に変更
-- **atwiki.jp曲名取得**: 「曲紹介」セクションから正しく取得
-- **天気予報地域**: さぽろー、おさかー、なごやー、ふくおかー、なはー
+### 2.1 Neon PostgreSQLでデータベース作成
 
-### ✅ データベース機能
-- **message_logs**: ルーム415060980のメッセージログ（1日保管）
-- **jirai_toggles**: 地雷トグル状態の永続化
-- **alarms**: アラーム情報の保存
-- **total_message_counts**: 累計発言数の記録
+1. https://neon.tech にアクセス
+2. 新しいプロジェクトを作成
+3. データベース名: `neondb`（任意）
+4. リージョン: `ap-southeast-1`（シンガポール推奨）
 
-### ✅ 新規コマンド
+### 2.2 データベーステーブル作成
 
-#### Botメッセージ削除
-- **トリガー**: botメッセージに「削除」「delete」「/del」「けして」を返信
-- **機能**: Botが送信したメッセージを削除
+1. Neonダッシュボードから「SQL Editor」を開く
+2. `database_setup.sql`の内容をすべてコピー
+3. SQL Editorに貼り付けて実行
+4. 以下のテーブルが作成されます：
+   - `webhooks` - WebHook受信ログ
+   - `message_logs` - メッセージログ（ルーム415060980のみ）
+   - `jirai_toggles` - 地雷トグル状態
+   - `alarms` - アラーム設定
+   - `total_message_counts` - 累計発言数
 
-#### /alarm
-```
-/alarm 2026-03-23 23:30 おやすみ！
-```
-指定日時にメッセージを自動送信
+### 2.3 接続文字列を取得
 
-#### /song-typing-info
-```
-/song-typing-info syoujo_rei
-```
-歌詞タイピングゲームの曲情報を取得
-- 総打数
-- 曲の長さ
-- 必要平均タイプ速度
-- ライン数
+1. Neonダッシュボードから「Connection String」をコピー
+2. 形式: `postgresql://neondb_owner:PASSWORD@HOST/neondb?sslmode=require`
+3. この文字列を後で使用します
 
-#### /message-total
-累計発言数ランキングを表示
+## 3. GitHubリポジトリ準備
 
-### ✅ 自動処理
-- **メッセージログ保存**: ルーム415060980の新規メッセージのみDB保存（編集は除外）
-- **ログ送信**: ルーム415060980のメッセージを420890621に送信
-- **累計発言数更新**: 全メッセージの累計を自動記録
-- **2日前ログ削除**: 毎日0時5分に自動実行
-- **アラームチェック**: 毎分実行、時刻になったら自動送信
-- **地雷トグル永続化**: 再起動してもトグル状態を維持
-
-## 🚀 セットアップ手順
-
-### 1. データベース設定
-
-NeonのSQL Editorで`database_setup.sql`を実行してください。
-
-**重要**: server.jsは起動時に自動的にテーブルを作成しません。事前にSQLを実行する必要があります。
-
-### 2. 環境変数設定
-
-Renderで以下の環境変数を設定：
+### 3.1 リポジトリ作成
 
 ```bash
-CHATWORK_API_TOKEN=your_chatwork_token
-INFO_API_TOKEN=your_info_token
-DATABASE_URL=postgresql://neondb_owner:npg_VSLKj3wusIG8@ep-odd-queen-a1f5i4ul-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
-DIRECT_CHAT_WITH_DATE_CHANGE=405497983,407676893,415060980,406897783,391699365
-DAY_JSON_URL=https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json
+# ローカルで新しいリポジトリを作成
+mkdir chatwork-bot
+cd chatwork-bot
+git init
+
+# server-complete.jsをserver.jsにリネーム
+cp server-complete.js server.js
+
+# package.jsonを作成
+cat > package.json << 'EOF'
+{
+  "name": "chatwork-bot",
+  "version": "1.0.0",
+  "description": "湊音 Chatwork Bot",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.0",
+    "node-cron": "^3.0.2",
+    "pg": "^8.11.0",
+    "cheerio": "^1.0.0-rc.12"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+EOF
+
+# GitHubにプッシュ
+git add .
+git commit -m "Initial commit"
+git branch -M main
+git remote add origin https://github.com/YOUR_USERNAME/chatwork-bot.git
+git push -u origin main
 ```
 
-### 3. デプロイ
+## 4. Renderデプロイ設定
 
-1. GitHubにpush
-2. Renderで自動デプロイ
-3. 起動確認
+### 4.1 新しいWeb Serviceを作成
 
-## 📝 新機能の使い方
+1. https://render.com にログイン
+2. 「New +」→「Web Service」をクリック
+3. GitHubリポジトリを接続
+4. 設定内容：
+   - **Name**: `chatwork-bot-minato`（任意）
+   - **Region**: `Singapore`
+   - **Branch**: `main`
+   - **Runtime**: `Node`
+   - **Build Command**: `npm install`
+   - **Start Command**: `node server.js`
+   - **Instance Type**: `Free`
 
-### Botメッセージ削除
-1. Botのメッセージに返信
-2. 「削除」「delete」「/del」「けして」のいずれかを送信
-3. Botのメッセージが自動削除される
+### 4.2 環境変数を設定
 
-### アラーム設定
+「Environment」タブで以下を追加：
+
+| Key | Value |
+|-----|-------|
+| CHATWORK_API_TOKEN | あなたのChatwork APIトークン |
+| INFO_API_TOKEN | あなたの情報取得用APIトークン |
+| DATABASE_URL | Neonから取得した接続文字列 |
+| DIRECT_CHAT_WITH_DATE_CHANGE | 405497983,407676893,415060980,406897783,391699365 |
+| DAY_JSON_URL | https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json |
+
+### 4.3 デプロイ
+
+「Create Web Service」をクリックしてデプロイを開始します。
+
+## 5. Chatwork WebHook設定
+
+### 5.1 WebHook URLを取得
+
+デプロイ完了後、Renderのダッシュボードに表示されるURL：
 ```
-/alarm 2026-03-24 09:00 会議の時間だよ！
+https://chatwork-bot-minato.onrender.com
 ```
-→ 2026年3月24日午前9時に「会議の時間だよ！」と送信
 
-### 歌詞タイピング情報
+WebHook URL:
 ```
-/song-typing-info syoujo_rei
+https://chatwork-bot-minato.onrender.com/webhook
 ```
-→ 少女レイのタイピング情報を表示
 
-### 累計発言数
+### 5.2 各ルームでWebHookを設定
+
+1. Chatworkの各ルームを開く
+2. 右上の設定アイコン → 「Webhook設定」
+3. 「追加」をクリック
+4. WebHook URLを入力: `https://chatwork-bot-minato.onrender.com/webhook`
+5. 「保存」をクリック
+
+**設定が必要なルーム**:
+- 405497983
+- 407676893
+- 415060980（ウェルカム&地雷の部屋）
+- 406897783
+- 391699365
+
+## 6. 動作確認
+
+### 6.1 起動確認
+
+Renderのログで以下のメッセージを確認：
 ```
-/message-total
+湊音がポート3000で起動しました
+起動通知を送信するね...
+起動かんりょ！
 ```
-→ この部屋の累計発言数ランキングを表示
 
-## 🎮 地雷機能（ルーム415060980のみ）
+### 6.2 各ルームで起動通知確認
 
-### 基本確率: 0.05%
+設定したルームに「湊音が起動したよっ！」が送信されます。
 
-### トグルコマンド
-- `/gakusei` - 学生（25%）
-- `/nyanko_a` - nyanko_a（100%）
-- `/netto` - 熱湯（50%）
-- `/admin` - 管理者全員（25%）
-- `/yuyuyu` - ゆゆゆ（75%）
+### 6.3 コマンドテスト
 
-トグル状態はデータベースに保存され、**再起動後も維持されます**。
+任意のルームで以下をテスト：
+```
+/test
+```
 
-## 📊 エンドポイント
+→ アカウントIDが返信されれば成功
 
-### GET /status
-現在の状態を確認（地雷トグル状態含む）
+### 6.4 ステータス確認
 
+ブラウザで以下にアクセス：
+```
+https://chatwork-bot-minato.onrender.com/status
+```
+
+JSON形式で現在の状態が表示されます：
 ```json
 {
   "status": "元気！",
@@ -130,65 +181,76 @@ DAY_JSON_URL=https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.
   "logRoomId": "415060980",
   "logDestinationRoomId": "420890621",
   "botAccountId": "10386947",
-  "jiraiToggles": {
-    "gakusei": false,
-    "nyanko_a": false,
-    "netto": false,
-    "admin": false,
-    "yuyuyu": false
-  }
+  "jiraiToggles": { ... }
 }
 ```
 
-## 🔧 トラブルシューティング
+## 7. トラブルシューティング
 
-### データベース接続エラー
-- DATABASE_URLが正しく設定されているか確認
-- Neonのデータベースが起動しているか確認
+### 起動しない
 
-### 地雷が動かない
-- `/jirai-test` で現在の確率とルームIDを確認
-- `/jirai-force` で強制発動テスト
-- LOG_ROOM_ID（415060980）で実行していることを確認
+1. Renderのログを確認
+2. 環境変数が正しく設定されているか確認
+3. DATABASE_URLが正しいか確認
 
-### アラームが送信されない
-- cronが動いているか確認（毎分実行）
-- データベースにアラームが保存されているか確認
+### データベースエラー
 
-## 📂 ファイル構成
+1. Neonのデータベースが起動しているか確認
+2. SQL実行が完了しているか確認
+3. テーブルが正しく作成されているか確認：
+   ```sql
+   SELECT table_name FROM information_schema.tables 
+   WHERE table_schema = 'public';
+   ```
 
-```
-.
-├── server-complete.js    # 完全版メインファイル（2658行）
-├── database_setup.sql    # データベース設定（参考用、自動実行される）
-└── README-完全版.md      # このファイル
-```
+### WebHookが動かない
 
-## 🎊 変更点まとめ
+1. WebHook URLが正しいか確認
+2. Renderがスリープしていないか確認（Free版は25分後にスリープ）
+3. Chatworkのルーム設定でWebHookが有効になっているか確認
 
-| 機能 | 変更前 | 変更後 |
-|---|---|---|
-| LOG_ROOM_ID | 404646956 | 415060980（送信元） |
-| LOG_DESTINATION_ROOM_ID | なし | 420890621（送信先） |
-| BOT_ACCOUNT_ID | なし | 10386947 |
-| 地雷トグル保存 | メモリ | PostgreSQL |
-| メッセージログ | なし | DB保存（415060980のみ） |
-| 累計発言数 | なし | DB保存（全ルーム） |
-| アラーム機能 | なし | DB保存＋cron自動送信 |
-| Bot削除機能 | なし | 実装済み |
-| 歌詞タイピング情報 | なし | /song-typing-info |
-| 累計ランキング | なし | /message-total |
-| 天気予報地域 | 東京、大阪、名古屋、横浜、福岡 | さぽろー、おさかー、なごやー、ふくおかー、なはー |
-| DB初期化 | 起動時に毎回実行 | 事前に手動実行（1回のみ） |
+### 地雷機能が動かない
 
-## 💡 Tips
+1. `/jirai-test`で確率とルームIDを確認
+2. ルームIDが415060980であることを確認
+3. `/status`でトグル状態を確認
 
-- データベーステーブルは事前にSQL実行が必要です（起動時の自動作成は無効化済み）
-- 地雷トグルは再起動後も維持されます
-- アラームは1分単位で設定可能です
-- メッセージログは2日前のものが自動削除されます
-- 累計発言数は編集メッセージでも増加します（新規のみカウント）
-- ログはルーム415060980から420890621に自動送信されます
-- 天気予報は「さぽろー」「おさかー」「なごやー」「ふくおかー」「なはー」の5地域です
+## 8. 初回起動後の処理
 
-すべての機能が完全に実装されています！🎉
+### 自動実行される処理
+
+1. **メッセージカウント初期化** - 今日のメッセージをカウント
+2. **累計発言数初期化** - webhooksテーブルから過去のメッセージを集計
+3. **起動通知送信** - 各ルームに通知
+
+### 累計発言数について
+
+起動時に`webhooks`テーブルから過去のメッセージ数を自動集計します。
+過去のメッセージがあれば、自動的に累計に反映されます。
+
+## 9. 定期メンテナンス
+
+### 自動実行されるメンテナンス
+
+- **毎日0:05** - 2日前のメッセージログを自動削除
+- **毎分** - アラームチェック＆送信
+
+### 手動メンテナンス（必要に応じて）
+
+- Renderのログ確認
+- データベースの容量確認
+- 不要なデータの削除
+
+## 10. セットアップ完了チェックリスト
+
+- [ ] Neon PostgreSQLデータベース作成
+- [ ] database_setup.sql実行
+- [ ] GitHubリポジトリ作成
+- [ ] Renderにデプロイ
+- [ ] 環境変数設定
+- [ ] WebHook設定（全ルーム）
+- [ ] 起動確認
+- [ ] コマンドテスト
+- [ ] ステータス確認
+
+すべてチェックが入れば、セットアップ完了です！🎉
