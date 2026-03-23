@@ -1853,7 +1853,7 @@ class WebHookMessageProcessor {
       await saveJiraiToggle('gakusei', newState);
       
       const msg = newState
-        ? '学生の確率UPがONになりました。(確率：25%)'
+        ? '学生の確率UPがONになりました。(確率：??%)'
         : '学生の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/gakusei トグル: ${newState ? 'ON' : 'OFF'}`);
@@ -1880,7 +1880,7 @@ class WebHookMessageProcessor {
     }
 
     // /netto トグル（管理者専用）
-    if (messageBody === '/netto') {
+    if (messageBody === '/milk') {
       if (!isSenderAdmin) {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
@@ -1891,8 +1891,8 @@ class WebHookMessageProcessor {
       await saveJiraiToggle('netto', newState);
       
       const msg = newState
-        ? '熱湯の確率UPがONになりました。(確率：50%)'
-        : '熱湯の確率UPがOFFになりました。';
+        ? '牛乳の確率UPがONになりました。(確率：50%)'
+        : '牛乳の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/netto トグル: ${newState ? 'ON' : 'OFF'}`);
       return;
