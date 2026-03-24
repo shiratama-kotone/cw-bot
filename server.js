@@ -1164,15 +1164,41 @@ class WebHookMessageProcessor {
       // ★★★ 地雷踏んだね (LOG_ROOM_IDのみ) ★★★
       console.log(`地雷チェック: roomId=${roomId} (型=${typeof roomId}), LOG_ROOM_ID=${LOG_ROOM_ID} (型=${typeof LOG_ROOM_ID}), 一致=${String(roomId) === LOG_ROOM_ID}`);
       if (String(roomId) === LOG_ROOM_ID) {
-        const jiraiProb = ChatworkBotUtils.getJiraiProbability(accountId, isSenderAdmin);
-        console.log(`地雷確率: ${jiraiProb} (accountId=${accountId}, isAdmin=${isSenderAdmin})`);
+        console.log(`地雷処理開始: accountId=${accountId}, isAdmin=${isSenderAdmin}`);
+        
+        // トグル状態を確認
+        const toggles = await loadJiraiToggles();
+        console.log(`地雷トグル状態: ${JSON.stringify(toggles)}`);
+        
+        const jiraiProb = await ChatworkBotUtils.getJiraiProbability(accountId, isSenderAdmin);
+        console.log(`地雷確率: ${jiraiProb} (${(jiraiProb * 100).toFixed(2)}%) accountId=${accountId}, isAdmin=${isSenderAdmin}`);
         const rand = Math.random();
         console.log(`地雷判定: rand=${rand}, prob=${jiraiProb}, 発動=${rand < jiraiProb}`);
         if (rand < jiraiProb) {
-          const jiraiMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]地雷踏んだね。`;
+          console.log(`地雷発動！管理者を選択中...`);
+          // 管理者からランダムに1人選ぶ
+          const admins = currentMembers.filter(m => m.role === 'admin');
+          console.log(`管理者数: ${admins.length}, 全メンバー数: ${currentMembers.length}`);
+          
+          if (admins.length === 0) {
+            console.error('管理者が見つかりません！');
+            return;
+          }
+          
+          const randomAdmin = admins[Math.floor(Math.random() * admins.length)];
+          const adminId = randomAdmin.account_id;
+          const adminName = randomAdmin.name;
+          
+          console.log(`選ばれた管理者: ${adminName} (ID: ${adminId})`);
+          
+          const jiraiMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n地雷ふんじゃったね…\n[To:${adminId}]${adminName}に罰ゲームを考えてもらってね！`;
           await ChatworkBotUtils.sendChatworkMessage(roomId, jiraiMsg);
-          console.log(`地雷踏んだね送信完了: roomId=${roomId}, accountId=${accountId}`);
+          console.log(`地雷踏んだね送信完了: roomId=${roomId}, accountId=${accountId}, 選ばれた管理者=${adminName}`);
+        } else {
+          console.log(`地雷不発: rand=${rand} >= prob=${jiraiProb}`);
         }
+      } else {
+        console.log(`地雷チェックスキップ: roomId=${roomId}はLOG_ROOM_ID(${LOG_ROOM_ID})ではありません`);
       }
 
       // コマンド処理
@@ -1183,7 +1209,8 @@ class WebHookMessageProcessor {
         (messageBody || '').trim(),
         isSenderAdmin,
         isDirectChat,
-        currentMembers
+        currentMembers,
+        userName
       );
     } catch (error) {
       console.error('WebHookメッセージ処理エラー:', error.message);
@@ -1212,7 +1239,7 @@ class WebHookMessageProcessor {
     }
   }
 
-  static async handleCommands(roomId, messageId, accountId, messageBody, isSenderAdmin, isDirectChat, currentMembers) {
+  static async handleCommands(roomId, messageId, accountId, messageBody, isSenderAdmin, isDirectChat, currentMembers, userName) {
     // TOALL検出（非管理者のみ、権限を閲覧のみに変更）
     if (!isDirectChat && messageBody.toLowerCase().includes('toall') && !isSenderAdmin) {
       console.log(`TOALLを検出した非管理者: ${accountId} in room ${roomId}`);
@@ -1359,7 +1386,7 @@ class WebHookMessageProcessor {
 
     if (messageBody === 'おみくじ') {
       const omikujiResult = ChatworkBotUtils.drawOmikuji(isSenderAdmin);
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nだよっ！[/info]`;
+      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nだよっ！[/info]`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
@@ -1400,7 +1427,7 @@ class WebHookMessageProcessor {
 
     if (messageBody === '/yes-or-no') {
       const answer = await ChatworkBotUtils.getYesOrNoAnswer();
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n答えは「${answer}」だよっ！`;
+      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n答えは「${answer}」だよっ！`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
@@ -1408,7 +1435,7 @@ class WebHookMessageProcessor {
       const searchTerm = messageBody.substring('/wiki/'.length).trim();
       if (searchTerm) {
         const wikipediaSummary = await ChatworkBotUtils.getWikipediaSummary(searchTerm);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nWikipediaの検索結果だよっ！\n\n${wikipediaSummary}`;
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\nWikipediaの検索結果だよっ！\n\n${wikipediaSummary}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       }
     }
@@ -1438,13 +1465,13 @@ class WebHookMessageProcessor {
 
         if (roomInfo.error === 'not_found') {
           await ChatworkBotUtils.sendChatworkMessage(roomId,
-            `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n存在しないルームかも。`);
+            `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n存在しないルームかも。`);
           return;
         }
 
         if (roomInfo.error) {
           await ChatworkBotUtils.sendChatworkMessage(roomId,
-            `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nルーム情報持ってくるのに失敗しちゃった。`);
+            `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\nルーム情報持ってくるのに失敗しちゃった。`);
           return;
         }
 
@@ -1457,7 +1484,7 @@ class WebHookMessageProcessor {
 
         if (!isYuyuyuMember) {
           await ChatworkBotUtils.sendChatworkMessage(roomId,
-            `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nますたーが参加してないかも。`);
+            `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\nますたーが参加してないかも。`);
           return;
         }
 
@@ -1481,7 +1508,7 @@ class WebHookMessageProcessor {
           : 'なし';
 
         const infoMessage =
-          `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n` +
+          `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n` +
           `[info][title]${roomName}の情報だよっ！[/title]` +
           `部屋名：${roomName}\n` +
           `メンバー数：${memberCount}人\n` +
@@ -1496,7 +1523,7 @@ class WebHookMessageProcessor {
       } catch (error) {
         console.error('ルーム情報取得エラー:', error.message);
         await ChatworkBotUtils.sendChatworkMessage(roomId,
-          `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nルーム情報の取得中にエラーが発生しちゃった: ${error.message}`);
+          `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\nルーム情報の取得中にエラーが発生しちゃった: ${error.message}`);
       }
       return;
     }
@@ -1505,7 +1532,7 @@ class WebHookMessageProcessor {
       const username = messageBody.substring('/scratch-user/'.length).trim();
       if (username) {
         const userStats = await ChatworkBotUtils.getScratchUserStats(username);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nScratchのユーザー「${username}」の情報だよっ！\n\n${userStats}`;
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\nScratchのユーザー「${username}」の情報だよっ！\n\n${userStats}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       }
     }
@@ -1514,7 +1541,7 @@ class WebHookMessageProcessor {
       const projectId = messageBody.substring('/scratch-project/'.length).trim();
       if (projectId) {
         const projectInfo = await ChatworkBotUtils.getScratchProjectInfo(projectId);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\nScratchの作品「${projectId}」の情報だよっ！。\n\n${projectInfo}`;
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\nScratchの作品「${projectId}」の情報だよっ！。\n\n${projectInfo}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
       }
     }
@@ -1533,7 +1560,7 @@ class WebHookMessageProcessor {
         messageContent += `\n今日は特に登録されたイベントはないみたい。`;
       }
       messageContent += `[/info]`;
-      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${accountId}]ちゃん\n\n${messageContent}`;
+      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n\n${messageContent}`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
@@ -1824,17 +1851,25 @@ class WebHookMessageProcessor {
 
     // /jirai-test コマンド（デバッグ用）
     if (messageBody === '/jirai-test') {
-      const jiraiProb = ChatworkBotUtils.getJiraiProbability(accountId, isSenderAdmin);
-      const testMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]地雷テスト\n現在の確率: ${(jiraiProb * 100).toFixed(2)}%\nルームID: ${roomId}\nLOG_ROOM_ID: ${LOG_ROOM_ID}\n一致: ${String(roomId) === LOG_ROOM_ID}`;
+      const toggles = await loadJiraiToggles();
+      const jiraiProb = await ChatworkBotUtils.getJiraiProbability(accountId, isSenderAdmin);
+      const testMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n地雷テスト\n現在の確率: ${(jiraiProb * 100).toFixed(2)}%\nルームID: ${roomId}\nLOG_ROOM_ID: ${LOG_ROOM_ID}\n一致: ${String(roomId) === LOG_ROOM_ID}\nアカウントID: ${accountId}\n管理者: ${isSenderAdmin}\n\nトグル状態:\ngakusei: ${toggles.gakusei}\nnyanko_a: ${toggles.nyanko_a}\nnetto: ${toggles.netto}\nadmin: ${toggles.admin}\nyuyuyu: ${toggles.yuyuyu}`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, testMsg);
+      console.log(`地雷テスト実行: prob=${jiraiProb}, toggles=${JSON.stringify(toggles)}`);
       return;
     }
 
     // /jirai-force コマンド（強制発動テスト用）
     if (messageBody === '/jirai-force') {
-      const jiraiMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]地雷踏んだね。（強制発動テスト）`;
+      // 管理者からランダムに1人選ぶ
+      const admins = currentMembers.filter(m => m.role === 'admin');
+      const randomAdmin = admins[Math.floor(Math.random() * admins.length)];
+      const adminId = randomAdmin.account_id;
+      const adminName = randomAdmin.name;
+      
+      const jiraiMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n地雷ふんじゃったね…\n[To:${adminId}]${adminName}に罰ゲームを考えてもらってね！（強制発動テスト）`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, jiraiMsg);
-      console.log(`地雷強制発動: roomId=${roomId}, accountId=${accountId}`);
+      console.log(`地雷強制発動: roomId=${roomId}, accountId=${accountId}, 選ばれた管理者=${adminName}`);
       return;
     }
 
@@ -1853,7 +1888,7 @@ class WebHookMessageProcessor {
       await saveJiraiToggle('gakusei', newState);
       
       const msg = newState
-        ? '学生の確率UPがONになりました。(確率：??%)'
+        ? '学生の確率UPがONになりました。(確率：25%)'
         : '学生の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/gakusei トグル: ${newState ? 'ON' : 'OFF'}`);
@@ -1880,7 +1915,7 @@ class WebHookMessageProcessor {
     }
 
     // /netto トグル（管理者専用）
-    if (messageBody === '/milk') {
+    if (messageBody === '/netto') {
       if (!isSenderAdmin) {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
@@ -1891,8 +1926,8 @@ class WebHookMessageProcessor {
       await saveJiraiToggle('netto', newState);
       
       const msg = newState
-        ? '牛乳の確率UPがONになりました。(確率：50%)'
-        : '牛乳の確率UPがOFFになりました。';
+        ? '熱湯の確率UPがONになりました。(確率：50%)'
+        : '熱湯の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       console.log(`/netto トグル: ${newState ? 'ON' : 'OFF'}`);
       return;
@@ -2760,6 +2795,15 @@ app.listen(port, async () => {
   for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
     await ChatworkBotUtils.initializeTotalMessageCounts(roomId);
     await new Promise(resolve => setTimeout(resolve, 500));
+  }
+
+  // ★★★ 地雷トグル状態確認 ★★★
+  console.log('\n地雷トグル状態を確認するね...');
+  try {
+    const toggles = await loadJiraiToggles();
+    console.log('地雷トグル状態:', JSON.stringify(toggles, null, 2));
+  } catch (error) {
+    console.error('地雷トグル読み込みエラー:', error.message);
   }
 
   // ★★★ 起動通知 ★★★
