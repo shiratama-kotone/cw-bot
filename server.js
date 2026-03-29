@@ -1698,7 +1698,9 @@ class WebHookMessageProcessor {
 
     if (!isDirectChat && messageBody === '/member-name') {
       if (currentMembers.length > 0) {
-        const names = currentMembers.map(m => m.name).join(', ');
+        const names = currentMembers
+          .slice().sort((a, b) => a.account_id - b.account_id)
+          .map(m => m.name).join('\n');
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[info][title]メンバー名一覧[/title]\n${names}[/info]`);
       }
     }
@@ -2934,7 +2936,7 @@ app.listen(port, async () => {
   console.log('起動通知を送信するね...');
   for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
     try {
-      await ChatworkBotUtils.sendChatworkMessage(roomId, '湊音が起動したよっ！');
+      await ChatworkBotUtils.sendChatworkMessage(roomId, '/member-name');
       console.log(`起動通知送信完了: ルーム ${roomId}`);
     } catch (error) {
       console.error(`ルーム ${roomId} への起動通知送信エラー:`, error.message);
