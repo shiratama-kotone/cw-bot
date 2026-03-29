@@ -71,7 +71,7 @@ async function initializeDatabase() {
     `);
 
     // 初期データ挿入
-    const toggles = ['gakusei', 'nyanko_a', 'netto', 'admin', 'yuyuyu'];
+    const toggles = ['gakusei', 'nyanko_a', 'milk', 'admin', 'yuyuyu'];
     for (const toggle of toggles) {
       await pool.query(
         'INSERT INTO jirai_toggles (toggle_name, is_enabled) VALUES ($1, $2) ON CONFLICT (toggle_name) DO NOTHING',
@@ -107,6 +107,21 @@ async function initializeDatabase() {
       )
     `);
 
+    // ブラックリストテーブル（TOALL・絵文字大量送信で閲覧になったユーザー）
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS black_list (
+        id SERIAL PRIMARY KEY,
+        room_id BIGINT NOT NULL,
+        account_id BIGINT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(room_id, account_id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_black_list_room_account ON black_list(room_id, account_id);
+    `);
+
     console.log('データベーステーブル初期化完了');
   } catch (error) {
     console.error('データベース初期化エラー:', error.message);
@@ -124,7 +139,7 @@ async function loadJiraiToggles() {
     return toggles;
   } catch (error) {
     console.error('地雷トグル読み込みエラー:', error.message);
-    return { gakusei: false, nyanko_a: false, netto: false, admin: false, yuyuyu: false };
+    return { gakusei: false, nyanko_a: false, milk: false, admin: false, yuyuyu: false };
   }
 }
 
@@ -170,7 +185,7 @@ const memoryStorage = {
   toggles: {
     gakusei: false,
     nyanko_a: false,
-    netto: false,
+    milk: false,
     admin: false,
     yuyuyu: false
   }
@@ -192,14 +207,30 @@ async function apiCallLimiter() {
 }
 
 // Chatwork絵文字のリスト
-const CHATWORK_EMOJI_CODES = [
-  ":)", ":(", ":D", "8-)", ":o", ";)", ";(", "sweat", ":|", ":*", ":p", "blush",
-  ":^)", "|-)", "inlove", "]:)", "talk", "yawn", "puke", "emo", "8-|", ":#)",
-  "nod", "shake", "^^;", "whew", "clap", "bow", "roger", "flex", "dance", ":/",
-  "gogo", "think", "please", "quick", "anger", "devil", "lightbulb", "*", "h",
-  "F", "cracker", "eat", "^", "coffee", "beer", "handshake", "y", "ec14"
-].map(code => code.replace(/[-\/\\^$*+?.()|[\]{}:*]/g, '\\$&'));
-const CHATWORK_EMOJI_REGEX = new RegExp(`\\((${CHATWORK_EMOJI_CODES.join('|')})\\)`, 'g');
+// ()なし（テキストそのまま）
+const CHATWORK_EMOJI_NO_PAREN = [
+  ':)', ':(', ':D', '8-)', ':o', ';)', ';(', ':|', ':*', ':p',
+  ':^)', '|-)', ']:)', '8-|', ':#)', ':/'
+];
+// ()あり（囲まれた形式）
+const CHATWORK_EMOJI_WITH_PAREN = [
+  'sweat', 'blush', 'inlove', 'talk', 'yawn', 'puke', 'emo',
+  'nod', 'shake', '^^;', 'whew', 'clap', 'bow', 'roger', 'flex', 'dance',
+  'gogo', 'think', 'please', 'quick', 'anger', 'devil', 'lightbulb',
+  '*', 'h', 'F', 'cracker', 'eat', '^', 'coffee', 'beer', 'handshake', 'y', 'ec14'
+];
+
+function escapeRegex(s) {
+  return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+}
+
+const _noParenPart = CHATWORK_EMOJI_NO_PAREN.map(escapeRegex).join('|');
+const _withParenPart = CHATWORK_EMOJI_WITH_PAREN.map(escapeRegex).join('|');
+// ()なし絵文字 OR ()あり絵文字 の両方にマッチ
+const CHATWORK_EMOJI_REGEX = new RegExp(
+  `(?:${_noParenPart})|\\((${_withParenPart})\\)`,
+  'g'
+);
 
 // APIキャッシュ
 const API_CACHE = new Map();
@@ -351,7 +382,7 @@ class ChatworkBotUtils {
 
     if (toggles.gakusei && id === '9553691')  probability = Math.max(probability, 0.25);
     if (toggles.nyanko_a && id === '9487124') probability = Math.max(probability, 1.0);
-    if (toggles.netto && id === '11092754')   probability = Math.max(probability, 0.50);
+    if (toggles.milk && id === '11092754')    probability = Math.max(probability, 0.50);
     if (toggles.admin && isSenderAdmin)       probability = Math.max(probability, 0.25);
     if (toggles.yuyuyu && id === '10911090')  probability = Math.max(probability, 0.75);
 
@@ -387,7 +418,7 @@ class ChatworkBotUtils {
       });
 
       const searchData = searchResponse.data;
-      
+
       if (!searchData || !searchData[1] || searchData[1].length === 0) {
         const result = `「${searchTerm}」に関する記事は見つからなかったよ`;
         addToCache(cacheKey, { data: result, timestamp: now });
@@ -413,11 +444,11 @@ class ChatworkBotUtils {
       });
 
       const extractData = extractResponse.data;
-      
+
       if (extractData.query && extractData.query.pages) {
         const pages = extractData.query.pages;
         const pageId = Object.keys(pages)[0];
-        
+
         if (pageId && pageId !== '-1' && pages[pageId] && pages[pageId].extract) {
           let summary = pages[pageId].extract;
           if (summary.length > 500) {
@@ -506,18 +537,18 @@ class ChatworkBotUtils {
         title = titleMain.replace(titleAfter, '').trim();
 
         $('div.hiragana span.rt').remove();
-        
+
         lyrics = $('div.hiragana').html() || '';
-        
+
         lyrics = lyrics.replace(/<br\s*\/?>/gi, '\n')
                       .replace(/<[^>]+>/g, '')
                       .trim();
 
       } else if (url.includes('uta-net.com')) {
         title = $('h2.ms-2.ms-md-3.kashi-title').text().trim();
-        
+
         lyrics = $('div#kashi_area[itemprop="text"]').html() || '';
-        
+
         lyrics = lyrics.replace(/<br\s*\/?>/gi, '\n')
                       .replace(/<[^>]+>/g, '')
                       .trim();
@@ -537,7 +568,7 @@ class ChatworkBotUtils {
             currentElement = currentElement.next();
           }
         }
-        
+
         // タイトルが見つからなければページタイトルから取得
         if (!title) {
           title = $('title').text().trim();
@@ -549,7 +580,7 @@ class ChatworkBotUtils {
         // 歌詞セクションを抽出
         const lyricsStart = $('h3:contains("歌詞")');
         const relatedStart = $('h3:contains("関連動画")');
-        
+
         if (lyricsStart.length === 0) {
           return '歌詞セクションが見つからなかったよ';
         }
@@ -557,7 +588,7 @@ class ChatworkBotUtils {
         // 歌詞セクションと関連動画セクションの間のdivを取得
         let lyricsHtml = '';
         let currentElement = lyricsStart.next();
-        
+
         while (currentElement.length > 0) {
           if (currentElement.is('h3') && currentElement.text().includes('関連動画')) {
             break;
@@ -599,11 +630,11 @@ class ChatworkBotUtils {
         'https://shiratama-kotone.github.io/typing-game/song-typing/lyrics-data.js',
         { timeout: 10000 }
       );
-      
+
       const jsCode = response.data;
-      
+
       // lyricsDataを抽出（正規表現で安全に）
-      const match = jsCode.match(/const\s+lyricsData\s*=\s*(\[[\s\S]*?\]);/);
+      const match = jsCode.match(/const\s+lyricsData\s*=\s*(\[[\s\S]*\]);/);
       if (!match) {
         return '歌詞データの解析に失敗しちゃった';
       }
@@ -640,7 +671,7 @@ class ChatworkBotUtils {
           `https://www.youtube.com/watch?v=${song.youtubeId}`,
           { timeout: 5000 }
         );
-        
+
         const durationMatch = ytResponse.data.match(/"lengthSeconds":"(\d+)"/);
         if (durationMatch) {
           const seconds = parseInt(durationMatch[1]);
@@ -717,7 +748,7 @@ class ChatworkBotUtils {
   static async initializeTotalMessageCounts(roomId) {
     try {
       console.log(`ルーム ${roomId} の累計発言数を初期化中...`);
-      
+
       // まずデータベースから既存のwebhooksデータを集計
       const dbResult = await pool.query(
         'SELECT account_id, COUNT(*) as count FROM webhooks WHERE room_id = $1 AND webhook_event_type = $2 GROUP BY account_id',
@@ -825,7 +856,7 @@ class ChatworkBotUtils {
             return false;
           });
         }
-        
+
         if (!shouldNotify && earthquake.earthquake.hypocenter) {
           const hypocenterName = earthquake.earthquake.hypocenter.name || '';
           shouldNotify = targetRegions.some(region => hypocenterName.includes(region));
@@ -1001,6 +1032,60 @@ class ChatworkBotUtils {
       return false;
     }
   }
+
+  // ★ ブラックリスト追加
+  static async addToBlackList(roomId, accountId) {
+    try {
+      await pool.query(
+        'INSERT INTO black_list (room_id, account_id) VALUES ($1, $2) ON CONFLICT (room_id, account_id) DO NOTHING',
+        [roomId, accountId]
+      );
+      console.log(`ブラックリスト追加: roomId=${roomId}, accountId=${accountId}`);
+    } catch (error) {
+      console.error('ブラックリスト追加エラー:', error.message);
+    }
+  }
+
+  // ★ ブラックリスト確認
+  static async isInBlackList(roomId, accountId) {
+    try {
+      const result = await pool.query(
+        'SELECT 1 FROM black_list WHERE room_id = $1 AND account_id = $2',
+        [roomId, accountId]
+      );
+      return result.rowCount > 0;
+    } catch (error) {
+      console.error('ブラックリスト確認エラー:', error.message);
+      return false;
+    }
+  }
+
+  // ★ 指定ユーザーを閲覧のみに強制変更（ブラックリスト用）
+  static async forceReadOnly(roomId, targetAccountId, currentMembers) {
+    try {
+      const admins   = currentMembers.filter(m => m.role === 'admin').map(m => String(m.account_id));
+      const members  = currentMembers.filter(m => m.role === 'member' && String(m.account_id) !== String(targetAccountId)).map(m => String(m.account_id));
+      const readonly = currentMembers.filter(m => m.role === 'readonly').map(m => String(m.account_id));
+      if (!readonly.includes(String(targetAccountId))) readonly.push(String(targetAccountId));
+
+      const params = new URLSearchParams();
+      if (admins.length   > 0) params.append('members_admin_ids',    admins.join(','));
+      if (members.length  > 0) params.append('members_member_ids',   members.join(','));
+      if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
+
+      await apiCallLimiter();
+      await axios.put(
+        `https://api.chatwork.com/v2/rooms/${roomId}/members`,
+        params,
+        { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+      );
+      console.log(`ブラックリスト: 閲覧のみに強制変更: roomId=${roomId}, accountId=${targetAccountId}`);
+      return true;
+    } catch (error) {
+      console.error('ブラックリスト強制閲覧変更エラー:', error.message);
+      return false;
+    }
+  }
 }
 
 // WebHookメッセージ処理クラス
@@ -1039,7 +1124,7 @@ class WebHookMessageProcessor {
     try {
       const roomId = String(webhookData.room_id);
       const eventType = webhookData.webhook_event_type || 'message_created';
-      
+
       // ルーム415060980のみ、かつ新規メッセージのみ
       if (roomId !== LOG_ROOM_ID || eventType !== 'message_created') {
         return;
@@ -1094,11 +1179,6 @@ class WebHookMessageProcessor {
       }
 
       let userName = '';
-      if (account && account.name) {
-        userName = account.name;
-      } else if (accountId) {
-        userName = `ID:${accountId}`;
-      }
 
       if (!roomId || !accountId || !messageBody) {
         console.log('不完全なWebHookデータ:', webhookData);
@@ -1109,10 +1189,10 @@ class WebHookMessageProcessor {
       if (roomId === '415060980' || roomId === 415060980) {
         const forwardRoomId = '420890621';
         const eventType = webhookData.webhook_event_type || 'message_created';
-        
+
         const editLabel = eventType === 'message_updated' ? '(編集)' : '';
         const forwardMessage = `[info][title][piconname:${accountId}]${editLabel}[/title]${messageBody}[/info]`;
-        
+
         try {
           await ChatworkBotUtils.sendChatworkMessage(forwardRoomId, forwardMessage);
           console.log(`メッセージ転送完了 [${eventType}]: ${roomId} → ${forwardRoomId}`);
@@ -1121,25 +1201,56 @@ class WebHookMessageProcessor {
         }
       }
 
-      // ★★★ ウェルカムメッセージ ★★★
-      if ((roomId === '415060980' || roomId === 415060980) && 
-          messageBody.includes('[dtext:chatroom_member_is]') && 
+      // ★★★ ウェルカムメッセージ & ブラックリスト再参加チェック ★★★
+      if (messageBody.includes('[dtext:chatroom_member_is]') && 
           messageBody.includes('[dtext:chatroom_added]')) {
-        
+
         const piconnameMatch = messageBody.match(/\[piconname:(\d+)\]/);
-        
+
         if (piconnameMatch && piconnameMatch[1]) {
           const newUserId = piconnameMatch[1];
-          const welcomeMessage = `[To:${newUserId}][pname:${newUserId}]ちゃん
-この部屋へようこそ！
-この部屋は色々とおかしいけどよろしくね！`;
-          
-          try {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            await ChatworkBotUtils.sendChatworkMessage(roomId, welcomeMessage);
-            console.log(`ウェルカムメッセージ送信完了: ユーザー ${newUserId}`);
-          } catch (error) {
-            console.error(`ウェルカムメッセージ送信エラー:`, error.message);
+
+          // ブラックリストチェック
+          const isBlacklisted = await ChatworkBotUtils.isInBlackList(String(roomId), newUserId);
+          if (isBlacklisted) {
+            console.log(`ブラックリストユーザー再参加検知: roomId=${roomId}, accountId=${newUserId}`);
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            const freshMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
+            await ChatworkBotUtils.forceReadOnly(roomId, newUserId, freshMembers);
+            await ChatworkBotUtils.sendChatworkMessage(roomId,
+              `[To:${newUserId}][pname:${newUserId}]ちゃんはブラックリストに入ってるから閲覧のみにしたよ`);
+          } else if (String(roomId) === LOG_ROOM_ID || roomId === LOG_ROOM_ID) {
+            // ウェルカムメッセージ（LOG_ROOM_IDのみ）
+            const welcomeMessage = `[To:${newUserId}][pname:${newUserId}]ちゃん\nこの部屋へようこそ！\nこの部屋は色々とおかしいけどよろしくね！`;
+            try {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              await ChatworkBotUtils.sendChatworkMessage(roomId, welcomeMessage);
+              console.log(`ウェルカムメッセージ送信完了: ユーザー ${newUserId}`);
+            } catch (error) {
+              console.error('ウェルカムメッセージ送信エラー:', error.message);
+            }
+          }
+        }
+      }
+
+      // ★★★ 権限変更でブラックリストチェック ★★★
+      if (messageBody.includes('[dtext:chatroom_member_is]') &&
+          messageBody.includes('[dtext:chatroom_priv_changed]')) {
+
+        const piconnameMatch = messageBody.match(/\[piconname:(\d+)\]/);
+        if (piconnameMatch && piconnameMatch[1]) {
+          const changedUserId = piconnameMatch[1];
+          const isBlacklisted = await ChatworkBotUtils.isInBlackList(String(roomId), changedUserId);
+          if (isBlacklisted) {
+            console.log(`ブラックリストユーザー権限変更検知: roomId=${roomId}, accountId=${changedUserId}`);
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            const freshMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
+            const member = freshMembers.find(m => String(m.account_id) === String(changedUserId));
+            if (member && member.role !== 'readonly') {
+              await ChatworkBotUtils.forceReadOnly(roomId, changedUserId, freshMembers);
+              await ChatworkBotUtils.sendChatworkMessage(roomId,
+                `[pname:${changedUserId}]ちゃんはブラックリストに入ってるから閲覧のみに戻したよ`);
+            }
           }
         }
       }
@@ -1161,15 +1272,23 @@ class WebHookMessageProcessor {
         isSenderAdmin = this.isUserAdmin(accountId, currentMembers);
       }
 
+      // userName解決（WebhookのaccountオブジェクトかメンバーリストかAPIから取得）
+      if (account && account.name) {
+        userName = account.name;
+      } else {
+        const memberInfo = currentMembers.find(m => String(m.account_id) === String(accountId));
+        userName = memberInfo ? memberInfo.name : `ID:${accountId}`;
+      }
+
       // ★★★ 地雷踏んだね (LOG_ROOM_IDのみ) ★★★
       console.log(`地雷チェック: roomId=${roomId} (型=${typeof roomId}), LOG_ROOM_ID=${LOG_ROOM_ID} (型=${typeof LOG_ROOM_ID}), 一致=${String(roomId) === LOG_ROOM_ID}`);
       if (String(roomId) === LOG_ROOM_ID) {
         console.log(`地雷処理開始: accountId=${accountId}, isAdmin=${isSenderAdmin}`);
-        
+
         // トグル状態を確認
         const toggles = await loadJiraiToggles();
         console.log(`地雷トグル状態: ${JSON.stringify(toggles)}`);
-        
+
         const jiraiProb = await ChatworkBotUtils.getJiraiProbability(accountId, isSenderAdmin);
         console.log(`地雷確率: ${jiraiProb} (${(jiraiProb * 100).toFixed(2)}%) accountId=${accountId}, isAdmin=${isSenderAdmin}`);
         const rand = Math.random();
@@ -1179,18 +1298,18 @@ class WebHookMessageProcessor {
           // 管理者からランダムに1人選ぶ
           const admins = currentMembers.filter(m => m.role === 'admin');
           console.log(`管理者数: ${admins.length}, 全メンバー数: ${currentMembers.length}`);
-          
+
           if (admins.length === 0) {
             console.error('管理者が見つかりません！');
             return;
           }
-          
+
           const randomAdmin = admins[Math.floor(Math.random() * admins.length)];
           const adminId = randomAdmin.account_id;
           const adminName = randomAdmin.name;
-          
+
           console.log(`選ばれた管理者: ${adminName} (ID: ${adminId})`);
-          
+
           const jiraiMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n地雷ふんじゃったね…\n[To:${adminId}]${adminName}に罰ゲームを考えてもらってね！`;
           await ChatworkBotUtils.sendChatworkMessage(roomId, jiraiMsg);
           console.log(`地雷踏んだね送信完了: roomId=${roomId}, accountId=${accountId}, 選ばれた管理者=${adminName}`);
@@ -1243,11 +1362,11 @@ class WebHookMessageProcessor {
     // TOALL検出（非管理者のみ、権限を閲覧のみに変更）
     if (!isDirectChat && messageBody.toLowerCase().includes('toall') && !isSenderAdmin) {
       console.log(`TOALLを検出した非管理者: ${accountId} in room ${roomId}`);
-      
+
       // 警告メッセージ送信
       const warningMsg = `[info]TOALLを検知したよ！\nフィルターが作動するよ！[/info]`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, warningMsg);
-      
+
       // 権限を閲覧のみに変更
       try {
         const admins = currentMembers.filter(m => m.role === 'admin').map(m => String(m.account_id));
@@ -1268,6 +1387,7 @@ class WebHookMessageProcessor {
         );
 
         console.log(`TOALL使用者を閲覧のみに変更: ${accountId} in room ${roomId}`);
+        await ChatworkBotUtils.addToBlackList(roomId, accountId);
       } catch (error) {
         console.error('権限変更エラー:', error.message);
       }
@@ -1324,22 +1444,22 @@ class WebHookMessageProcessor {
     if (messageBody.startsWith('/alarm ')) {
       const argsPart = messageBody.substring('/alarm '.length).trim();
       const match = argsPart.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})\s+(.+)$/);
-      
+
       if (!match) {
         const errorMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]使い方: /alarm YYYY-MM-DD HH:MM メッセージ内容\n例: /alarm 2026-03-23 23:30 おやすみ！`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, errorMsg);
         return;
       }
-      
+
       const [, date, time, message] = match;
       const scheduledTime = new Date(`${date}T${time}:00+09:00`);
-      
+
       try {
         await pool.query(
           'INSERT INTO alarms (room_id, scheduled_time, message, created_by) VALUES ($1, $2, $3, $4)',
           [roomId, scheduledTime, message, accountId]
         );
-        
+
         const confirmMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]アラームを設定したよ！\n${scheduledTime.toLocaleString('ja-JP', {timeZone: 'Asia/Tokyo'})} に「${message}」を送信するね`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, confirmMsg);
       } catch (error) {
@@ -1398,7 +1518,7 @@ class WebHookMessageProcessor {
         // 警告メッセージ送信
         const warningMessage = `[info]Chatworkの絵文字を${emojiCount}個検知したよ！\nフィルターが作動するよ！[/info]`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, warningMessage);
-        
+
         // 権限を閲覧のみに変更
         try {
           const admins = currentMembers.filter(m => m.role === 'admin').map(m => String(m.account_id));
@@ -1419,6 +1539,7 @@ class WebHookMessageProcessor {
           );
 
           console.log(`絵文字多用者を閲覧のみに変更: ${accountId} in room ${roomId}`);
+          await ChatworkBotUtils.addToBlackList(roomId, accountId);
         } catch (error) {
           console.error('権限変更エラー:', error.message);
         }
@@ -1634,7 +1755,7 @@ class WebHookMessageProcessor {
     if (messageBody === '/romera') {
       try {
         console.log(`ルーム ${roomId} のランキングを作成中...`);
-        
+
         let counts = memoryStorage.messageCounts.get(roomId) || {};
 
         const ranking = Object.entries(counts)
@@ -1853,7 +1974,7 @@ class WebHookMessageProcessor {
     if (messageBody === '/jirai-test') {
       const toggles = await loadJiraiToggles();
       const jiraiProb = await ChatworkBotUtils.getJiraiProbability(accountId, isSenderAdmin);
-      const testMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n地雷テスト\n現在の確率: ${(jiraiProb * 100).toFixed(2)}%\nルームID: ${roomId}\nLOG_ROOM_ID: ${LOG_ROOM_ID}\n一致: ${String(roomId) === LOG_ROOM_ID}\nアカウントID: ${accountId}\n管理者: ${isSenderAdmin}\n\nトグル状態:\ngakusei: ${toggles.gakusei}\nnyanko_a: ${toggles.nyanko_a}\nnetto: ${toggles.netto}\nadmin: ${toggles.admin}\nyuyuyu: ${toggles.yuyuyu}`;
+      const testMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n地雷テスト\n現在の確率: ${(jiraiProb * 100).toFixed(2)}%\nルームID: ${roomId}\nLOG_ROOM_ID: ${LOG_ROOM_ID}\n一致: ${String(roomId) === LOG_ROOM_ID}\nアカウントID: ${accountId}\n管理者: ${isSenderAdmin}\n\nトグル状態:\ngakusei: ${toggles.gakusei}\nnyanko_a: ${toggles.nyanko_a}\nmilk: ${toggles.milk}\nadmin: ${toggles.admin}\nyuyuyu: ${toggles.yuyuyu}`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, testMsg);
       console.log(`地雷テスト実行: prob=${jiraiProb}, toggles=${JSON.stringify(toggles)}`);
       return;
@@ -1866,7 +1987,7 @@ class WebHookMessageProcessor {
       const randomAdmin = admins[Math.floor(Math.random() * admins.length)];
       const adminId = randomAdmin.account_id;
       const adminName = randomAdmin.name;
-      
+
       const jiraiMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n地雷ふんじゃったね…\n[To:${adminId}]${adminName}に罰ゲームを考えてもらってね！（強制発動テスト）`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, jiraiMsg);
       console.log(`地雷強制発動: roomId=${roomId}, accountId=${accountId}, 選ばれた管理者=${adminName}`);
@@ -1882,11 +2003,11 @@ class WebHookMessageProcessor {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
       }
-      
+
       const toggles = await loadJiraiToggles();
       const newState = !toggles.gakusei;
       await saveJiraiToggle('gakusei', newState);
-      
+
       const msg = newState
         ? '学生の確率UPがONになりました。(確率：25%)'
         : '学生の確率UPがOFFになりました。';
@@ -1901,11 +2022,11 @@ class WebHookMessageProcessor {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
       }
-      
+
       const toggles = await loadJiraiToggles();
       const newState = !toggles.nyanko_a;
       await saveJiraiToggle('nyanko_a', newState);
-      
+
       const msg = newState
         ? 'nyanko_aの確率UPがONになりました。(確率：100%)'
         : 'nyanko_aの確率UPがOFFになりました。';
@@ -1914,22 +2035,22 @@ class WebHookMessageProcessor {
       return;
     }
 
-    // /netto トグル（管理者専用）
-    if (messageBody === '/netto') {
+    // /milk トグル（管理者専用）
+    if (messageBody === '/milk') {
       if (!isSenderAdmin) {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
       }
-      
+
       const toggles = await loadJiraiToggles();
-      const newState = !toggles.netto;
-      await saveJiraiToggle('netto', newState);
-      
+      const newState = !toggles.milk;
+      await saveJiraiToggle('milk', newState);
+
       const msg = newState
-        ? '熱湯の確率UPがONになりました。(確率：50%)'
-        : '熱湯の確率UPがOFFになりました。';
+        ? '牛乳の確率UPがONになりました。(確率：50%)'
+        : '牛乳の確率UPがOFFになりました。';
       await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
-      console.log(`/netto トグル: ${newState ? 'ON' : 'OFF'}`);
+      console.log(`/milk トグル: ${newState ? 'ON' : 'OFF'}`);
       return;
     }
 
@@ -1939,11 +2060,11 @@ class WebHookMessageProcessor {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
       }
-      
+
       const toggles = await loadJiraiToggles();
       const newState = !toggles.admin;
       await saveJiraiToggle('admin', newState);
-      
+
       const msg = newState
         ? '管理者の確率UPがONになりました。(確率：25%)'
         : '管理者の確率UPがOFFになりました。';
@@ -1958,11 +2079,11 @@ class WebHookMessageProcessor {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
       }
-      
+
       const toggles = await loadJiraiToggles();
       const newState = !toggles.yuyuyu;
       await saveJiraiToggle('yuyuyu', newState);
-      
+
       const msg = newState
         ? 'ゆゆゆの確率UPがONになりました。(確率：75%)'
         : 'ゆゆゆの確率UPがOFFになりました。';
@@ -2015,11 +2136,11 @@ app.post('/webhook', async (req, res) => {
   try {
     console.log('WebHook受信:', JSON.stringify(req.body, null, 2));
     const webhookEvent = req.body.webhook_event || req.body;
-    
+
     if (webhookEvent && webhookEvent.room_id) {
       webhookEvent.webhook_event_type = req.body.webhook_event_type || 'message_created';
       webhookEvent.webhook_event_time = req.body.webhook_event_time;
-      
+
       await WebHookMessageProcessor.processWebHookMessage(webhookEvent);
       res.status(200).json({ status: 'success', message: 'WebHook processed' });
     } else {
@@ -2039,7 +2160,7 @@ app.get('/msg-post', async (req, res) => {
       const { roomid, msg } = req.query;
 
       const isMember = await ChatworkBotUtils.isRoomMember(roomid);
-      
+
       if (!isMember) {
         return res.status(304).json({ 
           status: 'error', 
@@ -2052,7 +2173,7 @@ app.get('/msg-post', async (req, res) => {
       convertedMsg = convertedMsg.replace(/\[引用\s+aid=(\d+)\s+time=(\d+)\]([\s\S]*?)\[\/引用\]/g, '[qt][qtmeta aid=$1 time=$2]$3[/qt]');
 
       const messageId = await ChatworkBotUtils.sendChatworkMessage(roomid, convertedMsg);
-      
+
       if (messageId) {
         res.json({ 
           status: 'success', 
@@ -2173,7 +2294,7 @@ app.post('/msg-post', async (req, res) => {
     }
 
     const isMember = await ChatworkBotUtils.isRoomMember(roomid);
-    
+
     if (!isMember) {
       return res.status(400).json({ 
         status: 'error', 
@@ -2186,7 +2307,7 @@ app.post('/msg-post', async (req, res) => {
     convertedMsg = convertedMsg.replace(/\[引用\s+aid=(\d+)\s+time=(\d+)\]([\s\S]*?)\[\/引用\]/g, '[qt][qtmeta aid=$1 time=$2]$3[/qt]');
 
     const messageId = await ChatworkBotUtils.sendChatworkMessage(roomid, convertedMsg);
-    
+
     if (messageId) {
       res.json({ 
         status: 'success', 
@@ -2243,7 +2364,7 @@ app.post('/test-message', async (req, res) => {
 app.get('/status', async (req, res) => {
   try {
     const toggles = await loadJiraiToggles();
-    
+
     res.json({
       status: '元気！',
       mode: '全部のルームをみてるよ！',
@@ -2536,7 +2657,7 @@ async function sendTodayWeather() {
 
     for (const area of WEATHER_AREAS) {
       const weatherData = await ChatworkBotUtils.getWeatherForecast(area.code);
-      
+
       if (!weatherData || !weatherData.forecasts || weatherData.forecasts.length === 0) {
         console.error(`天気予報取得失敗: ${area.name}`);
         continue;
@@ -2575,7 +2696,7 @@ async function sendTomorrowWeather() {
 
     for (const area of WEATHER_AREAS) {
       const weatherData = await ChatworkBotUtils.getWeatherForecast(area.code);
-      
+
       if (!weatherData || !weatherData.forecasts || weatherData.forecasts.length < 2) {
         console.error(`天気予報取得失敗: ${area.name}`);
         continue;
@@ -2626,12 +2747,12 @@ async function checkEarthquakeInfo() {
 async function send311Memorial() {
   try {
     console.log('3/11 追悼メッセージを送信します');
-    
+
     const now = new Date();
     const jstDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
     const currentYear = jstDate.getFullYear();
     const yearsSince = currentYear - 2011;
-    
+
     const message = `今日は3月11日。東日本大震災から${yearsSince}年が経ちました。
 2011年3月11日14時46分、日本は観測史上最大級の地震と大津波に見舞われ、多くの尊い命が失われました。
 今もなお、あの日の記憶や想いを胸に生きている方々がいます。
@@ -2679,12 +2800,12 @@ async function cleanupOldMessageLogs() {
   try {
     const twoDaysAgo = new Date();
     twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-    
+
     const result = await pool.query(
       'DELETE FROM message_logs WHERE created_at < $1 AND room_id = $2',
       [twoDaysAgo, LOG_ROOM_ID]
     );
-    
+
     console.log(`古いメッセージログを削除: ${result.rowCount}件`);
   } catch (error) {
     console.error('メッセージログ削除エラー:', error.message);
@@ -2699,7 +2820,7 @@ async function checkAndSendAlarms() {
       'SELECT * FROM alarms WHERE scheduled_time <= $1',
       [now]
     );
-    
+
     for (const alarm of result.rows) {
       await ChatworkBotUtils.sendChatworkMessage(alarm.room_id, alarm.message);
       await pool.query('DELETE FROM alarms WHERE id = $1', [alarm.id]);
@@ -2772,7 +2893,7 @@ cron.schedule('46 14 11 3 *', async () => {
 
 // サーバー起動
 app.listen(port, async () => {
-  console.log(`湊音がポート${port}で起動しました`);
+  console.log(`みおんがポート${port}で起動しました`);
   console.log('WebHook URL: https://your-app-name.onrender.com/webhook');
   console.log('環境変数:');
   console.log('- CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN ? '設定済みだよ' : '未設定かも');
@@ -2784,6 +2905,9 @@ app.listen(port, async () => {
   console.log('- BOT_ACCOUNT_IDは', BOT_ACCOUNT_ID);
   console.log('- DAY_JSON_URLは', DAY_JSON_URL);
   console.log('動作モードはすべてのルームで反応、ログは', LOG_ROOM_ID, 'から', LOG_DESTINATION_ROOM_ID, 'へ送信だよ');
+
+  console.log('\nデータベースを初期化するね...');
+  await initializeDatabase();
 
   console.log('\nメッセージカウントを初期化するね...');
   for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
