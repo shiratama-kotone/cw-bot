@@ -1036,6 +1036,21 @@ class ChatworkBotUtils {
     }
   }
 
+  // ★ アカウントIDから名前を取得（メンバーリストを優先、なければcontacts API）
+  static async getNameById(targetAccountId, cachedMembers = []) {
+    const found = cachedMembers.find(m => String(m.account_id) === String(targetAccountId));
+    if (found) return found.name;
+    try {
+      await apiCallLimiter();
+      const res = await axios.get('https://api.chatwork.com/v2/contacts', {
+        headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
+      });
+      const contact = res.data.find(c => String(c.account_id) === String(targetAccountId));
+      if (contact) return contact.name;
+    } catch (e) {}
+    return String(targetAccountId);
+  }
+
   // ★ ブラックリスト追加
   static async addToBlackList(roomId, accountId) {
     try {
@@ -1194,7 +1209,8 @@ class WebHookMessageProcessor {
         const eventType = webhookData.webhook_event_type || 'message_created';
 
         const editLabel = eventType === 'message_updated' ? '(編集)' : '';
-        const forwardMessage = `[info][title][piconname:${accountId}]${editLabel}[/title]${messageBody}[/info]`;
+        const senderName = await ChatworkBotUtils.getNameById(accountId, []);
+        const forwardMessage = `[info][title]${senderName}${editLabel}[/title]${messageBody}[/info]`;
 
         try {
           await ChatworkBotUtils.sendChatworkMessage(forwardRoomId, forwardMessage);
@@ -1488,13 +1504,15 @@ class WebHookMessageProcessor {
         }
 
         let rankingMessage = '[info][title]累計発言数ランキング[/title]\n';
-        result.rows.forEach((row, index) => {
-          rankingMessage += `${index + 1}位：[piconname:${row.account_id}] ${row.message_count}コメ`;
+        for (let index = 0; index < result.rows.length; index++) {
+          const row = result.rows[index];
+          const name = await ChatworkBotUtils.getNameById(row.account_id, currentMembers);
+          rankingMessage += `${index + 1}位：${name} ${row.message_count}コメ`;
           if (index < result.rows.length - 1) {
             rankingMessage += '\n[hr]';
           }
           rankingMessage += '\n';
-        });
+        }
 
         const totalCount = result.rows.reduce((sum, row) => sum + parseInt(row.message_count), 0);
         rankingMessage += `\n合計：${totalCount}コメ[/info]`;
@@ -1630,9 +1648,8 @@ class WebHookMessageProcessor {
         }
 
         const admins = members.filter(m => m.role === 'admin');
-        const adminList = admins.length > 0
-          ? admins.map(admin => `[picon:${admin.account_id}]`).join(' ')
-          : 'なし';
+        const adminNames = admins.map(a => a.name);
+        const adminList = adminNames.length > 0 ? adminNames.join(', ') : 'なし';
 
         const infoMessage =
           `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n` +
@@ -1697,12 +1714,11 @@ class WebHookMessageProcessor {
         const freshMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
         let listText = '';
         for (const row of result.rows) {
-          const member = freshMembers.find(m => String(m.account_id) === String(row.account_id));
-          const name = member ? member.name : `ID:${row.account_id}`;
+          const name = await ChatworkBotUtils.getNameById(row.account_id, freshMembers);
           listText += `・${name} (${row.account_id})\n`;
         }
         await ChatworkBotUtils.sendChatworkMessage(roomId,
-          `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]ブラックリスト[/title]\n${listText}[/info]`);
+          `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n[info][title]ブラックリスト[/title]\n${listText}[/info]`);
       } catch (error) {
         console.error('ブラックリスト取得エラー:', error.message);
       }
@@ -1720,8 +1736,9 @@ class WebHookMessageProcessor {
         return;
       }
       await ChatworkBotUtils.addToBlackList(roomId, targetId);
+      const targetName = await ChatworkBotUtils.getNameById(targetId, currentMembers);
       await ChatworkBotUtils.sendChatworkMessage(roomId,
-        `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${targetId}]をブラックリストに追加したよ`);
+        `[rp aid=${accountId} to=${roomId}-${messageId}]${targetName}をブラックリストに追加したよ`);
       return;
     }
 
@@ -1737,8 +1754,9 @@ class WebHookMessageProcessor {
       }
       try {
         await pool.query('DELETE FROM black_list WHERE room_id = $1 AND account_id = $2', [roomId, targetId]);
+        const targetName = await ChatworkBotUtils.getNameById(targetId, currentMembers);
         await ChatworkBotUtils.sendChatworkMessage(roomId,
-          `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${targetId}]をブラックリストから削除したよ`);
+          `[rp aid=${accountId} to=${roomId}-${messageId}]${targetName}をブラックリストから削除したよ`);
       } catch (error) {
         console.error('ブラックリスト削除エラー:', error.message);
       }
@@ -1786,87 +1804,85 @@ class WebHookMessageProcessor {
     if (!isDirectChat && messageBody === '/info') {
       try {
         const roomInfo = await ChatworkBotUtils.getRoomInfo(roomId);
-
         if (!roomInfo) {
           await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得に失敗しました。');
           return;
         }
+        const now = new Date();
+        const jstNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+        const timeStr = jstNow.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
 
-        const roomName = roomInfo.name;
-        const memberCount = currentMembers.length;
-        const adminCount = currentMembers.filter(m => m.role === 'admin').length;
-        const fileCount = roomInfo.file_num || 0;
-        const messageCount = roomInfo.message_num || 0;
-        const iconPath = roomInfo.icon_path || '';
-
-        const messages = await ChatworkBotUtils.getRoomMessages(roomId);
-        let messageLink = 'なし';
-        if (messages && messages.length > 0) {
-          const latestMessageId = messages[0].message_id;
-          messageLink = `https://www.chatwork.com/#!rid${roomId}-${latestMessageId}`;
-        }
-
-        let iconLink = 'なし';
-        if (iconPath) {
-          if (iconPath.startsWith('http')) {
-            iconLink = iconPath;
-          } else {
-            iconLink = `https://appdata.chatwork.com${iconPath}`;
-          }
-        }
-
-        const admins = currentMembers.filter(m => m.role === 'admin');
-        let adminList = '';
-        if (admins.length > 0) {
-          adminList = admins.map(admin => `[picon:${admin.account_id}]`).join(' ');
-        } else {
-          adminList = 'なし';
-        }
-
-        const infoMessage = `[info][title]この部屋の情報だよ[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\n最新メッセージ：[修正中]\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
+        const infoMessage =
+          `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n` +
+          `[info][title]あなたの情報だよっ！[/title]` +
+          `ユーザーID：${accountId}\n` +
+          `ユーザー名：${userName}\n` +
+          `ルームID：${roomId}\n` +
+          `ルーム名：${roomInfo.name}\n` +
+          `メッセージID：${messageId}\n` +
+          `時間：${timeStr}[/info]`;
 
         await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
       } catch (error) {
         console.error('ルーム情報取得エラー:', error.message);
         await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得中にエラーが発生しちゃった。');
       }
+      return;
     }
 
     if (messageBody === '/romera') {
       try {
-        console.log(`ルーム ${roomId} のランキングを作成中...`);
-
-        let counts = memoryStorage.messageCounts.get(roomId) || {};
-
-        const ranking = Object.entries(counts)
-          .sort((a, b) => b[1] - a[1])
-          .map(([accountId, count], index) => ({
-            rank: index + 1,
-            accountId,
-            count
-          }));
-
-        const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
-
-        let rankingMessage = '[info][title]メッセージ数ランキングだよ[/title]\n';
-        if (ranking.length === 0) {
-          rankingMessage += '今日のメッセージはまだないみたい\n';
-        } else {
-          ranking.forEach((item, index) => {
-            rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
-            if (index < ranking.length - 1) {
-              rankingMessage += '\n[hr]';
-            }
-            rankingMessage += '\n';
-          });
-        }
-        rankingMessage += `\n合計：${totalCount}コメ\n(ぼく込みで)[/info]`;
-
-        await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
+        const rows = await getTodayCountsFromDB(roomId);
+        const msg = await buildRankingMessage('メッセージ数ランキングだよ', rows, currentMembers);
+        await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       } catch (error) {
         console.error('ランキング取得エラー:', error.message);
         await ChatworkBotUtils.sendChatworkMessage(roomId, 'ランキングの取得中にエラーが発生しました。');
       }
+    }
+
+    // ★★★ /help コマンド ★★★
+    if (messageBody === '/help') {
+      const commonHelp =
+        '[info][title]コマンド一覧だよっ！[/title]' +
+        '/help - このヘルプを表示\n[hr]' +
+        '/today - 今日の日付とイベント\n[hr]' +
+        '/info - あなたとこの部屋の情報\n[hr]' +
+        '/member - メンバー一覧（役割付き）\n[hr]' +
+        '/member-name - メンバー名一覧（ID順）\n[hr]' +
+        '/romera - 今日のメッセージ数ランキング\n[hr]' +
+        '/message-total - 累計発言数ランキング\n[hr]' +
+        '/yes-or-no - yes/noをランダム回答\n[hr]' +
+        '/wiki 検索ワード - Wikipediaを検索\n[hr]' +
+        '/lyric URL - 歌詞を取得（utaten/uta-net/atwiki）\n[hr]' +
+        '/song-typing-info 曲ID - 歌詞タイピング情報\n[hr]' +
+        '/alarm YYYY-MM-DD HH:MM メッセージ - アラームを設定\n[hr]' +
+        '/scratch-user ユーザー名 - Scratchユーザー情報\n[hr]' +
+        '/scratch-project プロジェクトID - Scratch作品情報\n[hr]' +
+        '/komekasegi - 過疎対策コメ連打\n[hr]' +
+        '/disself - 自分の権限を下げる\n[hr]' +
+        'おみくじ / /yes-or-no - 運試し[/info]';
+
+      const adminHelp = isSenderAdmin ?
+        '\n[info][title]管理者専用コマンドだよっ！[/title]' +
+        '/info {ルームID} - 別ルームの情報を取得\n[hr]' +
+        '/kick {ユーザーID} - キック\n[hr]' +
+        '/mute {ユーザーID} - 閲覧のみに変更\n[hr]' +
+        '/blacklist - ブラックリスト確認\n[hr]' +
+        '/blacklist-add {ユーザーID} - ブラックリストに追加\n[hr]' +
+        '/blacklist-del {ユーザーID} - ブラックリストから削除\n[hr]' +
+        '/gakusei - 学生の地雷確率UP (25%) トグル\n[hr]' +
+        '/nyanko_a - nyanko_aの地雷確率UP (100%) トグル\n[hr]' +
+        '/milk - 牛乳の地雷確率UP (50%) トグル\n[hr]' +
+        '/admin - 管理者の地雷確率UP (25%) トグル\n[hr]' +
+        '/yuyuyu - ゆゆゆの地雷確率UP (75%) トグル\n[hr]' +
+        '/jirai-test - 地雷確率デバッグ\n[hr]' +
+        '/jirai-force - 地雷強制発動テスト[/info]'
+        : '';
+
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n${commonHelp}${adminHelp}`);
+      return;
     }
 
     if (messageBody === '/komekasegi') {
@@ -2608,53 +2624,58 @@ async function ohayosekai() {
 }
 
 // 23:59にランキングを送信
+
+// DBから今日のメッセージ数をルームごとに集計して返す
+async function getTodayCountsFromDB(roomId) {
+  const now = new Date();
+  const jstDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+  const todayStart = new Date(jstDate.getFullYear(), jstDate.getMonth(), jstDate.getDate(), 0, 0, 0);
+  const todayStartTs = Math.floor(todayStart.getTime() / 1000);
+
+  const result = await pool.query(
+    `SELECT account_id, COUNT(*) as count
+     FROM webhooks
+     WHERE room_id = $1
+       AND webhook_event_type = 'message_created'
+       AND send_time >= $2
+     GROUP BY account_id
+     ORDER BY count DESC`,
+    [roomId, todayStartTs]
+  );
+
+  return result.rows.map(r => ({
+    accountId: String(r.account_id),
+    count: parseInt(r.count)
+  }));
+}
+
+// ランキング文字列を組み立てる（名前をメンバーリストから解決）
+async function buildRankingMessage(title, rows, members) {
+  const totalCount = rows.reduce((s, r) => s + r.count, 0);
+  let msg = `[info][title]${title}[/title]\n`;
+  if (rows.length === 0) {
+    msg += '今日のメッセージはまだないみたい。\n';
+  } else {
+    for (let i = 0; i < rows.length; i++) {
+      const name = await ChatworkBotUtils.getNameById(rows[i].accountId, members);
+      msg += `${i + 1}位：${name} ${rows[i].count}コメ`;
+      if (i < rows.length - 1) msg += '\n[hr]';
+      msg += '\n';
+    }
+  }
+  msg += `\n合計：${totalCount}コメ\n(ぼく込み)[/info]`;
+  return msg;
+}
+
 async function sendDailyRanking() {
   try {
     console.log('今日のランキングを送信します');
-
     for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
       try {
-        console.log(`ルーム ${roomId} のランキングを作成中...`);
-
-        const messages = await ChatworkBotUtils.getAllTodayMessages(roomId);
-
-        const counts = {};
-        messages.forEach(msg => {
-          const accId = msg.account && msg.account.account_id ? msg.account.account_id : null;
-          if (accId) counts[accId] = (counts[accId] || 0) + 1;
-        });
-
-        memoryStorage.messageCounts.set(roomId, counts);
-
-        const now = new Date();
-        const jstDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
-        memoryStorage.roomResetDates.set(roomId, jstDate.toISOString().split('T')[0]);
-
-        const ranking = Object.entries(counts)
-          .sort((a, b) => b[1] - a[1])
-          .map(([accountId, count], index) => ({
-            rank: index + 1,
-            accountId,
-            count
-          }));
-
-        const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
-
-        let rankingMessage = '今日のコメ数ランキングだよっ！\n[info][title]コメ数ランキング！[/title]\n';
-        if (ranking.length === 0) {
-          rankingMessage += '今日のメッセージはまだないみたい。\n';
-        } else {
-          ranking.forEach((item, index) => {
-            rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
-            if (index < ranking.length - 1) {
-              rankingMessage += '\n[hr]';
-            }
-            rankingMessage += '\n';
-          });
-        }
-        rankingMessage += `\n合計：${totalCount}コメ\n(ぼく込み)[/info]`;
-
-        await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
+        const rows = await getTodayCountsFromDB(roomId);
+        const members = await ChatworkBotUtils.getChatworkMembers(roomId);
+        const msg = await buildRankingMessage('コメ数ランキング！', rows, members);
+        await ChatworkBotUtils.sendChatworkMessage(roomId, '今日のコメ数ランキングだよっ！\n' + msg);
         console.log(`ランキング送信完了: ルーム ${roomId}`);
       } catch (error) {
         console.error(`ルーム ${roomId} へのランキング送信エラー:`, error.message);
@@ -2669,44 +2690,12 @@ async function sendDailyRanking() {
 async function sendPreMidnightRanking() {
   try {
     console.log('日付変更前 (23:55) のランキングを送信します');
-
     for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
       try {
-        console.log(`ルーム ${roomId} の事前ランキングを作成中...`);
-
-        const messages = await ChatworkBotUtils.getAllTodayMessages(roomId);
-
-        const counts = {};
-        messages.forEach(msg => {
-          const accId = msg.account && msg.account.account_id ? msg.account.account_id : null;
-          if (accId) counts[accId] = (counts[accId] || 0) + 1;
-        });
-
-        memoryStorage.messageCounts.set(roomId, counts);
-
-        const ranking = Object.entries(counts)
-          .sort((a, b) => b[1] - a[1])
-          .map(([accountId, count], index) => ({
-            rank: index + 1,
-            accountId,
-            count
-          }));
-
-        const totalCount = ranking.reduce((sum, item) => sum + item.count, 0);
-
-        let rankingMessage = '[info][title]日付変更の前のランキング[/title]\n';
-        if (ranking.length === 0) {
-          rankingMessage += '今日のメッセージはまだないみたい。\n';
-        } else {
-          ranking.forEach((item, index) => {
-            rankingMessage += `${item.rank}位：[piconname:${item.accountId}] ${item.count}コメ`;
-            if (index < ranking.length - 1) rankingMessage += '\n[hr]';
-            rankingMessage += '\n';
-          });
-        }
-        rankingMessage += `\n合計：${totalCount}コメ\n(ぼく込み)[/info]`;
-
-        await ChatworkBotUtils.sendChatworkMessage(roomId, rankingMessage);
+        const rows = await getTodayCountsFromDB(roomId);
+        const members = await ChatworkBotUtils.getChatworkMembers(roomId);
+        const msg = await buildRankingMessage('日付変更の前のランキング', rows, members);
+        await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
         console.log(`事前ランキング送信完了: ルーム ${roomId}`);
       } catch (error) {
         console.error(`ルーム ${roomId} への事前ランキング送信エラー:`, error.message);
