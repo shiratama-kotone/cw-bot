@@ -627,7 +627,7 @@ class ChatworkBotUtils {
   static async getSongTypingInfo(songId) {
     try {
       const response = await axios.get(
-        'https://shiratama-kotone.github.io/typing-game/song-typing/lyrics-data.js',
+        'https://typing-game-yuyuyu.onrender.com/song-typing/lyrics-data.js',
         { timeout: 10000 }
       );
 
