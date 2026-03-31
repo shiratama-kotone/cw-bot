@@ -2117,6 +2117,7 @@ class WebHookMessageProcessor {
       'トイレいってくる': `漏らさないでねっ！`,
       '6': `9`,
       'Git': `hub`,
+      '/help': `概要見てね`,
     };
     if (responses[messageBody]) {
       await ChatworkBotUtils.sendChatworkMessage(roomId, responses[messageBody]);
