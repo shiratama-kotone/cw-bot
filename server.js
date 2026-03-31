@@ -634,7 +634,7 @@ class ChatworkBotUtils {
       const jsCode = response.data;
 
       // lyricsDataを抽出（正規表現で安全に）
-      const match = jsCode.match(/const\s+lyricsData\s*=\s*(\[[\s\S]*\]);/);
+      const match = jsCode.match(/(?:const|var|let)\s+lyricsData\s*=\s*(\[[\s\S]*\])\s*;/);
       if (!match) {
         return '歌詞データの解析に失敗しちゃった';
       }
@@ -649,50 +649,53 @@ class ChatworkBotUtils {
         return '歌詞データの解析に失敗しちゃった';
       }
 
-      // 曲IDで検索
-      const song = lyricsData.find(s => s.id === songId);
-      if (!song) {
+      // 曲IDで検索（同IDが複数ある場合も全部出す）
+      const songs = lyricsData.filter(s => s.id === songId);
+      if (songs.length === 0) {
         return `曲ID「${songId}」が見つからなかったよ`;
       }
 
-      // 総打数計算
-      let totalCount = 0;
-      song.lyrics.forEach(line => {
-        totalCount += line.kana.length;
-      });
+      const results = [];
+      for (const song of songs) {
+        // 総打数計算
+        let totalCount = 0;
+        song.lyrics.forEach(line => {
+          totalCount += line.kana.length;
+        });
 
-      // ライン数
-      const lineCount = song.lyrics.length;
+        // ライン数
+        const lineCount = song.lyrics.length;
 
-      // YouTubeから動画の長さを取得
-      let duration = '取得中...';
-      try {
-        const ytResponse = await axios.get(
-          `https://www.youtube.com/watch?v=${song.youtubeId}`,
-          { timeout: 5000 }
-        );
-
-        const durationMatch = ytResponse.data.match(/"lengthSeconds":"(\d+)"/);
-        if (durationMatch) {
-          const seconds = parseInt(durationMatch[1]);
-          const minutes = Math.floor(seconds / 60);
-          const secs = seconds % 60;
-          duration = `${minutes}:${String(secs).padStart(2, '0')}`;
+        // YouTubeから動画の長さを取得
+        let duration = '取得中...';
+        try {
+          const ytResponse = await axios.get(
+            `https://www.youtube.com/watch?v=${song.youtubeId}`,
+            { timeout: 5000 }
+          );
+          const durationMatch = ytResponse.data.match(/"lengthSeconds":"(\d+)"/);
+          if (durationMatch) {
+            const seconds = parseInt(durationMatch[1]);
+            const minutes = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            duration = `${minutes}:${String(secs).padStart(2, '0')}`;
+          }
+        } catch (e) {
+          duration = '取得失敗';
         }
-      } catch (e) {
-        duration = '取得失敗';
+
+        // 必要平均タイプ速度計算（打/秒）
+        let avgSpeed = '計算中...';
+        if (duration !== '取得中...' && duration !== '取得失敗') {
+          const [min, sec] = duration.split(':').map(Number);
+          const totalSeconds = min * 60 + sec;
+          avgSpeed = `${(totalCount / totalSeconds).toFixed(2)}打/秒`;
+        }
+
+        results.push(`[info][title]${song.title}の歌詞タイピング情報[/title]総打数：${totalCount}\n曲の長さ：${duration}\n必要平均タイプ速度：${avgSpeed}\nライン数：${lineCount}[/info]`);
       }
 
-      // 必要平均タイプ速度計算（打/秒）
-      let avgSpeed = '計算中...';
-      if (duration !== '取得中...' && duration !== '取得失敗') {
-        const [min, sec] = duration.split(':').map(Number);
-        const totalSeconds = min * 60 + sec;
-        const speed = (totalCount / totalSeconds).toFixed(2);
-        avgSpeed = `${speed}打/秒`;
-      }
-
-      return `[info][title]${song.title}の歌詞タイピング情報[/title]総打数：${totalCount}\n曲の長さ：${duration}\n必要平均タイプ速度：${avgSpeed}\nライン数：${lineCount}[/info]`;
+      return results.join('\n');
     } catch (error) {
       console.error('歌詞タイピング情報取得エラー:', error.message);
       return `歌詞タイピング情報の取得中にエラーが発生しちゃった: ${error.message}`;
@@ -1552,17 +1555,20 @@ class WebHookMessageProcessor {
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
-    if (messageBody.startsWith('/wiki/')) {
-      const searchTerm = messageBody.substring('/wiki/'.length).trim();
+    if (messageBody.startsWith('/wiki ')) {
+      const searchTerm = messageBody.substring('/wiki '.length).trim();
       if (searchTerm) {
         const wikipediaSummary = await ChatworkBotUtils.getWikipediaSummary(searchTerm);
         const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\nWikipediaの検索結果だよっ！\n\n${wikipediaSummary}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+      } else {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /wiki 検索ワード だよ`);
       }
+      return;
     }
 
-    if (messageBody.startsWith('/info/')) {
-      const targetRoomId = messageBody.substring('/info/'.length).trim();
+    if (messageBody.startsWith('/info ')) {
+      const targetRoomId = messageBody.substring('/info '.length).trim();
 
       if (!targetRoomId || !INFO_API_TOKEN) {
         const errorMsg = !INFO_API_TOKEN
@@ -1601,7 +1607,7 @@ class WebHookMessageProcessor {
         const yuyuyuId = String(YUYUYU_ACCOUNT_ID);
         const isYuyuyuMember = members.some(m => String(m.account_id) === yuyuyuId);
 
-        console.log(`/info/ チェック: ルーム ${targetRoomId}, メンバー数 ${members.length}, ゆゆゆ参加: ${isYuyuyuMember}, DM: ${isDirectChat}`);
+        console.log(`/info チェック: ルーム ${targetRoomId}, メンバー数 ${members.length}, ゆゆゆ参加: ${isYuyuyuMember}, DM: ${isDirectChat}`);
 
         if (!isYuyuyuMember) {
           await ChatworkBotUtils.sendChatworkMessage(roomId,
@@ -1649,22 +1655,94 @@ class WebHookMessageProcessor {
       return;
     }
 
-    if (messageBody.startsWith('/scratch-user/')) {
-      const username = messageBody.substring('/scratch-user/'.length).trim();
+    if (messageBody.startsWith('/scratch-user ')) {
+      const username = messageBody.substring('/scratch-user '.length).trim();
       if (username) {
         const userStats = await ChatworkBotUtils.getScratchUserStats(username);
         const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\nScratchのユーザー「${username}」の情報だよっ！\n\n${userStats}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+      } else {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /scratch-user ユーザー名 だよ`);
       }
+      return;
     }
 
-    if (messageBody.startsWith('/scratch-project/')) {
-      const projectId = messageBody.substring('/scratch-project/'.length).trim();
+    if (messageBody.startsWith('/scratch-project ')) {
+      const projectId = messageBody.substring('/scratch-project '.length).trim();
       if (projectId) {
         const projectInfo = await ChatworkBotUtils.getScratchProjectInfo(projectId);
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\nScratchの作品「${projectId}」の情報だよっ！。\n\n${projectInfo}`;
+        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\nScratchの作品「${projectId}」の情報だよっ！\n\n${projectInfo}`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+      } else {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /scratch-project プロジェクトID だよ`);
       }
+      return;
+    }
+
+    // ★★★ ブラックリストコマンド（管理者専用） ★★★
+    if (messageBody === '/blacklist') {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      try {
+        const result = await pool.query(
+          'SELECT account_id FROM black_list WHERE room_id = $1 ORDER BY account_id ASC',
+          [roomId]
+        );
+        if (result.rows.length === 0) {
+          await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]ブラックリストは空だよ`);
+          return;
+        }
+        const freshMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
+        let listText = '';
+        for (const row of result.rows) {
+          const member = freshMembers.find(m => String(m.account_id) === String(row.account_id));
+          const name = member ? member.name : `ID:${row.account_id}`;
+          listText += `・${name} (${row.account_id})\n`;
+        }
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]ブラックリスト[/title]\n${listText}[/info]`);
+      } catch (error) {
+        console.error('ブラックリスト取得エラー:', error.message);
+      }
+      return;
+    }
+
+    if (messageBody.startsWith('/blacklist-add ')) {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      const targetId = messageBody.substring('/blacklist-add '.length).trim();
+      if (!targetId) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /blacklist-add {ユーザーID} だよ`);
+        return;
+      }
+      await ChatworkBotUtils.addToBlackList(roomId, targetId);
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${targetId}]をブラックリストに追加したよ`);
+      return;
+    }
+
+    if (messageBody.startsWith('/blacklist-del ')) {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      const targetId = messageBody.substring('/blacklist-del '.length).trim();
+      if (!targetId) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /blacklist-del {ユーザーID} だよ`);
+        return;
+      }
+      try {
+        await pool.query('DELETE FROM black_list WHERE room_id = $1 AND account_id = $2', [roomId, targetId]);
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${targetId}]をブラックリストから削除したよ`);
+      } catch (error) {
+        console.error('ブラックリスト削除エラー:', error.message);
+      }
+      return;
     }
 
     if (messageBody === '/today') {
@@ -1972,8 +2050,12 @@ class WebHookMessageProcessor {
 
     // ★★★ 地雷トグルコマンド ★★★
 
-    // /jirai-test コマンド（デバッグ用）
+    // /jirai-test コマンド（デバッグ用・管理者専用）
     if (messageBody === '/jirai-test') {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
       const toggles = await loadJiraiToggles();
       const jiraiProb = await ChatworkBotUtils.getJiraiProbability(accountId, isSenderAdmin);
       const testMsg = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n地雷テスト\n現在の確率: ${(jiraiProb * 100).toFixed(2)}%\nルームID: ${roomId}\nLOG_ROOM_ID: ${LOG_ROOM_ID}\n一致: ${String(roomId) === LOG_ROOM_ID}\nアカウントID: ${accountId}\n管理者: ${isSenderAdmin}\n\nトグル状態:\ngakusei: ${toggles.gakusei}\nnyanko_a: ${toggles.nyanko_a}\nmilk: ${toggles.milk}\nadmin: ${toggles.admin}\nyuyuyu: ${toggles.yuyuyu}`;
@@ -1982,8 +2064,12 @@ class WebHookMessageProcessor {
       return;
     }
 
-    // /jirai-force コマンド（強制発動テスト用）
+    // /jirai-force コマンド（強制発動テスト用・管理者専用）
     if (messageBody === '/jirai-force') {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
       // 管理者からランダムに1人選ぶ
       const admins = currentMembers.filter(m => m.role === 'admin');
       const randomAdmin = admins[Math.floor(Math.random() * admins.length)];
@@ -2117,7 +2203,6 @@ class WebHookMessageProcessor {
       'トイレいってくる': `漏らさないでねっ！`,
       '6': `9`,
       'Git': `hub`,
-      '/help': `概要見てね`,
     };
     if (responses[messageBody]) {
       await ChatworkBotUtils.sendChatworkMessage(roomId, responses[messageBody]);
@@ -2937,7 +3022,7 @@ app.listen(port, async () => {
   console.log('起動通知を送信するね...');
   for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
     try {
-      await ChatworkBotUtils.sendChatworkMessage(roomId, '/member-name');
+      await ChatworkBotUtils.sendChatworkMessage(roomId, '湊音が起動したよっ！');
       console.log(`起動通知送信完了: ルーム ${roomId}`);
     } catch (error) {
       console.error(`ルーム ${roomId} への起動通知送信エラー:`, error.message);
