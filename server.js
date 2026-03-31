@@ -1808,20 +1808,22 @@ class WebHookMessageProcessor {
           await ChatworkBotUtils.sendChatworkMessage(roomId, 'ルーム情報の取得に失敗しました。');
           return;
         }
-        const now = new Date();
-        const jstNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
-        const timeStr = jstNow.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+        const roomName = roomInfo.name;
+        const memberCount = currentMembers.length;
+        const adminCount = currentMembers.filter(m => m.role === 'admin').length;
+        const fileCount = roomInfo.file_num || 0;
+        const messageCount = roomInfo.message_num || 0;
+        const iconPath = roomInfo.icon_path || '';
 
-        const infoMessage =
-          `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n` +
-          `[info][title]あなたの情報だよっ！[/title]` +
-          `ユーザーID：${accountId}\n` +
-          `ユーザー名：${userName}\n` +
-          `ルームID：${roomId}\n` +
-          `ルーム名：${roomInfo.name}\n` +
-          `メッセージID：${messageId}\n` +
-          `時間：${timeStr}[/info]`;
+        let iconLink = 'なし';
+        if (iconPath) {
+          iconLink = iconPath.startsWith('http') ? iconPath : `https://appdata.chatwork.com${iconPath}`;
+        }
 
+        const admins = currentMembers.filter(m => m.role === 'admin');
+        const adminList = admins.length > 0 ? admins.map(a => a.name).join(', ') : 'なし';
+
+        const infoMessage = `[info][title]この部屋の情報だよ[/title]部屋名：${roomName}\nメンバー数：${memberCount}人\n管理者数：${adminCount}人\nルームID：${roomId}\nファイル数：${fileCount}\nメッセージ数：${messageCount}\nアイコン：${iconLink}\n管理者一覧：${adminList}[/info]`;
         await ChatworkBotUtils.sendChatworkMessage(roomId, infoMessage);
       } catch (error) {
         console.error('ルーム情報取得エラー:', error.message);
@@ -2197,16 +2199,15 @@ class WebHookMessageProcessor {
     }
 
     const responses = {
-      'はんせい': `[To:10911090] はんせい\n[pname:${accountId}]に呼ばれてるよっ！`,
-      'ゆゆゆ': `[To:10911090] ゆゆゆ\n[pname:${accountId}]に呼ばれてるよっ！`,
-      'からめり': `[To:10337719] からめり\n[pname:${accountId}]に呼ばれてるよっ！`,
-      '学生':`[To:9553691] がっくせい\n[pname:${accountId}]に呼ばれてるよっ！`,
-      'みおん':`はーい！`,
+      'はんせい': `[To:10911090] はんせい\n${userName}に呼ばれてるよっ！`,
+      'ゆゆゆ': `[To:10911090] ゆゆゆ\n${userName}に呼ばれてるよっ！`,
+      'からめり': `[To:10337719] からめり\n${userName}に呼ばれてるよっ！`,
+      '学生': `[To:9553691] がっくせい\n${userName}に呼ばれてるよっ！`,
+      'みおん': `はーい！`,
       'いろいろあぷり': `https://shiratama-kotone.github.io/any-app/\nどーぞ！`,
       '喘いでください湊音様': `そう簡単に喘ぐとでも思った？残念！ぼくは喘ぎません...っ♡///`,
       'おやすみ': `おやすみ！`,
       'おはよう': `おはよう！`,
-      '/test': `アカウントIDは${accountId}だよっ！`,
       'プロセカやってくる': `がんばれ！`,
       'せっ': `くす`,
       '精': `子`,
@@ -2222,6 +2223,25 @@ class WebHookMessageProcessor {
     };
     if (responses[messageBody]) {
       await ChatworkBotUtils.sendChatworkMessage(roomId, responses[messageBody]);
+    }
+
+    if (messageBody === '/test') {
+      const now = new Date();
+      const jstNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+      const timeStr = jstNow.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+      const roomInfo = await ChatworkBotUtils.getRoomInfo(roomId);
+      const roomName = roomInfo ? roomInfo.name : '取得失敗';
+
+      const testMessage =
+        `[rp aid=${accountId} to=${roomId}-${messageId}]` +
+        `[info][title]あなたの情報だよっ！[/title]` +
+        `ユーザーID：${accountId}\n` +
+        `ユーザー名：${userName}\n` +
+        `ルームID：${roomId}\n` +
+        `ルーム名：${roomName}\n` +
+        `メッセージID：${messageId}\n` +
+        `時間：${timeStr}[/info]`;
+      await ChatworkBotUtils.sendChatworkMessage(roomId, testMessage);
     }
   }
 
