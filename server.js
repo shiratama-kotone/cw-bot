@@ -627,7 +627,7 @@ class ChatworkBotUtils {
   static async getSongTypingInfo(songId) {
     try {
       const response = await axios.get(
-        'https://typing-game-yuyuyu.onrender.com/song-typing/lyrics-data.js',
+        'https://shiratama-kotone.github.io/typing-game/song-typing/lyrics-data.js',
         { timeout: 10000 }
       );
 
@@ -1236,11 +1236,13 @@ class WebHookMessageProcessor {
             await new Promise(resolve => setTimeout(resolve, 1500));
             const freshMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
             await ChatworkBotUtils.forceReadOnly(roomId, newUserId, freshMembers);
+            const newUserName = await ChatworkBotUtils.getNameById(newUserId, freshMembers);
             await ChatworkBotUtils.sendChatworkMessage(roomId,
-              `[To:${newUserId}][pname:${newUserId}]ちゃんはブラックリストに入ってるから閲覧のみにしたよ`);
+              `[To:${newUserId}][picon:${newUserId}]${newUserName}ちゃんはブラックリストに入ってるから閲覧のみにしたよ`);
           } else if (String(roomId) === LOG_ROOM_ID || roomId === LOG_ROOM_ID) {
-            // ウェルカムメッセージ（LOG_ROOM_IDのみ）
-            const welcomeMessage = `[To:${newUserId}][pname:${newUserId}]ちゃん\nこの部屋へようこそ！\nこの部屋は色々とおかしいけどよろしくね！`;
+            const freshMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
+            const newUserName = await ChatworkBotUtils.getNameById(newUserId, freshMembers);
+            const welcomeMessage = `[To:${newUserId}][picon:${newUserId}]${newUserName}ちゃん\nこの部屋へようこそ！\nこの部屋は色々とおかしいけどよろしくね！`;
             try {
               await new Promise(resolve => setTimeout(resolve, 1000));
               await ChatworkBotUtils.sendChatworkMessage(roomId, welcomeMessage);
@@ -1267,8 +1269,9 @@ class WebHookMessageProcessor {
             const member = freshMembers.find(m => String(m.account_id) === String(changedUserId));
             if (member && member.role !== 'readonly') {
               await ChatworkBotUtils.forceReadOnly(roomId, changedUserId, freshMembers);
+              const changedUserName = await ChatworkBotUtils.getNameById(changedUserId, freshMembers);
               await ChatworkBotUtils.sendChatworkMessage(roomId,
-                `[pname:${changedUserId}]ちゃんはブラックリストに入ってるから閲覧のみに戻したよ`);
+                `[picon:${changedUserId}]${changedUserName}ちゃんはブラックリストに入ってるから閲覧のみに戻したよ`);
             }
           }
         }
@@ -1276,10 +1279,6 @@ class WebHookMessageProcessor {
 
       // メッセージカウント更新
       this.updateMessageCount(roomId, accountId);
-
-      // ログ送信
-      console.log(`ログ送信チェック: sourceRoomId=${roomId}, LOG_ROOM_ID=${LOG_ROOM_ID}`);
-      await ChatworkBotUtils.sendLogToChatwork(userName, messageBody, roomId);
 
       // メンバー情報取得
       let currentMembers = [];
@@ -1295,9 +1294,12 @@ class WebHookMessageProcessor {
       if (account && account.name) {
         userName = account.name;
       } else {
-        const memberInfo = currentMembers.find(m => String(m.account_id) === String(accountId));
-        userName = memberInfo ? memberInfo.name : `ID:${accountId}`;
+        userName = await ChatworkBotUtils.getNameById(accountId, currentMembers);
       }
+
+      // ログ送信（userName解決後）
+      console.log(`ログ送信チェック: sourceRoomId=${roomId}, LOG_ROOM_ID=${LOG_ROOM_ID}`);
+      await ChatworkBotUtils.sendLogToChatwork(userName, messageBody, roomId);
 
       // ★★★ 地雷踏んだね (LOG_ROOM_IDのみ) ★★★
       console.log(`地雷チェック: roomId=${roomId} (型=${typeof roomId}), LOG_ROOM_ID=${LOG_ROOM_ID} (型=${typeof LOG_ROOM_ID}), 一致=${String(roomId) === LOG_ROOM_ID}`);
@@ -1715,7 +1717,7 @@ class WebHookMessageProcessor {
         let listText = '';
         for (const row of result.rows) {
           const name = await ChatworkBotUtils.getNameById(row.account_id, freshMembers);
-          listText += `・${name} (${row.account_id})\n`;
+          listText += `・[picon:${row.account_id}]${name}\n`;
         }
         await ChatworkBotUtils.sendChatworkMessage(roomId,
           `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん\n[info][title]ブラックリスト[/title]\n${listText}[/info]`);
@@ -1738,7 +1740,7 @@ class WebHookMessageProcessor {
       await ChatworkBotUtils.addToBlackList(roomId, targetId);
       const targetName = await ChatworkBotUtils.getNameById(targetId, currentMembers);
       await ChatworkBotUtils.sendChatworkMessage(roomId,
-        `[rp aid=${accountId} to=${roomId}-${messageId}]${targetName}をブラックリストに追加したよ`);
+        `[rp aid=${accountId} to=${roomId}-${messageId}][picon:${targetId}]${targetName}をブラックリストに追加したよ`);
       return;
     }
 
@@ -1756,7 +1758,7 @@ class WebHookMessageProcessor {
         await pool.query('DELETE FROM black_list WHERE room_id = $1 AND account_id = $2', [roomId, targetId]);
         const targetName = await ChatworkBotUtils.getNameById(targetId, currentMembers);
         await ChatworkBotUtils.sendChatworkMessage(roomId,
-          `[rp aid=${accountId} to=${roomId}-${messageId}]${targetName}をブラックリストから削除したよ`);
+          `[rp aid=${accountId} to=${roomId}-${messageId}][picon:${targetId}]${targetName}をブラックリストから削除したよ`);
       } catch (error) {
         console.error('ブラックリスト削除エラー:', error.message);
       }
