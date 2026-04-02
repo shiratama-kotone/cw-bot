@@ -122,6 +122,51 @@ async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_black_list_room_account ON black_list(room_id, account_id);
     `);
 
+    // ポイントテーブル
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS points (
+        id SERIAL PRIMARY KEY,
+        room_id BIGINT NOT NULL,
+        account_id BIGINT NOT NULL,
+        point BIGINT DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(room_id, account_id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_points_room_account ON points(room_id, account_id);
+    `);
+
+    // フィーバーテーブル（room_idごとに1レコード）
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS fever (
+        id SERIAL PRIMARY KEY,
+        room_id BIGINT NOT NULL UNIQUE,
+        ends_at TIMESTAMP NOT NULL
+      )
+    `);
+
+    // 発言禁止テーブル
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS prohibit (
+        id SERIAL PRIMARY KEY,
+        room_id BIGINT NOT NULL UNIQUE,
+        ends_at TIMESTAMP NOT NULL
+      )
+    `);
+
+    // NGワードテーブル
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ng_words (
+        id SERIAL PRIMARY KEY,
+        room_id BIGINT NOT NULL,
+        word TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(room_id, word)
+      )
+    `);
+
     console.log('データベーステーブル初期化完了');
   } catch (error) {
     console.error('データベース初期化エラー:', error.message);
@@ -1036,10 +1081,19 @@ class ChatworkBotUtils {
     }
   }
 
-  // ★ アカウントIDから名前を取得（メンバーリストを優先、なければcontacts API）
-  static async getNameById(targetAccountId, cachedMembers = []) {
+  // ★ アカウントIDから名前を取得（メンバーリストを優先、なければAPIで取得）
+  static async getNameById(targetAccountId, cachedMembers = [], roomId = null) {
     const found = cachedMembers.find(m => String(m.account_id) === String(targetAccountId));
     if (found) return found.name;
+    // roomIdがあればそのルームのメンバーから取得
+    if (roomId) {
+      try {
+        const members = await ChatworkBotUtils.getChatworkMembers(roomId);
+        const member = members.find(m => String(m.account_id) === String(targetAccountId));
+        if (member) return member.name;
+      } catch (e) {}
+    }
+    // contactsから取得
     try {
       await apiCallLimiter();
       const res = await axios.get('https://api.chatwork.com/v2/contacts', {
@@ -1201,6 +1255,72 @@ class WebHookMessageProcessor {
       if (!roomId || !accountId || !messageBody) {
         console.log('不完全なWebHookデータ:', webhookData);
         return;
+      }
+
+      // ★★★ 発言禁止チェック ★★★
+      if (eventType === 'message_created') {
+        const prohibitResult = await pool.query(
+          'SELECT ends_at FROM prohibit WHERE room_id = $1 AND ends_at > NOW()',
+          [roomId]
+        );
+        if (prohibitResult.rowCount > 0) {
+          // 管理者・特権IDは除外
+          const isPriv = ['10911090','9553691'].includes(String(accountId));
+          const tempMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
+          const isAdm = WebHookMessageProcessor.isUserAdmin(accountId, tempMembers);
+          if (!isPriv && !isAdm) {
+            await ChatworkBotUtils.deleteMessage(roomId, messageId);
+            console.log(`発言禁止: メッセージ削除 accountId=${accountId}`);
+          }
+        }
+      }
+
+      // ★★★ NGワードチェック ★★★
+      if (eventType === 'message_created') {
+        const ngResult = await pool.query(
+          'SELECT word FROM ng_words WHERE room_id = $1',
+          [roomId]
+        );
+        if (ngResult.rowCount > 0) {
+          const tempMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
+          const isAdm = WebHookMessageProcessor.isUserAdmin(accountId, tempMembers);
+          const isPriv = ['10911090','9553691'].includes(String(accountId));
+          if (!isAdm && !isPriv) {
+            const hit = ngResult.rows.find(r => messageBody.includes(r.word));
+            if (hit) {
+              await ChatworkBotUtils.addToBlackList(roomId, accountId);
+              await ChatworkBotUtils.forceReadOnly(roomId, accountId, tempMembers);
+              const ngUserName = await ChatworkBotUtils.getNameById(accountId, tempMembers, roomId);
+              await ChatworkBotUtils.sendChatworkMessage(roomId,
+                `[picon:${accountId}]${ngUserName}ちゃんがNGワード「${hit.word}」を含むメッセージを送ったから閲覧のみにしたよ`);
+              console.log(`NGワード検知: accountId=${accountId}, word=${hit.word}`);
+            }
+          }
+        }
+      }
+
+      // ★★★ ポイント付与 ★★★
+      if (eventType === 'message_created') {
+        const PRIV_IDS = ['10911090', '9553691'];
+        const tempMembers2 = await ChatworkBotUtils.getChatworkMembers(roomId).catch(() => []);
+        const isAdm2 = WebHookMessageProcessor.isUserAdmin(accountId, tempMembers2);
+        let basePoint = 1;
+        if (PRIV_IDS.includes(String(accountId))) basePoint = 5;
+        else if (isAdm2) basePoint = 2;
+
+        // フィーバーチェック
+        const feverResult = await pool.query(
+          'SELECT ends_at FROM fever WHERE room_id = $1 AND ends_at > NOW()',
+          [roomId]
+        );
+        if (feverResult.rowCount > 0) basePoint *= 10;
+
+        await pool.query(`
+          INSERT INTO points (room_id, account_id, point)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (room_id, account_id)
+          DO UPDATE SET point = points.point + $3, updated_at = NOW()
+        `, [roomId, accountId, basePoint]);
       }
 
       // ★★★ 転送処理 ★★★
@@ -1716,7 +1836,7 @@ class WebHookMessageProcessor {
         const freshMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
         let listText = '';
         for (const row of result.rows) {
-          const name = await ChatworkBotUtils.getNameById(row.account_id, freshMembers);
+          const name = await ChatworkBotUtils.getNameById(row.account_id, freshMembers, roomId);
           listText += `・[picon:${row.account_id}]${name}\n`;
         }
         await ChatworkBotUtils.sendChatworkMessage(roomId,
@@ -1732,15 +1852,19 @@ class WebHookMessageProcessor {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
       }
-      const targetId = messageBody.substring('/blacklist-add '.length).trim();
-      if (!targetId) {
+      const targetIds = messageBody.substring('/blacklist-add '.length).trim().split(/\s+/).filter(Boolean);
+      if (targetIds.length === 0) {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /blacklist-add {ユーザーID} だよ`);
         return;
       }
-      await ChatworkBotUtils.addToBlackList(roomId, targetId);
-      const targetName = await ChatworkBotUtils.getNameById(targetId, currentMembers);
+      const added = [];
+      for (const tid of targetIds) {
+        await ChatworkBotUtils.addToBlackList(roomId, tid);
+        const name = await ChatworkBotUtils.getNameById(tid, currentMembers, roomId);
+        added.push(`[picon:${tid}]${name}`);
+      }
       await ChatworkBotUtils.sendChatworkMessage(roomId,
-        `[rp aid=${accountId} to=${roomId}-${messageId}][picon:${targetId}]${targetName}をブラックリストに追加したよ`);
+        `[rp aid=${accountId} to=${roomId}-${messageId}]${added.join('、')}をブラックリストに追加したよ`);
       return;
     }
 
@@ -1749,19 +1873,19 @@ class WebHookMessageProcessor {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
       }
-      const targetId = messageBody.substring('/blacklist-del '.length).trim();
-      if (!targetId) {
+      const targetIds = messageBody.substring('/blacklist-del '.length).trim().split(/\s+/).filter(Boolean);
+      if (targetIds.length === 0) {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /blacklist-del {ユーザーID} だよ`);
         return;
       }
-      try {
-        await pool.query('DELETE FROM black_list WHERE room_id = $1 AND account_id = $2', [roomId, targetId]);
-        const targetName = await ChatworkBotUtils.getNameById(targetId, currentMembers);
-        await ChatworkBotUtils.sendChatworkMessage(roomId,
-          `[rp aid=${accountId} to=${roomId}-${messageId}][picon:${targetId}]${targetName}をブラックリストから削除したよ`);
-      } catch (error) {
-        console.error('ブラックリスト削除エラー:', error.message);
+      const deleted = [];
+      for (const tid of targetIds) {
+        await pool.query('DELETE FROM black_list WHERE room_id = $1 AND account_id = $2', [roomId, tid]);
+        const name = await ChatworkBotUtils.getNameById(tid, currentMembers, roomId);
+        deleted.push(`[picon:${tid}]${name}`);
       }
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}]${deleted.join('、')}をブラックリストから削除したよ`);
       return;
     }
 
@@ -1845,17 +1969,260 @@ class WebHookMessageProcessor {
       }
     }
 
+    // ★★★ ポイントコマンド ★★★
+    if (messageBody === '/points') {
+      try {
+        const res = await pool.query(
+          'SELECT point FROM points WHERE room_id = $1 AND account_id = $2',
+          [roomId, accountId]
+        );
+        const pt = res.rowCount > 0 ? res.rows[0].point : 0;
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃんの現在のポイントは ${pt}pt だよ！`);
+      } catch (e) { console.error('pointsエラー:', e.message); }
+      return;
+    }
+
+    if (messageBody === '/points-all') {
+      try {
+        const res = await pool.query(
+          'SELECT account_id, point FROM points WHERE room_id = $1 ORDER BY point DESC',
+          [roomId]
+        );
+        if (res.rowCount === 0) {
+          await ChatworkBotUtils.sendChatworkMessage(roomId,
+            `[rp aid=${accountId} to=${roomId}-${messageId}]まだポイントを持ってる人がいないみたい`);
+          return;
+        }
+        let msg = '[info][title]ポイントランキング[/title]\n';
+        for (let i = 0; i < res.rows.length; i++) {
+          const name = await ChatworkBotUtils.getNameById(res.rows[i].account_id, currentMembers, roomId);
+          msg += `${i + 1}位：[picon:${res.rows[i].account_id}]${name} ${res.rows[i].point}pt`;
+          if (i < res.rows.length - 1) msg += '\n[hr]';
+          msg += '\n';
+        }
+        msg += '[/info]';
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]${msg}`);
+      } catch (e) { console.error('points-allエラー:', e.message); }
+      return;
+    }
+
+    if (messageBody.startsWith('/send ')) {
+      const parts = messageBody.substring('/send '.length).trim().split(/\s+/);
+      const targetId = parts[0];
+      const sendPt = parseInt(parts[1]);
+      if (!targetId || isNaN(sendPt) || sendPt <= 0) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /send {ユーザーID} {ポイント} だよ`);
+        return;
+      }
+      try {
+        const myRes = await pool.query('SELECT point FROM points WHERE room_id=$1 AND account_id=$2', [roomId, accountId]);
+        const myPt = myRes.rowCount > 0 ? parseInt(myRes.rows[0].point) : 0;
+        if (myPt < sendPt) {
+          await ChatworkBotUtils.sendChatworkMessage(roomId,
+            `[rp aid=${accountId} to=${roomId}-${messageId}]ポイントが足りないよ！今持ってるのは ${myPt}pt だよ`);
+          return;
+        }
+        await pool.query(`UPDATE points SET point = point - $1 WHERE room_id=$2 AND account_id=$3`, [sendPt, roomId, accountId]);
+        await pool.query(`
+          INSERT INTO points (room_id, account_id, point) VALUES ($1, $2, $3)
+          ON CONFLICT (room_id, account_id) DO UPDATE SET point = points.point + $3, updated_at = NOW()
+        `, [roomId, targetId, sendPt]);
+        const targetName = await ChatworkBotUtils.getNameById(targetId, currentMembers, roomId);
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}][picon:${targetId}]${targetName}に ${sendPt}pt 送ったよ！`);
+      } catch (e) { console.error('sendエラー:', e.message); }
+      return;
+    }
+
+    if (messageBody.startsWith('/point-add ')) {
+      if (!['10911090','9553691'].includes(String(accountId))) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]このコマンドは使えないよ！`);
+        return;
+      }
+      const parts = messageBody.substring('/point-add '.length).trim().split(/\s+/);
+      const targetId = parts[0]; const addPt = parseInt(parts[1]);
+      if (!targetId || isNaN(addPt) || addPt <= 0) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /point-add {ユーザーID} {ポイント} だよ`);
+        return;
+      }
+      await pool.query(`
+        INSERT INTO points (room_id, account_id, point) VALUES ($1, $2, $3)
+        ON CONFLICT (room_id, account_id) DO UPDATE SET point = points.point + $3, updated_at = NOW()
+      `, [roomId, targetId, addPt]);
+      const targetName = await ChatworkBotUtils.getNameById(targetId, currentMembers, roomId);
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}][picon:${targetId}]${targetName}に ${addPt}pt 追加したよ！`);
+      return;
+    }
+
+    if (messageBody.startsWith('/point-del ')) {
+      if (!['10911090','9553691'].includes(String(accountId))) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]このコマンドは使えないよ！`);
+        return;
+      }
+      const parts = messageBody.substring('/point-del '.length).trim().split(/\s+/);
+      const targetId = parts[0]; const delPt = parseInt(parts[1]);
+      if (!targetId || isNaN(delPt) || delPt <= 0) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /point-del {ユーザーID} {ポイント} だよ`);
+        return;
+      }
+      await pool.query(`
+        INSERT INTO points (room_id, account_id, point) VALUES ($1, $2, 0)
+        ON CONFLICT (room_id, account_id) DO UPDATE SET point = GREATEST(points.point - $3, 0), updated_at = NOW()
+      `, [roomId, targetId, delPt]);
+      const targetName = await ChatworkBotUtils.getNameById(targetId, currentMembers, roomId);
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}][picon:${targetId}]${targetName}から ${delPt}pt 削除したよ！`);
+      return;
+    }
+
+    if (messageBody.startsWith('/fever ')) {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      const arg = messageBody.substring('/fever '.length).trim();
+      const mMatch = arg.match(/^(\d+)m$/); const hMatch = arg.match(/^(\d+)h$/);
+      let secs = 0;
+      if (mMatch) secs = parseInt(mMatch[1]) * 60;
+      else if (hMatch) secs = parseInt(hMatch[1]) * 3600;
+      if (secs <= 0 || secs > 10800) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]時間の指定がおかしいよ！5分なら 5m、3時間なら 3h（最大3時間）`);
+        return;
+      }
+      const endsAt = new Date(Date.now() + secs * 1000);
+      await pool.query(`
+        INSERT INTO fever (room_id, ends_at) VALUES ($1, $2)
+        ON CONFLICT (room_id) DO UPDATE SET ends_at = $2
+      `, [roomId, endsAt]);
+      const endStr = endsAt.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}]🔥フィーバータイム開始！${endStr} まで獲得ポイント10倍だよっ！`);
+      return;
+    }
+
+    // ★★★ 発言禁止コマンド（管理者専用） ★★★
+    if (messageBody.startsWith('/prohibit ')) {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      const arg = messageBody.substring('/prohibit '.length).trim();
+      const mMatch = arg.match(/^(\d+)m$/); const hMatch = arg.match(/^(\d+)h$/);
+      let secs = 0;
+      if (mMatch) secs = parseInt(mMatch[1]) * 60;
+      else if (hMatch) secs = parseInt(hMatch[1]) * 3600;
+      if (secs <= 0 || secs > 10800) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]時間の指定がおかしいよ！5分なら 5m、3時間なら 3h（最大3時間）`);
+        return;
+      }
+      const endsAt = new Date(Date.now() + secs * 1000);
+      await pool.query(`
+        INSERT INTO prohibit (room_id, ends_at) VALUES ($1, $2)
+        ON CONFLICT (room_id) DO UPDATE SET ends_at = $2
+      `, [roomId, endsAt]);
+      const endStr = endsAt.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}]${endStr} まで発言禁止にしたよ！`);
+      return;
+    }
+
+    if (messageBody === '/release') {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      await pool.query('DELETE FROM prohibit WHERE room_id = $1', [roomId]);
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}]発言禁止を解除したよ！`);
+      return;
+    }
+
+    // ★★★ NGワードコマンド（管理者専用） ★★★
+    if (messageBody.startsWith('/ng ')) {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      const word = messageBody.substring('/ng '.length).trim();
+      if (!word) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /ng {言葉} だよ`);
+        return;
+      }
+      await pool.query(
+        'INSERT INTO ng_words (room_id, word) VALUES ($1, $2) ON CONFLICT (room_id, word) DO NOTHING',
+        [roomId, word]
+      );
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}]「${word}」をNGワードに登録したよ！`);
+      return;
+    }
+
+    if (messageBody.startsWith('/ok ')) {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      const word = messageBody.substring('/ok '.length).trim();
+      if (!word) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /ok {言葉} だよ`);
+        return;
+      }
+      await pool.query('DELETE FROM ng_words WHERE room_id = $1 AND word = $2', [roomId, word]);
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}]「${word}」をNGワードから削除したよ！`);
+      return;
+    }
+
+    if (messageBody === '/ng-check') {
+      if (!isSenderAdmin) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
+        return;
+      }
+      const res = await pool.query('SELECT word FROM ng_words WHERE room_id = $1 ORDER BY created_at', [roomId]);
+      if (res.rowCount === 0) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]NGワードはまだ登録されてないよ`);
+        return;
+      }
+      const wordList = res.rows.map(r => `・${r.word}`).join('\n');
+      await ChatworkBotUtils.sendChatworkMessage(roomId,
+        `[rp aid=${accountId} to=${roomId}-${messageId}][info][title]NGワード一覧[/title]\n${wordList}[/info]`);
+      return;
+    }
+
     // ★★★ /help コマンド ★★★
     if (messageBody === '/help') {
       const commonHelp =
         '[info][title]コマンド一覧だよっ！[/title]' +
         '/help - このヘルプを表示\n[hr]' +
         '/today - 今日の日付とイベント\n[hr]' +
-        '/info - あなたとこの部屋の情報\n[hr]' +
+        '/test - あなたとこの部屋の情報\n[hr]' +
+        '/info - この部屋の情報\n[hr]' +
         '/member - メンバー一覧（役割付き）\n[hr]' +
         '/member-name - メンバー名一覧（ID順）\n[hr]' +
         '/romera - 今日のメッセージ数ランキング\n[hr]' +
         '/message-total - 累計発言数ランキング\n[hr]' +
+        '/points - 自分のポイントを確認\n[hr]' +
+        '/points-all - 全員のポイントランキング\n[hr]' +
+        '/send {ユーザーID} {ポイント} - ポイントを送る\n[hr]' +
         '/yes-or-no - yes/noをランダム回答\n[hr]' +
         '/wiki 検索ワード - Wikipediaを検索\n[hr]' +
         '/lyric URL - 歌詞を取得（utaten/uta-net/atwiki）\n[hr]' +
@@ -1870,11 +2237,17 @@ class WebHookMessageProcessor {
       const adminHelp = isSenderAdmin ?
         '\n[info][title]管理者専用コマンドだよっ！[/title]' +
         '/info {ルームID} - 別ルームの情報を取得\n[hr]' +
-        '/kick {ユーザーID} - キック\n[hr]' +
-        '/mute {ユーザーID} - 閲覧のみに変更\n[hr]' +
+        '/kick {ユーザーID}... - キック（複数ID可）\n[hr]' +
+        '/mute {ユーザーID}... - 閲覧のみに変更（複数ID可）\n[hr]' +
         '/blacklist - ブラックリスト確認\n[hr]' +
-        '/blacklist-add {ユーザーID} - ブラックリストに追加\n[hr]' +
-        '/blacklist-del {ユーザーID} - ブラックリストから削除\n[hr]' +
+        '/blacklist-add {ユーザーID}... - ブラックリストに追加（複数ID可）\n[hr]' +
+        '/blacklist-del {ユーザーID}... - ブラックリストから削除（複数ID可）\n[hr]' +
+        '/fever {時間} - フィーバータイム（例: 5m, 1h、最大3h）\n[hr]' +
+        '/prohibit {時間} - 発言禁止（例: 5m, 1h、最大3h）\n[hr]' +
+        '/release - 発言禁止を解除\n[hr]' +
+        '/ng {言葉} - NGワード登録\n[hr]' +
+        '/ok {言葉} - NGワード削除\n[hr]' +
+        '/ng-check - NGワード一覧\n[hr]' +
         '/gakusei - 学生の地雷確率UP (25%) トグル\n[hr]' +
         '/nyanko_a - nyanko_aの地雷確率UP (100%) トグル\n[hr]' +
         '/milk - 牛乳の地雷確率UP (50%) トグル\n[hr]' +
@@ -1912,47 +2285,33 @@ class WebHookMessageProcessor {
     // /kick {アカウントID} - 管理者専用
     // ----------------------------------------
     if (!isDirectChat && messageBody.startsWith('/kick ') && isSenderAdmin) {
-      const targetId = String(messageBody.substring('/kick '.length).trim());
-      if (targetId) {
+      const targetIds = messageBody.substring('/kick '.length).trim().split(/\s+/).filter(Boolean);
+      const kicked = [];
+      for (const targetId of targetIds) {
         try {
-          const targetMember = currentMembers.find(m => String(m.account_id) === targetId);
-          if (!targetMember) {
-            await ChatworkBotUtils.sendChatworkMessage(roomId,
-              `[rp aid=${accountId} to=${roomId}-${messageId}]そのIDのメンバーはこの部屋にいないみたい`);
-            return;
-          }
-
-          const admins  = currentMembers.filter(m => m.role === 'admin'    && String(m.account_id) !== targetId).map(m => String(m.account_id));
-          const members = currentMembers.filter(m => m.role === 'member'   && String(m.account_id) !== targetId).map(m => String(m.account_id));
-          const readonly= currentMembers.filter(m => m.role === 'readonly' && String(m.account_id) !== targetId).map(m => String(m.account_id));
-
-          if (admins.length === 0) {
-            await ChatworkBotUtils.sendChatworkMessage(roomId,
-              `[rp aid=${accountId} to=${roomId}-${messageId}]管理者が0人になっちゃうからキックできないよ`);
-            return;
-          }
-
+          const fresh = await ChatworkBotUtils.getChatworkMembers(roomId);
+          const targetMember = fresh.find(m => String(m.account_id) === targetId);
+          if (!targetMember) continue;
+          const admins   = fresh.filter(m => m.role === 'admin'    && String(m.account_id) !== targetId).map(m => String(m.account_id));
+          const members  = fresh.filter(m => m.role === 'member'   && String(m.account_id) !== targetId).map(m => String(m.account_id));
+          const readonly = fresh.filter(m => m.role === 'readonly' && String(m.account_id) !== targetId).map(m => String(m.account_id));
+          if (admins.length === 0) continue;
           const params = new URLSearchParams();
-          if (admins.length  > 0) params.append('members_admin_ids',    admins.join(','));
-          if (members.length > 0) params.append('members_member_ids',   members.join(','));
-          if (readonly.length> 0) params.append('members_readonly_ids', readonly.join(','));
-
+          if (admins.length   > 0) params.append('members_admin_ids',    admins.join(','));
+          if (members.length  > 0) params.append('members_member_ids',   members.join(','));
+          if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
           await apiCallLimiter();
-          await axios.put(
-            `https://api.chatwork.com/v2/rooms/${roomId}/members`,
-            params,
-            { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
-          );
-
-          await ChatworkBotUtils.sendChatworkMessage(roomId,
-            `[pname:${targetId}]をキックしたよっ！`);
+          await axios.put(`https://api.chatwork.com/v2/rooms/${roomId}/members`, params,
+            { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } });
+          const name = await ChatworkBotUtils.getNameById(targetId, fresh, roomId);
+          kicked.push(`[picon:${targetId}]${name}`);
           console.log(`キック完了: ${targetId} from room ${roomId}`);
         } catch (error) {
           console.error('キックエラー:', error.message);
-          await ChatworkBotUtils.sendChatworkMessage(roomId,
-            `[rp aid=${accountId} to=${roomId}-${messageId}]キックに失敗しちゃった: ${error.message}`);
         }
       }
+      if (kicked.length > 0)
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `${kicked.join('、')}をキックしたよっ！`);
       return;
     }
 
@@ -1960,54 +2319,35 @@ class WebHookMessageProcessor {
     // /mute {アカウントID} - 管理者専用
     // ----------------------------------------
     if (!isDirectChat && messageBody.startsWith('/mute ') && isSenderAdmin) {
-      const targetId = String(messageBody.substring('/mute '.length).trim());
-      if (targetId) {
+      const targetIds = messageBody.substring('/mute '.length).trim().split(/\s+/).filter(Boolean);
+      const muted = [];
+      for (const targetId of targetIds) {
         try {
-          const targetMember = currentMembers.find(m => String(m.account_id) === targetId);
-          if (!targetMember) {
-            await ChatworkBotUtils.sendChatworkMessage(roomId,
-              `[rp aid=${accountId} to=${roomId}-${messageId}]そのIDのメンバーはこの部屋にいないみたい`);
-            return;
-          }
-
-          if (targetMember.role === 'readonly') {
-            await ChatworkBotUtils.sendChatworkMessage(roomId,
-              `[rp aid=${accountId} to=${roomId}-${messageId}][pname:${targetId}]はもう閲覧のみだよ`);
-            return;
-          }
-
-          const admins  = currentMembers.filter(m => m.role === 'admin'    && String(m.account_id) !== targetId).map(m => String(m.account_id));
-          const members = currentMembers.filter(m => m.role === 'member'   && String(m.account_id) !== targetId).map(m => String(m.account_id));
-          const readonly= currentMembers.filter(m => m.role === 'readonly').map(m => String(m.account_id));
+          const fresh = await ChatworkBotUtils.getChatworkMembers(roomId);
+          const targetMember = fresh.find(m => String(m.account_id) === targetId);
+          if (!targetMember || targetMember.role === 'readonly') continue;
+          const admins   = fresh.filter(m => m.role === 'admin'    && String(m.account_id) !== targetId).map(m => String(m.account_id));
+          const members  = fresh.filter(m => m.role === 'member'   && String(m.account_id) !== targetId).map(m => String(m.account_id));
+          const readonly = fresh.filter(m => m.role === 'readonly').map(m => String(m.account_id));
           readonly.push(targetId);
-
-          if (admins.length === 0) {
-            await ChatworkBotUtils.sendChatworkMessage(roomId,
-              `[rp aid=${accountId} to=${roomId}-${messageId}]管理者が0人になっちゃうからミュートできないよ`);
-            return;
-          }
-
+          if (admins.length === 0) continue;
           const params = new URLSearchParams();
-          if (admins.length  > 0) params.append('members_admin_ids',    admins.join(','));
-          if (members.length > 0) params.append('members_member_ids',   members.join(','));
-          if (readonly.length> 0) params.append('members_readonly_ids', readonly.join(','));
-
+          if (admins.length   > 0) params.append('members_admin_ids',    admins.join(','));
+          if (members.length  > 0) params.append('members_member_ids',   members.join(','));
+          if (readonly.length > 0) params.append('members_readonly_ids', readonly.join(','));
           await apiCallLimiter();
-          await axios.put(
-            `https://api.chatwork.com/v2/rooms/${roomId}/members`,
-            params,
-            { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
-          );
-
-          await ChatworkBotUtils.sendChatworkMessage(roomId,
-            `[pname:${targetId}]を閲覧のみにしたよっ！`);
+          await axios.put(`https://api.chatwork.com/v2/rooms/${roomId}/members`, params,
+            { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } });
+          await ChatworkBotUtils.addToBlackList(roomId, targetId);
+          const name = await ChatworkBotUtils.getNameById(targetId, fresh, roomId);
+          muted.push(`[picon:${targetId}]${name}`);
           console.log(`ミュート完了: ${targetId} in room ${roomId}`);
         } catch (error) {
           console.error('ミュートエラー:', error.message);
-          await ChatworkBotUtils.sendChatworkMessage(roomId,
-            `[rp aid=${accountId} to=${roomId}-${messageId}]ミュートに失敗しちゃった: ${error.message}`);
         }
       }
+      if (muted.length > 0)
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `${muted.join('、')}を閲覧のみにしたよっ！`);
       return;
     }
 
