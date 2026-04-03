@@ -1245,6 +1245,12 @@ class WebHookMessageProcessor {
 
       console.log(`WebHook処理開始: roomId=${roomId}, accountId=${accountId}, eventType=${eventType}, messageLength=${messageBody?.length || 0}`);
 
+      // bot自身のメッセージは処理しない
+      if (String(accountId) === BOT_ACCOUNT_ID) {
+        console.log('botのメッセージのためスキップ');
+        return;
+      }
+
       // 新規メッセージのみ累計発言数を更新
       if (eventType === 'message_created') {
         await this.updateTotalMessageCount(roomId, accountId);
@@ -1264,11 +1270,10 @@ class WebHookMessageProcessor {
           [roomId]
         );
         if (prohibitResult.rowCount > 0) {
-          // 管理者・特権IDは除外
-          const isPriv = ['10911090','9553691'].includes(String(accountId));
+          // 管理者のみ除外（特権IDでも管理者じゃなければ通常判定）
           const tempMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
           const isAdm = WebHookMessageProcessor.isUserAdmin(accountId, tempMembers);
-          if (!isPriv && !isAdm) {
+          if (!isAdm) {
             await ChatworkBotUtils.deleteMessage(roomId, messageId);
             console.log(`発言禁止: メッセージ削除 accountId=${accountId}`);
           }
@@ -1284,8 +1289,7 @@ class WebHookMessageProcessor {
         if (ngResult.rowCount > 0) {
           const tempMembers = await ChatworkBotUtils.getChatworkMembers(roomId);
           const isAdm = WebHookMessageProcessor.isUserAdmin(accountId, tempMembers);
-          const isPriv = ['10911090','9553691'].includes(String(accountId));
-          if (!isAdm && !isPriv) {
+          if (!isAdm) {
             const hit = ngResult.rows.find(r => messageBody.includes(r.word));
             if (hit) {
               await ChatworkBotUtils.addToBlackList(roomId, accountId);
@@ -1625,22 +1629,39 @@ class WebHookMessageProcessor {
           return;
         }
 
+        // DBに記録のない分（期限切れ）を計算
+        let expiredTotal = 0;
+        try {
+          const roomInfo = await ChatworkBotUtils.getRoomInfo(roomId);
+          const roomTotal = roomInfo ? (roomInfo.message_num || 0) : 0;
+          const dbCountResult = await pool.query(
+            `SELECT COUNT(*) as count FROM webhooks WHERE room_id = $1 AND webhook_event_type = 'message_created'`,
+            [roomId]
+          );
+          const dbTotal = parseInt(dbCountResult.rows[0].count);
+          expiredTotal = Math.max(0, roomTotal - dbTotal);
+        } catch (e) {
+          console.error('期限切れ計算エラー:', e.message);
+        }
+
         let rankingMessage = '[info][title]累計発言数ランキング[/title]\n';
         for (let index = 0; index < result.rows.length; index++) {
           const row = result.rows[index];
-          const name = await ChatworkBotUtils.getNameById(row.account_id, currentMembers);
+          const name = await ChatworkBotUtils.getNameById(row.account_id, currentMembers, roomId);
           rankingMessage += `${index + 1}位：${name} ${row.message_count}コメ`;
-          if (index < result.rows.length - 1) {
-            rankingMessage += '\n[hr]';
-          }
+          if (index < result.rows.length - 1) rankingMessage += '\n[hr]';
           rankingMessage += '\n';
         }
 
         const totalCount = result.rows.reduce((sum, row) => sum + parseInt(row.message_count), 0);
-        rankingMessage += `\n合計：${totalCount}コメ[/info]`;
+        rankingMessage += `\n合計：${totalCount}コメ`;
+        if (expiredTotal > 0) {
+          rankingMessage += `\n[hr]\n※DBに記録のない過去メッセージ：${expiredTotal}コメ`;
+        }
+        rankingMessage += '[/info]';
 
-        const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${rankingMessage}`;
-        await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]${rankingMessage}`);
       } catch (error) {
         console.error('累計発言数取得エラー:', error.message);
       }
@@ -1960,8 +1981,8 @@ class WebHookMessageProcessor {
 
     if (messageBody === '/romera') {
       try {
-        const rows = await getTodayCountsFromDB(roomId);
-        const msg = await buildRankingMessage('メッセージ数ランキングだよ', rows, currentMembers);
+        const data = await get60DayCountsFromAPI(roomId);
+        const msg = await buildRankingMessage('メッセージ数ランキングだよ', data, currentMembers, roomId);
         await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
       } catch (error) {
         console.error('ランキング取得エラー:', error.message);
@@ -2988,13 +3009,19 @@ async function ohayosekai() {
 // 23:59にランキングを送信
 
 // DBから今日のメッセージ数をルームごとに集計して返す
-async function getTodayCountsFromDB(roomId) {
+// 今日0時のUnixタイムスタンプ（JST）を返す
+function getTodayStartTs() {
   const now = new Date();
-  const jstDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
-  const todayStart = new Date(jstDate.getFullYear(), jstDate.getMonth(), jstDate.getDate(), 0, 0, 0);
-  const todayStartTs = Math.floor(todayStart.getTime() / 1000);
+  const jst = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+  return Math.floor(new Date(jst.getFullYear(), jst.getMonth(), jst.getDate(), 0, 0, 0).getTime() / 1000);
+}
 
-  const result = await pool.query(
+// 今日分のメッセージ数をDBから取得（webhooksテーブル）＋期限切れ注記付き
+async function getTodayCountsFromDB(roomId) {
+  const todayStartTs = getTodayStartTs();
+
+  // 今日のwebhooks
+  const todayResult = await pool.query(
     `SELECT account_id, COUNT(*) as count
      FROM webhooks
      WHERE room_id = $1
@@ -3005,27 +3032,39 @@ async function getTodayCountsFromDB(roomId) {
     [roomId, todayStartTs]
   );
 
-  return result.rows.map(r => ({
+  const rows = todayResult.rows.map(r => ({
     accountId: String(r.account_id),
     count: parseInt(r.count)
   }));
+
+  return { rows, expiredTotal: 0 };
 }
 
+// get60DayCountsFromAPIはDBのみで代替
+const get60DayCountsFromAPI = getTodayCountsFromDB;
+
 // ランキング文字列を組み立てる（名前をメンバーリストから解決）
-async function buildRankingMessage(title, rows, members) {
+async function buildRankingMessage(title, data, members, roomId = null) {
+  const { rows, expiredTotal = 0 } = (data && !Array.isArray(data) && data.rows)
+    ? data : { rows: data || [] };
+
   const totalCount = rows.reduce((s, r) => s + r.count, 0);
   let msg = `[info][title]${title}[/title]\n`;
   if (rows.length === 0) {
     msg += '今日のメッセージはまだないみたい。\n';
   } else {
     for (let i = 0; i < rows.length; i++) {
-      const name = await ChatworkBotUtils.getNameById(rows[i].accountId, members);
+      const name = await ChatworkBotUtils.getNameById(rows[i].accountId, members, roomId);
       msg += `${i + 1}位：${name} ${rows[i].count}コメ`;
       if (i < rows.length - 1) msg += '\n[hr]';
       msg += '\n';
     }
   }
-  msg += `\n合計：${totalCount}コメ\n(ぼく込み)[/info]`;
+  msg += `\n合計：${totalCount}コメ\n(ぼく込み)`;
+  if (expiredTotal > 0) {
+    msg += `\n[hr]\n※DBに記録のない過去メッセージ：${expiredTotal}コメ`;
+  }
+  msg += '[/info]';
   return msg;
 }
 
@@ -3034,9 +3073,9 @@ async function sendDailyRanking() {
     console.log('今日のランキングを送信します');
     for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
       try {
-        const rows = await getTodayCountsFromDB(roomId);
+        const data = await get60DayCountsFromAPI(roomId);
         const members = await ChatworkBotUtils.getChatworkMembers(roomId);
-        const msg = await buildRankingMessage('コメ数ランキング！', rows, members);
+        const msg = await buildRankingMessage('コメ数ランキング！', data, members, roomId);
         await ChatworkBotUtils.sendChatworkMessage(roomId, '今日のコメ数ランキングだよっ！\n' + msg);
         console.log(`ランキング送信完了: ルーム ${roomId}`);
       } catch (error) {
@@ -3054,9 +3093,9 @@ async function sendPreMidnightRanking() {
     console.log('日付変更前 (23:55) のランキングを送信します');
     for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
       try {
-        const rows = await getTodayCountsFromDB(roomId);
+        const data = await get60DayCountsFromAPI(roomId);
         const members = await ChatworkBotUtils.getChatworkMembers(roomId);
-        const msg = await buildRankingMessage('日付変更の前のランキング', rows, members);
+        const msg = await buildRankingMessage('日付変更の前のランキング', data, members, roomId);
         await ChatworkBotUtils.sendChatworkMessage(roomId, msg);
         console.log(`事前ランキング送信完了: ルーム ${roomId}`);
       } catch (error) {
