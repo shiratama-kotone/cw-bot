@@ -1654,11 +1654,10 @@ class WebHookMessageProcessor {
         }
 
         const totalCount = result.rows.reduce((sum, row) => sum + parseInt(row.message_count), 0);
-        rankingMessage += `\n合計：${totalCount}コメ`;
         if (expiredTotal > 0) {
-          rankingMessage += `\n[hr]\n※DBに記録のない過去メッセージ：${expiredTotal}コメ`;
+          rankingMessage += `\n[hr]\n※DBに記録のない過去メッセージ：${expiredTotal}コメ\n`;
         }
-        rankingMessage += '[/info]';
+        rankingMessage += `\n合計：${totalCount + expiredTotal}コメ[/info]`;
 
         await ChatworkBotUtils.sendChatworkMessage(roomId,
           `[rp aid=${accountId} to=${roomId}-${messageId}]${rankingMessage}`);
