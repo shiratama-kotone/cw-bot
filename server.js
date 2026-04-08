@@ -6,6 +6,7 @@ const axios = require('axios');
 const cron = require('node-cron');
 const { Pool } = require('pg');
 const cheerio = require('cheerio');
+const { Client, GatewayIntentBits, Events } = require('discord.js');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -167,6 +168,16 @@ async function initializeDatabase() {
       )
     `);
 
+    // Discord-Chatworkメッセージ対応テーブル
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS discord_bridge (
+        id SERIAL PRIMARY KEY,
+        cw_message_id TEXT,
+        discord_message_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     console.log('データベーステーブル初期化完了');
   } catch (error) {
     console.error('データベース初期化エラー:', error.message);
@@ -209,6 +220,11 @@ const LOG_DESTINATION_ROOM_ID = '420890621'; // ログ送信先
 const DAY_JSON_URL = process.env.DAY_JSON_URL || 'https://raw.githubusercontent.com/shiratama-kotone/cw-bot/main/day.json';
 const YUYUYU_ACCOUNT_ID = '10544705';
 const BOT_ACCOUNT_ID = '10386947'; // botのアカウントID
+
+// Discord設定
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || '';
+const DISCORD_BRIDGE_CW_ROOM_ID = '415060980'; // Chatwork側の連携ルーム
 
 // 天気予報の地域設定
 const WEATHER_AREAS = [
@@ -1341,6 +1357,52 @@ class WebHookMessageProcessor {
           console.log(`メッセージ転送完了 [${eventType}]: ${roomId} → ${forwardRoomId}`);
         } catch (error) {
           console.error(`メッセージ転送エラー (${roomId} → ${forwardRoomId}):`, error.message);
+        }
+
+        // ★ Chatwork → Discord転送（新規メッセージのみ）
+        if (eventType === 'message_created' && DISCORD_WEBHOOK_URL) {
+          try {
+            // Chatworkの特殊タグをDiscord向けに変換
+            const convertCwToDiscord = (text) => {
+              return text
+                .replace(/\[dtext:chatroom_member_is\]/g, 'メンバー「')
+                .replace(/\[dtext:chatroom_leaved\]/g, 'が退席しました。')
+                .replace(/\[dtext:chatroom_added\]/g, 'を追加しました。')
+                .replace(/\[dtext:chatroom_chat_joined\]/g, 'チャットに参加しました。')
+                .replace(/\[dtext:chatroom_description_is\]/g, '概要を「')
+                .replace(/\[dtext:chatroom_changed\]/g, '」に変更しました。')
+                .replace(/\[dtext:task_added\]/g, 'タスクを追加しました。')
+                .replace(/\[dtext:task_edited\]/g, 'タスクを編集しました。')
+                .replace(/\[dtext:task_deleted\]/g, 'このタスクは削除されました')
+                .replace(/\[dtext:chatroom_deleted\]/g, '」を削除しました。')
+                .replace(/\[dtext:chatroom_set\]/g, '」に設定しました。')
+                .replace(/\[deleted\]/g, 'メッセージは削除されました')
+                .replace(/\[info\]\[title\]([^\[]*)\[\/title\]([^\[]*)\[\/info\]/g, '【$1】$2')
+                .replace(/\[info\]([\s\S]*?)\[\/info\]/g, '$1')
+                .replace(/\[piconname:\d+\]/g, '')
+                .replace(/\[picon:\d+\]/g, '')
+                .replace(/\[To:\d+\]/g, '')
+                .replace(/\[rp aid=\d+ to=\d+-\d+\]\s*/g, '（返信）')
+                .replace(/\[qt\][\s\S]*?\[\/qt\]/g, '（引用）')
+                .trim();
+            };
+
+            const converted = convertCwToDiscord(messageBody);
+            if (!converted) return;
+
+            // 返信タグがあれば「（返信）」プレフィックス付きで送信
+            const discordContent = `${senderName}：${converted}`;
+            const discordMsgId = await sendToDiscord(discordContent);
+            if (discordMsgId) {
+              await pool.query(
+                'INSERT INTO discord_bridge (cw_message_id, discord_message_id) VALUES ($1, $2)',
+                [String(messageId), discordMsgId]
+              );
+              console.log(`Chatwork→Discord転送完了: ${senderName}`);
+            }
+          } catch (e) {
+            console.error('Chatwork→Discord転送エラー:', e.message);
+          }
         }
       }
 
@@ -3368,9 +3430,92 @@ cron.schedule('46 14 11 3 *', async () => {
   await send311Silence();
 }, { timezone: "Asia/Tokyo" });
 
+// ★★★ Discord連携 ★★★
+
+// Discordにメッセージを送信（webhook使用、返信対応）
+async function sendToDiscord(content, replyToDiscordMessageId = null) {
+  if (!DISCORD_WEBHOOK_URL) return null;
+  try {
+    const payload = { content };
+    // webhook経由では返信不可なので通常送信
+    const res = await axios.post(DISCORD_WEBHOOK_URL + '?wait=true', payload, {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return res.data.id || null;
+  } catch (e) {
+    console.error('Discord送信エラー:', e.message);
+    return null;
+  }
+}
+
+// Discordクライアント初期化
+let discordClient = null;
+if (DISCORD_BOT_TOKEN) {
+  discordClient = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.DirectMessages
+    ]
+  });
+
+  discordClient.once(Events.ClientReady, c => {
+    console.log(`Discord bot 起動: ${c.user.tag}`);
+  });
+
+  // Discord → Chatwork転送
+  discordClient.on(Events.MessageCreate, async (message) => {
+    try {
+      // bot自身のメッセージは無視
+      if (message.author.bot) return;
+
+      const userName = message.author.displayName || message.author.username;
+      const content = message.content || '';
+
+      // 返信かどうか確認
+      let cwMessage = '';
+      if (message.reference && message.reference.messageId) {
+        // 対応するChatworkメッセージIDを検索
+        const result = await pool.query(
+          'SELECT cw_message_id FROM discord_bridge WHERE discord_message_id = $1',
+          [message.reference.messageId]
+        );
+        if (result.rowCount > 0 && result.rows[0].cw_message_id) {
+          const cwMsgId = result.rows[0].cw_message_id;
+          cwMessage = `[rp aid=0 to=${DISCORD_BRIDGE_CW_ROOM_ID}-${cwMsgId}][info][title]Discord[/title]${userName}：${content}[/info]`;
+        } else {
+          cwMessage = `[info][title]Discord（返信）[/title]${userName}：${content}[/info]`;
+        }
+      } else {
+        cwMessage = `[info][title]Discord[/title]${userName}：${content}[/info]`;
+      }
+
+      const cwMsgId = await ChatworkBotUtils.sendChatworkMessage(DISCORD_BRIDGE_CW_ROOM_ID, cwMessage);
+      console.log(`Discord→Chatwork転送完了: ${userName}`);
+
+      // メッセージID対応を保存
+      if (cwMsgId) {
+        await pool.query(
+          'INSERT INTO discord_bridge (cw_message_id, discord_message_id) VALUES ($1, $2)',
+          [String(cwMsgId), message.id]
+        );
+      }
+    } catch (e) {
+      console.error('Discord→Chatwork転送エラー:', e.message);
+    }
+  });
+
+  discordClient.login(DISCORD_BOT_TOKEN).catch(e => {
+    console.error('Discord bot ログインエラー:', e.message);
+  });
+}
+
 // サーバー起動
 app.listen(port, async () => {
   console.log(`みおんがポート${port}で起動しました`);
+  console.log('- DISCORD_BOT_TOKEN:', DISCORD_BOT_TOKEN ? '設定済みだよ' : '未設定かも');
+  console.log('- DISCORD_WEBHOOK_URL:', DISCORD_WEBHOOK_URL ? '設定済みだよ' : '未設定かも');
   console.log('WebHook URL: https://your-app-name.onrender.com/webhook');
   console.log('環境変数:');
   console.log('- CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN ? '設定済みだよ' : '未設定かも');
