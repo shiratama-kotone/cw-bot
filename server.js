@@ -1346,8 +1346,6 @@ class WebHookMessageProcessor {
       // ★★★ 転送処理 ★★★
       if (roomId === '415060980' || roomId === 415060980) {
         const forwardRoomId = '420890621';
-        const eventType = webhookData.webhook_event_type || 'message_created';
-
         const editLabel = eventType === 'message_updated' ? '(編集)' : '';
         const senderName = await ChatworkBotUtils.getNameById(accountId, []);
         const forwardMessage = `[info][title]${senderName}${editLabel}[/title]${messageBody}[/info]`;
@@ -1362,7 +1360,6 @@ class WebHookMessageProcessor {
         // ★ Chatwork → Discord転送（新規メッセージのみ）
         if (eventType === 'message_created' && DISCORD_WEBHOOK_URL) {
           try {
-            // Chatworkの特殊タグをDiscord向けに変換
             const convertCwToDiscord = (text) => {
               return text
                 .replace(/\[dtext:chatroom_member_is\]/g, 'メンバー「')
@@ -1377,7 +1374,7 @@ class WebHookMessageProcessor {
                 .replace(/\[dtext:chatroom_deleted\]/g, '」を削除しました。')
                 .replace(/\[dtext:chatroom_set\]/g, '」に設定しました。')
                 .replace(/\[deleted\]/g, 'メッセージは削除されました')
-                .replace(/\[info\]\[title\]([^\[]*)\[\/title\]([^\[]*)\[\/info\]/g, '【$1】$2')
+                .replace(/\[info\]\[title\]([^\[]*)\[\/title\]([\s\S]*?)\[\/info\]/g, '【$1】$2')
                 .replace(/\[info\]([\s\S]*?)\[\/info\]/g, '$1')
                 .replace(/\[piconname:\d+\]/g, '')
                 .replace(/\[picon:\d+\]/g, '')
@@ -1388,17 +1385,17 @@ class WebHookMessageProcessor {
             };
 
             const converted = convertCwToDiscord(messageBody);
-            if (!converted) return;
-
-            // 返信タグがあれば「（返信）」プレフィックス付きで送信
-            const discordContent = `${senderName}：${converted}`;
-            const discordMsgId = await sendToDiscord(discordContent);
-            if (discordMsgId) {
-              await pool.query(
-                'INSERT INTO discord_bridge (cw_message_id, discord_message_id) VALUES ($1, $2)',
-                [String(messageId), discordMsgId]
-              );
-              console.log(`Chatwork→Discord転送完了: ${senderName}`);
+            if (converted) {
+              const discordContent = `${senderName}：${converted}`;
+              const discordMsgId = await sendToDiscord(discordContent);
+              if (discordMsgId) {
+                discordWebhookMessageIds.add(discordMsgId);
+                await pool.query(
+                  'INSERT INTO discord_bridge (cw_message_id, discord_message_id) VALUES ($1, $2)',
+                  [String(messageId), discordMsgId]
+                );
+                console.log(`Chatwork→Discord転送完了: ${senderName}`);
+              }
             }
           } catch (e) {
             console.error('Chatwork→Discord転送エラー:', e.message);
@@ -3433,12 +3430,10 @@ cron.schedule('46 14 11 3 *', async () => {
 // ★★★ Discord連携 ★★★
 
 // Discordにメッセージを送信（webhook使用、返信対応）
-async function sendToDiscord(content, replyToDiscordMessageId = null) {
+async function sendToDiscord(content) {
   if (!DISCORD_WEBHOOK_URL) return null;
   try {
-    const payload = { content };
-    // webhook経由では返信不可なので通常送信
-    const res = await axios.post(DISCORD_WEBHOOK_URL + '?wait=true', payload, {
+    const res = await axios.post(DISCORD_WEBHOOK_URL + '?wait=true', { content }, {
       headers: { 'Content-Type': 'application/json' }
     });
     return res.data.id || null;
@@ -3450,18 +3445,104 @@ async function sendToDiscord(content, replyToDiscordMessageId = null) {
 
 // Discordクライアント初期化
 let discordClient = null;
+// webhook経由で送ったメッセージIDのセット（ループ防止）
+const discordWebhookMessageIds = new Set();
+
 if (DISCORD_BOT_TOKEN) {
+  const { REST, Routes, SlashCommandBuilder } = require('discord.js');
+
   discordClient = new Client({
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.MessageContent,
-      GatewayIntentBits.DirectMessages
+      GatewayIntentBits.MessageContent
     ]
   });
 
-  discordClient.once(Events.ClientReady, c => {
+  discordClient.once(Events.ClientReady, async (c) => {
     console.log(`Discord bot 起動: ${c.user.tag}`);
+
+    // スラッシュコマンド登録
+    const commands = [
+      new SlashCommandBuilder()
+        .setName('points')
+        .setDescription('自分のポイントを確認'),
+      new SlashCommandBuilder()
+        .setName('points_all')
+        .setDescription('全員のポイントランキングを確認'),
+      new SlashCommandBuilder()
+        .setName('send')
+        .setDescription('ポイントを送る')
+        .addStringOption(o => o.setName('chatwork_id').setDescription('送り先のChatwork ID').setRequired(true))
+        .addIntegerOption(o => o.setName('amount').setDescription('送るポイント数').setRequired(true)),
+      new SlashCommandBuilder()
+        .setName('help')
+        .setDescription('コマンド一覧を表示'),
+    ].map(cmd => cmd.toJSON());
+
+    try {
+      const rest = new REST({ version: '10' }).setToken(DISCORD_BOT_TOKEN);
+      await rest.put(Routes.applicationCommands(c.user.id), { body: commands });
+      console.log('Discordスラッシュコマンド登録完了');
+    } catch (e) {
+      console.error('スラッシュコマンド登録エラー:', e.message);
+    }
+  });
+
+  // スラッシュコマンド処理
+  discordClient.on(Events.InteractionCreate, async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
+    try {
+      const discordUserId = interaction.user.id;
+      // ChatworkIDとの対応はDBに持たないので、Discord IDで代替
+      // （Chatworkのポイントは対応するCW IDが必要なため、コマンド引数から取得）
+
+      if (interaction.commandName === 'help') {
+        await interaction.reply(
+          '**コマンド一覧**\n' +
+          '`/points` - 自分のポイント確認（Chatwork IDが必要）\n' +
+          '`/points_all` - ポイントランキング\n' +
+          '`/send [chatwork_id] [amount]` - ポイントを送る\n' +
+          '`/help` - このヘルプ'
+        );
+        return;
+      }
+
+      if (interaction.commandName === 'points_all') {
+        const res = await pool.query(
+          `SELECT account_id, point FROM points WHERE room_id = $1 ORDER BY point DESC LIMIT 10`,
+          [DISCORD_BRIDGE_CW_ROOM_ID]
+        );
+        if (res.rowCount === 0) {
+          await interaction.reply('まだポイントを持ってる人がいないみたい');
+          return;
+        }
+        let msg = '**ポイントランキング**\n';
+        for (let i = 0; i < res.rows.length; i++) {
+          msg += `${i + 1}位：ID:${res.rows[i].account_id} ${res.rows[i].point}pt\n`;
+        }
+        await interaction.reply(msg);
+        return;
+      }
+
+      if (interaction.commandName === 'send') {
+        const targetCwId = interaction.options.getString('chatwork_id');
+        const amount = interaction.options.getInteger('amount');
+        // Discord側はChatwork IDが直接わからないのでコマンド引数のCW IDで処理
+        // 送信者のCW IDは不明なため、この機能はChatwork側で使うよう案内
+        await interaction.reply(`Discord側からのポイント送信はChatworkコマンド \`/send ${targetCwId} ${amount}\` を使ってね！`);
+        return;
+      }
+
+      if (interaction.commandName === 'points') {
+        await interaction.reply('ポイント確認はChatworkで `/points` を使ってね！');
+        return;
+      }
+
+    } catch (e) {
+      console.error('Discordスラッシュコマンドエラー:', e.message);
+      if (!interaction.replied) await interaction.reply('エラーが発生したよ').catch(() => {});
+    }
   });
 
   // Discord → Chatwork転送
@@ -3469,14 +3550,19 @@ if (DISCORD_BOT_TOKEN) {
     try {
       // bot自身のメッセージは無視
       if (message.author.bot) return;
+      // webhookで送ったメッセージはスキップ（ループ防止）
+      if (discordWebhookMessageIds.has(message.id)) {
+        discordWebhookMessageIds.delete(message.id);
+        return;
+      }
 
-      const userName = message.author.displayName || message.author.username;
+      const userName = message.member?.displayName || message.author.displayName || message.author.username;
       const content = message.content || '';
+      if (!content) return;
 
       // 返信かどうか確認
       let cwMessage = '';
       if (message.reference && message.reference.messageId) {
-        // 対応するChatworkメッセージIDを検索
         const result = await pool.query(
           'SELECT cw_message_id FROM discord_bridge WHERE discord_message_id = $1',
           [message.reference.messageId]
@@ -3494,7 +3580,6 @@ if (DISCORD_BOT_TOKEN) {
       const cwMsgId = await ChatworkBotUtils.sendChatworkMessage(DISCORD_BRIDGE_CW_ROOM_ID, cwMessage);
       console.log(`Discord→Chatwork転送完了: ${userName}`);
 
-      // メッセージID対応を保存
       if (cwMsgId) {
         await pool.query(
           'INSERT INTO discord_bridge (cw_message_id, discord_message_id) VALUES ($1, $2)',
