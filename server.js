@@ -6,7 +6,7 @@ const axios = require('axios');
 const cron = require('node-cron');
 const { Pool } = require('pg');
 const cheerio = require('cheerio');
-const { Client, GatewayIntentBits, Events } = require('discord.js');
+const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -174,8 +174,13 @@ async function initializeDatabase() {
         id SERIAL PRIMARY KEY,
         cw_message_id TEXT,
         discord_message_id TEXT,
+        cw_account_id TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
+    `);
+    // カラムが存在しない場合に追加（既存DB対応）
+    await pool.query(`
+      ALTER TABLE discord_bridge ADD COLUMN IF NOT EXISTS cw_account_id TEXT
     `);
 
     console.log('データベーステーブル初期化完了');
@@ -1391,8 +1396,8 @@ class WebHookMessageProcessor {
               if (discordMsgId) {
                 discordWebhookMessageIds.add(discordMsgId);
                 await pool.query(
-                  'INSERT INTO discord_bridge (cw_message_id, discord_message_id) VALUES ($1, $2)',
-                  [String(messageId), discordMsgId]
+                  'INSERT INTO discord_bridge (cw_message_id, discord_message_id, cw_account_id) VALUES ($1, $2, $3)',
+                  [String(messageId), discordMsgId, String(accountId)]
                 );
                 console.log(`Chatwork→Discord転送完了: ${senderName}`);
               }
@@ -3463,21 +3468,53 @@ if (DISCORD_BOT_TOKEN) {
     console.log(`Discord bot 起動: ${c.user.tag}`);
 
     // スラッシュコマンド登録
+    const cwIdOpt = o => o.setName('cw_id').setDescription('ChatworkのユーザーID').setRequired(true);
     const commands = [
-      new SlashCommandBuilder()
-        .setName('points')
-        .setDescription('自分のポイントを確認'),
-      new SlashCommandBuilder()
-        .setName('points_all')
-        .setDescription('全員のポイントランキングを確認'),
-      new SlashCommandBuilder()
-        .setName('send')
-        .setDescription('ポイントを送る')
-        .addStringOption(o => o.setName('chatwork_id').setDescription('送り先のChatwork ID').setRequired(true))
+      // 情報系
+      new SlashCommandBuilder().setName('help').setDescription('コマンド一覧を表示'),
+      new SlashCommandBuilder().setName('points').setDescription('ポイントを確認')
+        .addStringOption(o => cwIdOpt(o)),
+      new SlashCommandBuilder().setName('points_all').setDescription('全員のポイントランキング'),
+      new SlashCommandBuilder().setName('romera').setDescription('今日のメッセージ数ランキング'),
+      new SlashCommandBuilder().setName('message_total').setDescription('累計発言数ランキング'),
+      new SlashCommandBuilder().setName('today').setDescription('今日の日付とイベント'),
+      new SlashCommandBuilder().setName('yes_or_no').setDescription('yes/noをランダム回答'),
+      new SlashCommandBuilder().setName('wiki').setDescription('Wikipediaを検索')
+        .addStringOption(o => o.setName('word').setDescription('検索ワード').setRequired(true)),
+      new SlashCommandBuilder().setName('omikuji').setDescription('おみくじ'),
+      // ポイント操作
+      new SlashCommandBuilder().setName('send').setDescription('ポイントを送る')
+        .addStringOption(o => cwIdOpt(o))
         .addIntegerOption(o => o.setName('amount').setDescription('送るポイント数').setRequired(true)),
-      new SlashCommandBuilder()
-        .setName('help')
-        .setDescription('コマンド一覧を表示'),
+      new SlashCommandBuilder().setName('point_add').setDescription('ポイントを追加（特権のみ）')
+        .addStringOption(o => cwIdOpt(o))
+        .addIntegerOption(o => o.setName('amount').setDescription('追加ポイント数').setRequired(true)),
+      new SlashCommandBuilder().setName('point_del').setDescription('ポイントを削除（特権のみ）')
+        .addStringOption(o => cwIdOpt(o))
+        .addIntegerOption(o => o.setName('amount').setDescription('削除ポイント数').setRequired(true)),
+      new SlashCommandBuilder().setName('fever').setDescription('フィーバータイム開始（管理者のみ）')
+        .addStringOption(o => o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)),
+      // 管理系
+      new SlashCommandBuilder().setName('blacklist').setDescription('ブラックリスト確認（管理者のみ）'),
+      new SlashCommandBuilder().setName('blacklist_add').setDescription('ブラックリストに追加（管理者のみ）')
+        .addStringOption(o => cwIdOpt(o)),
+      new SlashCommandBuilder().setName('blacklist_del').setDescription('ブラックリストから削除（管理者のみ）')
+        .addStringOption(o => cwIdOpt(o)),
+      new SlashCommandBuilder().setName('prohibit').setDescription('発言禁止（管理者のみ）')
+        .addStringOption(o => o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)),
+      new SlashCommandBuilder().setName('release').setDescription('発言禁止解除（管理者のみ）'),
+      new SlashCommandBuilder().setName('ng').setDescription('NGワード登録（管理者のみ）')
+        .addStringOption(o => o.setName('word').setDescription('NGワード').setRequired(true)),
+      new SlashCommandBuilder().setName('ok').setDescription('NGワード削除（管理者のみ）')
+        .addStringOption(o => o.setName('word').setDescription('削除するNGワード').setRequired(true)),
+      new SlashCommandBuilder().setName('ng_check').setDescription('NGワード一覧（管理者のみ）'),
+      new SlashCommandBuilder().setName('kick').setDescription('キック（管理者のみ）')
+        .addStringOption(o => cwIdOpt(o)),
+      new SlashCommandBuilder().setName('mute').setDescription('閲覧のみに変更（管理者のみ）')
+        .addStringOption(o => cwIdOpt(o)),
+      new SlashCommandBuilder().setName('alarm').setDescription('アラームを設定')
+        .addStringOption(o => o.setName('datetime').setDescription('日時（YYYY-MM-DD HH:MM）').setRequired(true))
+        .addStringOption(o => o.setName('message').setDescription('メッセージ').setRequired(true)),
     ].map(cmd => cmd.toJSON());
 
     try {
@@ -3492,56 +3529,302 @@ if (DISCORD_BOT_TOKEN) {
   // スラッシュコマンド処理
   discordClient.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
-    try {
-      const discordUserId = interaction.user.id;
-      // ChatworkIDとの対応はDBに持たないので、Discord IDで代替
-      // （Chatworkのポイントは対応するCW IDが必要なため、コマンド引数から取得）
+    const cmd = interaction.commandName;
+    const guildId = interaction.guildId;
+    const roomId = DISCORD_BRIDGE_CW_ROOM_ID;
+    // 管理者判定（Discordのサーバー管理者権限で代替）
+    const isAdmin = interaction.memberPermissions?.has('ManageGuild') || false;
+    const PRIV_IDS_DISCORD = []; // Discord側は特権IDなし
 
-      if (interaction.commandName === 'help') {
-        await interaction.reply(
+    // DiscordユーザーからChatwork IDを取得するヘルパー
+    const getCwId = () => interaction.options.getString('cw_id');
+
+    try {
+      await interaction.deferReply();
+
+      // ★ /help
+      if (cmd === 'help') {
+        const common =
           '**コマンド一覧**\n' +
-          '`/points` - 自分のポイント確認（Chatwork IDが必要）\n' +
+          '`/points [cw_id]` - ポイント確認\n' +
           '`/points_all` - ポイントランキング\n' +
-          '`/send [chatwork_id] [amount]` - ポイントを送る\n' +
-          '`/help` - このヘルプ'
-        );
+          '`/send [cw_id] [amount]` - ポイントを送る\n' +
+          '`/romera` - 今日のメッセージ数ランキング\n' +
+          '`/message_total` - 累計発言数ランキング\n' +
+          '`/today` - 今日の日付とイベント\n' +
+          '`/yes_or_no` - yes/no回答\n' +
+          '`/omikuji` - おみくじ\n' +
+          '`/wiki [word]` - Wikipedia検索\n' +
+          '`/alarm [YYYY-MM-DD HH:MM] [message]` - アラーム設定\n';
+        const adminHelp = isAdmin ?
+          '\n**管理者専用**\n' +
+          '`/blacklist` - ブラックリスト確認\n' +
+          '`/blacklist_add [cw_id]` - ブラックリストに追加\n' +
+          '`/blacklist_del [cw_id]` - ブラックリストから削除\n' +
+          '`/kick [cw_id]` - キック\n' +
+          '`/mute [cw_id]` - 閲覧のみに変更\n' +
+          '`/prohibit [duration]` - 発言禁止\n' +
+          '`/release` - 発言禁止解除\n' +
+          '`/ng [word]` - NGワード登録\n' +
+          '`/ok [word]` - NGワード削除\n' +
+          '`/ng_check` - NGワード一覧\n' +
+          '`/fever [duration]` - フィーバータイム\n' +
+          '`/point_add [cw_id] [amount]` - ポイント追加\n' +
+          '`/point_del [cw_id] [amount]` - ポイント削除\n'
+          : '';
+        await interaction.editReply(common + adminHelp);
         return;
       }
 
-      if (interaction.commandName === 'points_all') {
-        const res = await pool.query(
-          `SELECT account_id, point FROM points WHERE room_id = $1 ORDER BY point DESC LIMIT 10`,
-          [DISCORD_BRIDGE_CW_ROOM_ID]
-        );
-        if (res.rowCount === 0) {
-          await interaction.reply('まだポイントを持ってる人がいないみたい');
-          return;
-        }
+      // ★ /points
+      if (cmd === 'points') {
+        const cwId = getCwId();
+        const res = await pool.query('SELECT point FROM points WHERE room_id=$1 AND account_id=$2', [roomId, cwId]);
+        const pt = res.rowCount > 0 ? res.rows[0].point : 0;
+        const name = await ChatworkBotUtils.getNameById(cwId, [], roomId);
+        await interaction.editReply(`${name}（ID:${cwId}）のポイントは **${pt}pt** だよ！`);
+        return;
+      }
+
+      // ★ /points_all
+      if (cmd === 'points_all') {
+        const res = await pool.query('SELECT account_id, point FROM points WHERE room_id=$1 ORDER BY point DESC LIMIT 15', [roomId]);
+        if (res.rowCount === 0) { await interaction.editReply('まだポイントを持ってる人がいないみたい'); return; }
         let msg = '**ポイントランキング**\n';
         for (let i = 0; i < res.rows.length; i++) {
-          msg += `${i + 1}位：ID:${res.rows[i].account_id} ${res.rows[i].point}pt\n`;
+          const name = await ChatworkBotUtils.getNameById(res.rows[i].account_id, [], roomId);
+          msg += `${i + 1}位：${name} ${res.rows[i].point}pt\n`;
         }
-        await interaction.reply(msg);
+        await interaction.editReply(msg);
         return;
       }
 
-      if (interaction.commandName === 'send') {
-        const targetCwId = interaction.options.getString('chatwork_id');
+      // ★ /send
+      if (cmd === 'send') {
+        const targetId = getCwId();
         const amount = interaction.options.getInteger('amount');
-        // Discord側はChatwork IDが直接わからないのでコマンド引数のCW IDで処理
-        // 送信者のCW IDは不明なため、この機能はChatwork側で使うよう案内
-        await interaction.reply(`Discord側からのポイント送信はChatworkコマンド \`/send ${targetCwId} ${amount}\` を使ってね！`);
+        await interaction.editReply(`ポイント送信はChatwork側でしか実行できないよ！Chatworkで \`/send ${targetId} ${amount}\` を使ってね`);
         return;
       }
 
-      if (interaction.commandName === 'points') {
-        await interaction.reply('ポイント確認はChatworkで `/points` を使ってね！');
+      // ★ /point_add
+      if (cmd === 'point_add') {
+        await interaction.editReply('このコマンドはChatwork側でしか実行できないよ！');
         return;
       }
 
+      // ★ /point_del
+      if (cmd === 'point_del') {
+        await interaction.editReply('このコマンドはChatwork側でしか実行できないよ！');
+        return;
+      }
+
+      // ★ /fever
+      if (cmd === 'fever') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        const arg = interaction.options.getString('duration');
+        const mM = arg.match(/^(\d+)m$/); const hM = arg.match(/^(\d+)h$/);
+        let secs = mM ? parseInt(mM[1]) * 60 : hM ? parseInt(hM[1]) * 3600 : 0;
+        if (secs <= 0 || secs > 10800) { await interaction.editReply('時間の指定がおかしいよ！5分なら `5m`、3時間なら `3h`（最大3時間）'); return; }
+        const endsAt = new Date(Date.now() + secs * 1000);
+        await pool.query(`INSERT INTO fever (room_id, ends_at) VALUES ($1, $2) ON CONFLICT (room_id) DO UPDATE SET ends_at = $2`, [roomId, endsAt]);
+        await interaction.editReply(`🔥フィーバータイム開始！${endsAt.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} まで獲得ポイント10倍だよっ！`);
+        return;
+      }
+
+      // ★ /romera
+      if (cmd === 'romera') {
+        const data = await getTodayCountsFromDB(roomId);
+        const msg = await buildRankingMessage('メッセージ数ランキング', data, [], roomId);
+        await interaction.editReply(msg.replace(/\[info\]\[title\]([^\[]*)\[\/title\]/g, '**$1**\n').replace(/\[\/info\]/g, '').replace(/\[hr\]/g, '---').replace(/\[.*?\]/g, ''));
+        return;
+      }
+
+      // ★ /message_total
+      if (cmd === 'message_total') {
+        const res = await pool.query('SELECT account_id, message_count FROM total_message_counts WHERE room_id=$1 ORDER BY message_count DESC', [roomId]);
+        if (res.rowCount === 0) { await interaction.editReply('累計発言数はまだないみたい'); return; }
+        let msg = '**累計発言数ランキング**\n';
+        for (let i = 0; i < res.rows.length; i++) {
+          const name = await ChatworkBotUtils.getNameById(res.rows[i].account_id, [], roomId);
+          msg += `${i + 1}位：${name} ${res.rows[i].message_count}コメ\n`;
+        }
+        await interaction.editReply(msg);
+        return;
+      }
+
+      // ★ /today
+      if (cmd === 'today') {
+        const now = new Date();
+        const jst = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+        const dateStr = jst.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
+        const events = await getTodaysEventsFromJson();
+        let msg = `今日は${dateStr}だよっ！`;
+        if (events.length > 0) events.forEach(e => { msg += `\n今日は${e}だよっ！`; });
+        await interaction.editReply(msg);
+        return;
+      }
+
+      // ★ /yes_or_no
+      if (cmd === 'yes_or_no') {
+        const answer = await ChatworkBotUtils.getYesOrNoAnswer();
+        await interaction.editReply(`答えは「**${answer}**」だよっ！`);
+        return;
+      }
+
+      // ★ /omikuji
+      if (cmd === 'omikuji') {
+        const result = ChatworkBotUtils.drawOmikuji(isAdmin);
+        await interaction.editReply(`おみくじの結果は…\n**${result}**\nだよっ！`);
+        return;
+      }
+
+      // ★ /wiki
+      if (cmd === 'wiki') {
+        const word = interaction.options.getString('word');
+        const summary = await ChatworkBotUtils.getWikipediaSummary(word);
+        await interaction.editReply(summary.substring(0, 1900));
+        return;
+      }
+
+      // ★ /alarm
+      if (cmd === 'alarm') {
+        const datetime = interaction.options.getString('datetime');
+        const msg = interaction.options.getString('message');
+        const match = datetime.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})$/);
+        if (!match) { await interaction.editReply('日時の形式がおかしいよ！例: `2026-04-10 15:30`'); return; }
+        const scheduledTime = new Date(`${match[1]}T${match[2]}:00+09:00`);
+        await pool.query('INSERT INTO alarms (room_id, scheduled_time, message, created_by) VALUES ($1, $2, $3, $4)',
+          [roomId, scheduledTime, msg, 0]);
+        await interaction.editReply(`アラームを設定したよ！${scheduledTime.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} に「${msg}」を送信するね`);
+        return;
+      }
+
+      // ★ /blacklist
+      if (cmd === 'blacklist') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        const res = await pool.query('SELECT account_id FROM black_list WHERE room_id=$1 ORDER BY account_id', [roomId]);
+        if (res.rowCount === 0) { await interaction.editReply('ブラックリストは空だよ'); return; }
+        let msg = '**ブラックリスト**\n';
+        for (const r of res.rows) {
+          const name = await ChatworkBotUtils.getNameById(r.account_id, [], roomId);
+          msg += `・${name}（${r.account_id}）\n`;
+        }
+        await interaction.editReply(msg);
+        return;
+      }
+
+      // ★ /blacklist_add
+      if (cmd === 'blacklist_add') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        const cwId = getCwId();
+        await ChatworkBotUtils.addToBlackList(roomId, cwId);
+        const name = await ChatworkBotUtils.getNameById(cwId, [], roomId);
+        await interaction.editReply(`${name}（${cwId}）をブラックリストに追加したよ`);
+        return;
+      }
+
+      // ★ /blacklist_del
+      if (cmd === 'blacklist_del') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        const cwId = getCwId();
+        await pool.query('DELETE FROM black_list WHERE room_id=$1 AND account_id=$2', [roomId, cwId]);
+        const name = await ChatworkBotUtils.getNameById(cwId, [], roomId);
+        await interaction.editReply(`${name}（${cwId}）をブラックリストから削除したよ`);
+        return;
+      }
+
+      // ★ /prohibit
+      if (cmd === 'prohibit') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        const arg = interaction.options.getString('duration');
+        const mM = arg.match(/^(\d+)m$/); const hM = arg.match(/^(\d+)h$/);
+        let secs = mM ? parseInt(mM[1]) * 60 : hM ? parseInt(hM[1]) * 3600 : 0;
+        if (secs <= 0 || secs > 10800) { await interaction.editReply('時間の指定がおかしいよ！5分なら `5m`、3時間なら `3h`（最大3時間）'); return; }
+        const endsAt = new Date(Date.now() + secs * 1000);
+        await pool.query(`INSERT INTO prohibit (room_id, ends_at) VALUES ($1, $2) ON CONFLICT (room_id) DO UPDATE SET ends_at = $2`, [roomId, endsAt]);
+        await interaction.editReply(`${endsAt.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} まで発言禁止にしたよ！`);
+        return;
+      }
+
+      // ★ /release
+      if (cmd === 'release') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        await pool.query('DELETE FROM prohibit WHERE room_id=$1', [roomId]);
+        await interaction.editReply('発言禁止を解除したよ！');
+        return;
+      }
+
+      // ★ /ng
+      if (cmd === 'ng') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        const word = interaction.options.getString('word');
+        await pool.query('INSERT INTO ng_words (room_id, word) VALUES ($1, $2) ON CONFLICT (room_id, word) DO NOTHING', [roomId, word]);
+        await interaction.editReply(`「${word}」をNGワードに登録したよ！`);
+        return;
+      }
+
+      // ★ /ok
+      if (cmd === 'ok') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        const word = interaction.options.getString('word');
+        await pool.query('DELETE FROM ng_words WHERE room_id=$1 AND word=$2', [roomId, word]);
+        await interaction.editReply(`「${word}」をNGワードから削除したよ！`);
+        return;
+      }
+
+      // ★ /ng_check
+      if (cmd === 'ng_check') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        const res = await pool.query('SELECT word FROM ng_words WHERE room_id=$1 ORDER BY created_at', [roomId]);
+        if (res.rowCount === 0) { await interaction.editReply('NGワードはまだ登録されてないよ'); return; }
+        await interaction.editReply('**NGワード一覧**\n' + res.rows.map(r => `・${r.word}`).join('\n'));
+        return;
+      }
+
+      // ★ /kick
+      if (cmd === 'kick') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        const cwId = getCwId();
+        const members = await ChatworkBotUtils.getChatworkMembers(roomId);
+        const target = members.find(m => String(m.account_id) === cwId);
+        if (!target) { await interaction.editReply('そのIDのメンバーはこの部屋にいないみたい'); return; }
+        const admins = members.filter(m => m.role === 'admin' && String(m.account_id) !== cwId).map(m => String(m.account_id));
+        if (admins.length === 0) { await interaction.editReply('管理者が0人になるからキックできないよ'); return; }
+        const mems = members.filter(m => m.role === 'member' && String(m.account_id) !== cwId).map(m => String(m.account_id));
+        const ro = members.filter(m => m.role === 'readonly' && String(m.account_id) !== cwId).map(m => String(m.account_id));
+        const params = new URLSearchParams();
+        if (admins.length > 0) params.append('members_admin_ids', admins.join(','));
+        if (mems.length > 0) params.append('members_member_ids', mems.join(','));
+        if (ro.length > 0) params.append('members_readonly_ids', ro.join(','));
+        await apiCallLimiter();
+        await axios.put(`https://api.chatwork.com/v2/rooms/${roomId}/members`, params, { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } });
+        await interaction.editReply(`${target.name}をキックしたよっ！`);
+        return;
+      }
+
+      // ★ /mute
+      if (cmd === 'mute') {
+        if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
+        const cwId = getCwId();
+        const members = await ChatworkBotUtils.getChatworkMembers(roomId);
+        const target = members.find(m => String(m.account_id) === cwId);
+        if (!target) { await interaction.editReply('そのIDのメンバーはこの部屋にいないみたい'); return; }
+        if (target.role === 'readonly') { await interaction.editReply(`${target.name}はもう閲覧のみだよ`); return; }
+        await ChatworkBotUtils.addToBlackList(roomId, cwId);
+        await ChatworkBotUtils.forceReadOnly(roomId, cwId, members);
+        await interaction.editReply(`${target.name}を閲覧のみにしたよっ！`);
+        return;
+      }
+
+      await interaction.editReply('不明なコマンドだよ');
     } catch (e) {
       console.error('Discordスラッシュコマンドエラー:', e.message);
-      if (!interaction.replied) await interaction.reply('エラーが発生したよ').catch(() => {});
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply('エラーが発生したよ').catch(() => {});
+      } else {
+        await interaction.editReply('エラーが発生したよ').catch(() => {});
+      }
     }
   });
 
@@ -3564,12 +3847,13 @@ if (DISCORD_BOT_TOKEN) {
       let cwMessage = '';
       if (message.reference && message.reference.messageId) {
         const result = await pool.query(
-          'SELECT cw_message_id FROM discord_bridge WHERE discord_message_id = $1',
+          'SELECT cw_message_id, cw_account_id FROM discord_bridge WHERE discord_message_id = $1',
           [message.reference.messageId]
         );
         if (result.rowCount > 0 && result.rows[0].cw_message_id) {
           const cwMsgId = result.rows[0].cw_message_id;
-          cwMessage = `[rp aid=0 to=${DISCORD_BRIDGE_CW_ROOM_ID}-${cwMsgId}][info][title]Discord[/title]${userName}：${content}[/info]`;
+          const cwAccId = result.rows[0].cw_account_id || '0';
+          cwMessage = `[rp aid=${cwAccId} to=${DISCORD_BRIDGE_CW_ROOM_ID}-${cwMsgId}][info][title]Discord[/title]${userName}：${content}[/info]`;
         } else {
           cwMessage = `[info][title]Discord（返信）[/title]${userName}：${content}[/info]`;
         }
@@ -3582,8 +3866,8 @@ if (DISCORD_BOT_TOKEN) {
 
       if (cwMsgId) {
         await pool.query(
-          'INSERT INTO discord_bridge (cw_message_id, discord_message_id) VALUES ($1, $2)',
-          [String(cwMsgId), message.id]
+          'INSERT INTO discord_bridge (cw_message_id, discord_message_id, cw_account_id) VALUES ($1, $2, $3)',
+          [String(cwMsgId), message.id, '0']
         );
       }
     } catch (e) {
