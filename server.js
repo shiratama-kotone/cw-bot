@@ -247,6 +247,8 @@ const memoryStorage = {
   messageCounts: new Map(),
   roomResetDates: new Map(),
   lastEarthquakeId: null,
+  lastNhkNewsId: null,          // NHK速報：最後に送信したID
+  sentWarnings: new Map(),      // 気象庁警報：発令中の警報 Map<pref_area, Set<warning_type>>
   // ★ 地雷トグル状態
   toggles: {
     gakusei: false,
@@ -3372,6 +3374,131 @@ async function checkAndSendAlarms() {
   }
 }
 
+// NHK速報チェック
+async function checkNhkNews() {
+  try {
+    const response = await axios.get('https://api.web.nhk/sokuho/news/sokuho_news.xml', {
+      timeout: 8000,
+      headers: { 'User-Agent': 'ChatworkBot/1.0' }
+    });
+    const xml = response.data;
+
+    // 最初のitem要素を取得
+    const titleMatch = xml.match(/<title>([\s\S]*?)<\/title>/);
+    const linkMatch = xml.match(/<link>([\s\S]*?)<\/link>/);
+    const guidMatch = xml.match(/<guid[^>]*>([\s\S]*?)<\/guid>/);
+    const descMatch = xml.match(/<description>([\s\S]*?)<\/description>/);
+
+    if (!titleMatch) return;
+
+    // itemのtitleとguidを取得（channel直下のtitleではなくitem内を狙う）
+    const items = xml.match(/<item>([\s\S]*?)<\/item>/g);
+    if (!items || items.length === 0) return;
+
+    const firstItem = items[0];
+    const itemTitle = (firstItem.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
+    const itemLink  = (firstItem.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || '';
+    const itemGuid  = (firstItem.match(/<guid[^>]*>([\s\S]*?)<\/guid>/) || [])[1] || itemLink;
+    const itemDesc  = (firstItem.match(/<description>([\s\S]*?)<\/description>/) || [])[1] || '';
+
+    if (!itemGuid || itemGuid === memoryStorage.lastNhkNewsId) return;
+
+    memoryStorage.lastNhkNewsId = itemGuid;
+
+    const cleanTitle = itemTitle.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+    const cleanDesc  = itemDesc.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+    const cleanLink  = itemLink.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+
+    const message = `[info][title]📢 NHK速報[/title]${cleanTitle}\n${cleanDesc ? cleanDesc + '\n' : ''}${cleanLink}[/info]`;
+
+    for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+      try {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, message);
+        await new Promise(r => setTimeout(r, 300));
+      } catch (e) {
+        console.error(`NHK速報送信エラー (${roomId}):`, e.message);
+      }
+    }
+    console.log('NHK速報送信完了:', cleanTitle);
+  } catch (e) {
+    console.error('NHK速報チェックエラー:', e.message);
+  }
+}
+
+// 気象庁警報チェック
+const WARNING_NAMES = {
+  '暴風警報': '🌀', '大雨警報': '🌧️', '洪水警報': '🌊', '大雪警報': '❄️',
+  '暴風雪警報': '🌨️', '波浪警報': '🌊', '高潮警報': '🌊',
+  '暴風注意報': '💨', '大雨注意報': '🌧️', '洪水注意報': '🌊', '大雪注意報': '❄️',
+  '雷注意報': '⚡', '濃霧注意報': '🌫️', '乾燥注意報': '🔥', '強風注意報': '💨',
+  '波浪注意報': '🌊', '高潮注意報': '🌊', '霜注意報': '🧊', '低温注意報': '🥶'
+};
+
+// 対象地域コード（大阪、福岡、北海道、愛知、沖縄）
+const WARNING_TARGET_PREFS = ['270000', '400000', '010000', '230000', '470000'];
+
+async function checkJmaWarnings() {
+  try {
+    const response = await axios.get('https://www.jma.go.jp/bosai/warning/data/warning/map.json', {
+      timeout: 8000,
+      headers: { 'User-Agent': 'ChatworkBot/1.0' }
+    });
+    const data = response.data;
+
+    for (const prefCode of WARNING_TARGET_PREFS) {
+      const prefData = data[prefCode];
+      if (!prefData) continue;
+
+      const prefName = prefData.areaName || prefCode;
+      const currentWarnings = new Set();
+
+      // 現在発令中の警報・注意報を収集
+      if (prefData.warning && prefData.warning.items) {
+        for (const item of prefData.warning.items) {
+          if (item.warnings) {
+            for (const w of item.warnings) {
+              if (w.status === '発表' || w.status === '継続') {
+                currentWarnings.add(w.type);
+              }
+            }
+          }
+        }
+      }
+
+      const prevWarnings = memoryStorage.sentWarnings.get(prefCode) || new Set();
+
+      // 新たに発令されたもの
+      const newIssued = [...currentWarnings].filter(w => !prevWarnings.has(w));
+      // 解除されたもの
+      const newLifted = [...prevWarnings].filter(w => !currentWarnings.has(w));
+
+      if (newIssued.length > 0) {
+        const icons = newIssued.map(w => `${WARNING_NAMES[w] || '⚠️'} ${w}`).join('、');
+        const message = `[info][title]⚠️ 気象警報・注意報 発令[/title]${prefName}に\n${icons}\nが発令されました。引き続き情報に注意してね！[/info]`;
+        for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+          await ChatworkBotUtils.sendChatworkMessage(roomId, message).catch(() => {});
+          await new Promise(r => setTimeout(r, 300));
+        }
+        console.log(`警報発令通知: ${prefName} ${newIssued.join(', ')}`);
+      }
+
+      if (newLifted.length > 0) {
+        const icons = newLifted.map(w => `${WARNING_NAMES[w] || '⚠️'} ${w}`).join('、');
+        const message = `[info][title]✅ 気象警報・注意報 解除[/title]${prefName}の\n${icons}\nが解除されました。[/info]`;
+        for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
+          await ChatworkBotUtils.sendChatworkMessage(roomId, message).catch(() => {});
+          await new Promise(r => setTimeout(r, 300));
+        }
+        console.log(`警報解除通知: ${prefName} ${newLifted.join(', ')}`);
+      }
+
+      memoryStorage.sentWarnings.set(prefCode, currentWarnings);
+    }
+  } catch (e) {
+    console.error('気象庁警報チェックエラー:', e.message);
+  }
+}
+
 // cron: おはようせかい
 cron.schedule('0 0 0 * * *', async () => {
   await ohayosekai();
@@ -3420,6 +3547,16 @@ cron.schedule('*/1 * * * *', async () => {
 // cron: 1分ごとにアラームをチェック
 cron.schedule('*/1 * * * *', async () => {
   await checkAndSendAlarms();
+}, { timezone: "Asia/Tokyo" });
+
+// cron: 1分ごとにNHK速報をチェック
+cron.schedule('*/1 * * * *', async () => {
+  await checkNhkNews();
+}, { timezone: "Asia/Tokyo" });
+
+// cron: 1分ごとに気象庁警報をチェック
+cron.schedule('*/1 * * * *', async () => {
+  await checkJmaWarnings();
 }, { timezone: "Asia/Tokyo" });
 
 // cron: 3月11日14:45 東日本大震災追悼メッセージ
