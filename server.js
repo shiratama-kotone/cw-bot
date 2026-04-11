@@ -410,7 +410,12 @@ class ChatworkBotUtils {
   }
 
   static countChatworkEmojis(text) {
-    const matches = text.match(CHATWORK_EMOJI_REGEX);
+    // URLとChatworkリンクタグを除去してから絵文字をカウント
+    const cleaned = text
+      .replace(/https?:\/\/[^\s\]）)]+/g, '')  // URLを除去
+      .replace(/\[info\][\s\S]*?\[\/info\]/g, '')  // infoタグを除去
+      .replace(/\[[^\]]+\]/g, '');  // その他Chatworkタグを除去
+    const matches = cleaned.match(CHATWORK_EMOJI_REGEX);
     return matches ? matches.length : 0;
   }
 
