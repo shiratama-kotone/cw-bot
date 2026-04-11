@@ -3383,33 +3383,28 @@ async function checkNhkNews() {
     });
     const xml = response.data;
 
-    // 最初のitem要素を取得
-    const titleMatch = xml.match(/<title>([\s\S]*?)<\/title>/);
-    const linkMatch = xml.match(/<link>([\s\S]*?)<\/link>/);
-    const guidMatch = xml.match(/<guid[^>]*>([\s\S]*?)<\/guid>/);
-    const descMatch = xml.match(/<description>([\s\S]*?)<\/description>/);
+    // flag="1"の時だけ速報あり
+    const flagMatch = xml.match(/<flashNews[^>]*flag="(\d+)"/);
+    if (!flagMatch || flagMatch[1] !== '1') return;
 
-    if (!titleMatch) return;
+    // reportのidとlineを取得
+    const reportMatch = xml.match(/<report[^>]*id="([^"]+)"[^>]*>/);
+    const lineMatch = xml.match(/<line>([\s\S]*?)<\/line>/);
 
-    // itemのtitleとguidを取得（channel直下のtitleではなくitem内を狙う）
-    const items = xml.match(/<item>([\s\S]*?)<\/item>/g);
-    if (!items || items.length === 0) return;
+    if (!reportMatch || !lineMatch) return;
 
-    const firstItem = items[0];
-    const itemTitle = (firstItem.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
-    const itemLink  = (firstItem.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || '';
-    const itemGuid  = (firstItem.match(/<guid[^>]*>([\s\S]*?)<\/guid>/) || [])[1] || itemLink;
-    const itemDesc  = (firstItem.match(/<description>([\s\S]*?)<\/description>/) || [])[1] || '';
+    const reportId = reportMatch[1];
+    const lineText = lineMatch[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim();
 
-    if (!itemGuid || itemGuid === memoryStorage.lastNhkNewsId) return;
+    // 同じIDは送信しない
+    if (reportId === memoryStorage.lastNhkNewsId) return;
+    memoryStorage.lastNhkNewsId = reportId;
 
-    memoryStorage.lastNhkNewsId = itemGuid;
+    // linkも取得
+    const linkMatch = xml.match(/link="([^"]+)"/);
+    const link = linkMatch ? linkMatch[1] : '';
 
-    const cleanTitle = itemTitle.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
-    const cleanDesc  = itemDesc.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
-    const cleanLink  = itemLink.replace(/<!\[CDATA\[|\]\]>/g, '').trim();
-
-    const message = `[info][title]📢 NHK速報[/title]${cleanTitle}\n${cleanDesc ? cleanDesc + '\n' : ''}${cleanLink}[/info]`;
+    const message = `[info][title]📢 NHK速報[/title]${lineText}${link ? '\n' + link : ''}[/info]`;
 
     for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
       try {
@@ -3419,7 +3414,7 @@ async function checkNhkNews() {
         console.error(`NHK速報送信エラー (${roomId}):`, e.message);
       }
     }
-    console.log('NHK速報送信完了:', cleanTitle);
+    console.log('NHK速報送信完了:', lineText);
   } catch (e) {
     console.error('NHK速報チェックエラー:', e.message);
   }
