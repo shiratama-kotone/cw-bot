@@ -420,32 +420,29 @@ class ChatworkBotUtils {
   }
 
   static drawOmikuji(isAdmin) {
-  const specialFortune = '湊音すぺしゃるっ！';
-  let specialChance = 0.002;
+    const specialFortune = '湊音すぺしゃるっ！';
+    const specialChance = 0.002;
 
-  if (Math.random() < specialChance) {
-    return specialFortune;
+    if (Math.random() < specialChance) return specialFortune;
+
+    const fortunes = [
+      { name: '大吉', weight: 1 },
+      { name: '中吉', weight: 5 },
+      { name: '吉',   weight: 9 },
+      { name: '小吉', weight: 15 },
+      { name: '末吉', weight: 20 },
+      { name: '凶',   weight: 20 },
+      { name: '大凶', weight: 30 }
+    ];
+
+    const total = fortunes.reduce((sum, f) => sum + f.weight, 0);
+    let rand = Math.random() * total;
+    for (const f of fortunes) {
+      if (rand < f.weight) return f.name;
+      rand -= f.weight;
+    }
+    return '凶';
   }
-
-  // 確率（合計100%）
-  const fortunes = [
-    { name: '大吉', weight: 1 },   // 1%
-    { name: '中吉', weight: 5 },   // 5%
-    { name: '吉',   weight: 9 },   // 9%
-    { name: '小吉', weight: 15 },  // 15%
-    { name: '末吉', weight: 20 },  // 20%
-    { name: '凶',   weight: 20 },  // 20%
-    { name: '大凶', weight: 30 }   // 30% ←最大
-  ];
-
-  const total = fortunes.reduce((sum, f) => sum + f.weight, 0);
-  let rand = Math.random() * total;
-
-  for (let f of fortunes) {
-    if (rand < f.weight) return f.name;
-    rand -= f.weight;
-  }
-}
 
   static async getYesOrNoAnswer() {
     const answers = ['yes', 'no'];
@@ -1755,6 +1752,15 @@ class WebHookMessageProcessor {
     if (messageBody === 'おみくじ') {
       const omikujiResult = ChatworkBotUtils.drawOmikuji(isSenderAdmin);
       const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん[info][title]おみくじ[/title]おみくじの結果は…\n\n${omikujiResult}\n\nだよっ！[/info]`;
+      await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
+    }
+
+    if (messageBody === 'おみくじ10連') {
+      const results = [];
+      for (let i = 0; i < 10; i++) {
+        results.push(ChatworkBotUtils.drawOmikuji(isSenderAdmin));
+      }
+      const replyMessage = `[rp aid=${accountId} to=${roomId}-${messageId}]${userName}ちゃん[info][title]おみくじ10連[/title]おみくじの結果は…\n\n${results.join(' ')}\n\nだよっ！[/info]`;
       await ChatworkBotUtils.sendChatworkMessage(roomId, replyMessage);
     }
 
