@@ -11,12 +11,14 @@ const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } =
 const app = express();
 const port = process.env.PORT || 3000;
 
-// PostgreSQL接続設定
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+// 16行目あたりのこの部分を書き換え
+const pool = new Pool({ 
+  connectionString: process.env.DATABASE_URL, 
+  ssl: { rejectUnauthorized: false },
+  // 以下の2行を追加することで、Supabaseのプーラーとの相性問題を強制解決します
+  connectionTimeoutMillis: 5000,
+  idleTimeoutMillis: 30000
 });
-
 // データベース初期化（すべてのテーブル作成）
 async function initializeDatabase() {
   try {
