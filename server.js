@@ -11,16 +11,19 @@ const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } =
 const app = express();
 const port = process.env.PORT || 3000;
 
-// DATABASE_URL という「一行の文字列」に頼らず、直接パラメータを指定します
 const pool = new Pool({
-  host: 'aws-0-ap-northeast-1.pooler.supabase.com',
+  // ホスト名を「プロジェクトID直結」のものにします
+  host: 'mwikyehrqtnftqeexiyx.supabase.co', 
   port: 6543,
-  user: 'postgres.mwikyehrqtnftqeexiyx', // ユーザー名にプロジェクトIDを合体
-  password: process.env.DB_PASSWORD,    // パスワードだけ環境変数から取る
+  user: 'postgres', // ここはシンプルに postgres
+  password: process.env.DB_PASSWORD, 
   database: 'postgres',
   ssl: { rejectUnauthorized: false },
+  // プーラーとの通信を安定させるための設定
   connectionTimeoutMillis: 10000,
-});// データベース初期化（すべてのテーブル作成）
+});
+
+// データベース初期化（すべてのテーブル作成）
 async function initializeDatabase() {
   try {
     // 既存のwebhooksテーブル
