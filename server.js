@@ -11,15 +11,16 @@ const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } =
 const app = express();
 const port = process.env.PORT || 3000;
 
-// 16行目あたりのこの部分を書き換え
-const pool = new Pool({ 
-  connectionString: process.env.DATABASE_URL, 
+// DATABASE_URL という「一行の文字列」に頼らず、直接パラメータを指定します
+const pool = new Pool({
+  host: 'aws-0-ap-northeast-1.pooler.supabase.com',
+  port: 6543,
+  user: 'postgres.mwikyehrqtnftqeexiyx', // ユーザー名にプロジェクトIDを合体
+  password: process.env.DB_PASSWORD,    // パスワードだけ環境変数から取る
+  database: 'postgres',
   ssl: { rejectUnauthorized: false },
-  // 以下の2行を追加することで、Supabaseのプーラーとの相性問題を強制解決します
-  connectionTimeoutMillis: 5000,
-  idleTimeoutMillis: 30000
-});
-// データベース初期化（すべてのテーブル作成）
+  connectionTimeoutMillis: 10000,
+});// データベース初期化（すべてのテーブル作成）
 async function initializeDatabase() {
   try {
     // 既存のwebhooksテーブル
