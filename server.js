@@ -21,8 +21,8 @@ function createPool() {
   if (!DB_URL) return null;
   return new Pool({
     connectionString: DB_URL,
-    ssl: { rejectUnauthorized: false },
-    connectionTimeoutMillis: 5000,
+    ssl: DB_URL.includes('supabase') ? { rejectUnauthorized: false } : (DB_URL.includes('localhost') ? false : { rejectUnauthorized: false }),
+    connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
     max: 10
   });
@@ -53,13 +53,17 @@ async function dbQuery(text, params = []) {
 
 // DB接続チェック
 async function checkDbConnection() {
-  if (!pool) return false;
+  if (!pool) {
+    console.error('DB: poolが作成されてないよ（DB_URLが未設定かも）');
+    return false;
+  }
   try {
     await pool.query('SELECT 1');
     dbAvailable = true;
     return true;
   } catch (e) {
     dbAvailable = false;
+    console.error('DB接続エラー詳細:', e.message);
     return false;
   }
 }
@@ -4141,6 +4145,8 @@ app.listen(port, async () => {
   console.log('動作モードはすべてのルームで反応、ログは', LOG_ROOM_ID, 'から', LOG_DESTINATION_ROOM_ID, 'へ送信だよ');
 
   console.log('\nデータベースを初期化するね...');
+  console.log('- SUPABASE_DB_URL:', process.env.SUPABASE_DB_URL ? '設定済み' : '未設定');
+  console.log('- DATABASE_URL:', process.env.DATABASE_URL ? '設定済み' : '未設定');
   const dbOk = await checkDbConnection();
   console.log('DB接続:', dbOk ? '✅ 成功' : '❌ 失敗（DB不要な機能は動くよ）');
   await initializeDatabase();
