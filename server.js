@@ -11,23 +11,91 @@ const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } =
 const app = express();
 const port = process.env.PORT || 3000;
 
-const pool = new Pool({
-  // ホスト名を「プロジェクトID直結」のものにします
-  host: 'mwikyehrqtnftqeexiyx.supabase.co', 
-  port: 6543,
-  user: 'postgres', // ここはシンプルに postgres
-  password: process.env.DB_PASSWORD, 
-  database: 'postgres',
-  ssl: { rejectUnauthorized: false },
-  // プーラーとの通信を安定させるための設定
-  connectionTimeoutMillis: 10000,
-});
+// PostgreSQL/Supabase接続設定
+// SUPABASE_DB_URL または DATABASE_URL を使用
+const DB_URL = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '';
+let pool = null;
+let dbAvailable = false;
+
+function createPool() {
+  if (!DB_URL) return null;
+  return new Pool({
+    connectionString: DB_URL,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 5000,
+    idleTimeoutMillis: 30000,
+    max: 10
+  });
+}
+
+pool = createPool();
+
+// DB操作のラッパー（失敗しても例外を投げずnullを返す）
+async function dbQuery(text, params = []) {
+  if (!pool) return null;
+  try {
+    const result = await pool.query(text, params);
+    if (!dbAvailable) {
+      dbAvailable = true;
+      console.log('DB接続が回復したよ');
+      await setBotChatworkName(BOT_NORMAL_NAME, BOT_NORMAL_ORG);
+    }
+    return result;
+  } catch (e) {
+    if (dbAvailable) {
+      dbAvailable = false;
+      console.error('DB接続エラー:', e.message);
+      await setBotChatworkName('白玉 湊音(DB接続失敗)', '');
+    }
+    return null;
+  }
+}
+
+// DB接続チェック
+async function checkDbConnection() {
+  if (!pool) return false;
+  try {
+    await pool.query('SELECT 1');
+    dbAvailable = true;
+    return true;
+  } catch (e) {
+    dbAvailable = false;
+    return false;
+  }
+}
+
+const DB_FALLBACK_NAME = '白玉 湊音(DB接続失敗)';
+const BOT_NORMAL_NAME  = process.env.BOT_NAME || '白玉 湊音';
+const BOT_NORMAL_ORG   = process.env.BOT_ORG  || '';
+
+async function setBotChatworkName(name, org) {
+  try {
+    const params = new URLSearchParams();
+    params.append('name', name);
+    if (org !== undefined) params.append('organization_name', org);
+    await axios.put('https://api.chatwork.com/v2/me', params, {
+      headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN }
+    });
+    console.log(`Chatwork名前変更: ${name}`);
+  } catch (e) {
+    console.error('Chatwork名前変更エラー:', e.message);
+  }
+}
 
 // データベース初期化（すべてのテーブル作成）
 async function initializeDatabase() {
+  if (!pool) {
+    console.warn('DB未設定のためスキップ');
+    return;
+  }
+  const ok = await checkDbConnection();
+  if (!ok) {
+    console.warn('DB接続失敗のためテーブル初期化をスキップ');
+    return;
+  }
   try {
     // 既存のwebhooksテーブル
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS webhooks (
         id SERIAL PRIMARY KEY,
         room_id BIGINT NOT NULL,
@@ -44,14 +112,14 @@ async function initializeDatabase() {
       )
     `);
 
-    await pool.query(`
+    await dbQuery(`
       CREATE INDEX IF NOT EXISTS idx_webhooks_room_id ON webhooks(room_id);
       CREATE INDEX IF NOT EXISTS idx_webhooks_send_time ON webhooks(send_time);
       CREATE INDEX IF NOT EXISTS idx_webhooks_room_send ON webhooks(room_id, send_time);
     `);
 
     // メッセージログテーブル (ルーム415060980のみ、1日保管)
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS message_logs (
         id SERIAL PRIMARY KEY,
         room_id BIGINT NOT NULL,
@@ -62,13 +130,13 @@ async function initializeDatabase() {
       )
     `);
 
-    await pool.query(`
+    await dbQuery(`
       CREATE INDEX IF NOT EXISTS idx_message_logs_created ON message_logs(created_at);
       CREATE INDEX IF NOT EXISTS idx_message_logs_room ON message_logs(room_id);
     `);
 
     // 地雷トグル状態テーブル
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS jirai_toggles (
         id SERIAL PRIMARY KEY,
         toggle_name VARCHAR(50) UNIQUE NOT NULL,
@@ -80,14 +148,14 @@ async function initializeDatabase() {
     // 初期データ挿入
     const toggles = ['gakusei', 'nyanko_a', 'milk', 'admin', 'yuyuyu'];
     for (const toggle of toggles) {
-      await pool.query(
+      await dbQuery(
         'INSERT INTO jirai_toggles (toggle_name, is_enabled) VALUES ($1, $2) ON CONFLICT (toggle_name) DO NOTHING',
         [toggle, false]
       );
     }
 
     // アラームテーブル
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS alarms (
         id SERIAL PRIMARY KEY,
         room_id BIGINT NOT NULL,
@@ -98,12 +166,12 @@ async function initializeDatabase() {
       )
     `);
 
-    await pool.query(`
+    await dbQuery(`
       CREATE INDEX IF NOT EXISTS idx_alarms_scheduled ON alarms(scheduled_time);
     `);
 
     // 累計発言数テーブル
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS total_message_counts (
         id SERIAL PRIMARY KEY,
         room_id BIGINT NOT NULL,
@@ -115,7 +183,7 @@ async function initializeDatabase() {
     `);
 
     // ブラックリストテーブル（TOALL・絵文字大量送信で閲覧になったユーザー）
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS black_list (
         id SERIAL PRIMARY KEY,
         room_id BIGINT NOT NULL,
@@ -125,12 +193,12 @@ async function initializeDatabase() {
       )
     `);
 
-    await pool.query(`
+    await dbQuery(`
       CREATE INDEX IF NOT EXISTS idx_black_list_room_account ON black_list(room_id, account_id);
     `);
 
     // ポイントテーブル
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS points (
         id SERIAL PRIMARY KEY,
         room_id BIGINT NOT NULL,
@@ -141,12 +209,12 @@ async function initializeDatabase() {
       )
     `);
 
-    await pool.query(`
+    await dbQuery(`
       CREATE INDEX IF NOT EXISTS idx_points_room_account ON points(room_id, account_id);
     `);
 
     // フィーバーテーブル（room_idごとに1レコード）
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS fever (
         id SERIAL PRIMARY KEY,
         room_id BIGINT NOT NULL UNIQUE,
@@ -155,7 +223,7 @@ async function initializeDatabase() {
     `);
 
     // 発言禁止テーブル
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS prohibit (
         id SERIAL PRIMARY KEY,
         room_id BIGINT NOT NULL UNIQUE,
@@ -164,7 +232,7 @@ async function initializeDatabase() {
     `);
 
     // NGワードテーブル
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS ng_words (
         id SERIAL PRIMARY KEY,
         room_id BIGINT NOT NULL,
@@ -175,7 +243,7 @@ async function initializeDatabase() {
     `);
 
     // Discord-Chatworkメッセージ対応テーブル
-    await pool.query(`
+    await dbQuery(`
       CREATE TABLE IF NOT EXISTS discord_bridge (
         id SERIAL PRIMARY KEY,
         cw_message_id TEXT,
@@ -185,7 +253,7 @@ async function initializeDatabase() {
       )
     `);
     // カラムが存在しない場合に追加（既存DB対応）
-    await pool.query(`
+    await dbQuery(`
       ALTER TABLE discord_bridge ADD COLUMN IF NOT EXISTS cw_account_id TEXT
     `);
 
@@ -198,7 +266,7 @@ async function initializeDatabase() {
 // データベースから地雷トグル状態を読み込み
 async function loadJiraiToggles() {
   try {
-    const result = await pool.query('SELECT toggle_name, is_enabled FROM jirai_toggles');
+    const result = await dbQuery('SELECT toggle_name, is_enabled FROM jirai_toggles');
     const toggles = {};
     result.rows.forEach(row => {
       toggles[row.toggle_name] = row.is_enabled;
@@ -213,7 +281,7 @@ async function loadJiraiToggles() {
 // 地雷トグル状態を保存
 async function saveJiraiToggle(toggleName, isEnabled) {
   try {
-    await pool.query(
+    await dbQuery(
       'UPDATE jirai_toggles SET is_enabled = $1, updated_at = NOW() WHERE toggle_name = $2',
       [isEnabled, toggleName]
     );
@@ -843,7 +911,7 @@ class ChatworkBotUtils {
       console.log(`ルーム ${roomId} の累計発言数を初期化中...`);
 
       // まずデータベースから既存のwebhooksデータを集計
-      const dbResult = await pool.query(
+      const dbResult = await dbQuery(
         'SELECT account_id, COUNT(*) as count FROM webhooks WHERE room_id = $1 AND webhook_event_type = $2 GROUP BY account_id',
         [roomId, 'message_created']
       );
@@ -855,7 +923,7 @@ class ChatworkBotUtils {
 
       // データベースに保存
       for (const [accountId, count] of Object.entries(counts)) {
-        await pool.query(`
+        await dbQuery(`
           INSERT INTO total_message_counts (room_id, account_id, message_count)
           VALUES ($1, $2, $3)
           ON CONFLICT (room_id, account_id)
@@ -1153,7 +1221,7 @@ class ChatworkBotUtils {
   // ★ ブラックリスト追加
   static async addToBlackList(roomId, accountId) {
     try {
-      await pool.query(
+      await dbQuery(
         'INSERT INTO black_list (room_id, account_id) VALUES ($1, $2) ON CONFLICT (room_id, account_id) DO NOTHING',
         [roomId, accountId]
       );
@@ -1166,7 +1234,7 @@ class ChatworkBotUtils {
   // ★ ブラックリスト確認
   static async isInBlackList(roomId, accountId) {
     try {
-      const result = await pool.query(
+      const result = await dbQuery(
         'SELECT 1 FROM black_list WHERE room_id = $1 AND account_id = $2',
         [roomId, accountId]
       );
@@ -1219,7 +1287,7 @@ class WebHookMessageProcessor {
       const webhookEventType = webhookData.webhook_event_type || 'message_created';
       const webhookEventTime = webhookData.webhook_event_time || null;
 
-      await pool.query(`
+      await dbQuery(`
         INSERT INTO webhooks (
           room_id, message_id, account_id, account_name, body,
           send_time, update_time, webhook_event_type, webhook_event_time
@@ -1251,7 +1319,7 @@ class WebHookMessageProcessor {
       const messageBody = webhookData.body || '';
       const sendTime = webhookData.send_time;
 
-      await pool.query(
+      await dbQuery(
         'INSERT INTO message_logs (room_id, account_id, message_body, send_time) VALUES ($1, $2, $3, $4)',
         [roomId, accountId, messageBody, sendTime]
       );
@@ -1265,7 +1333,7 @@ class WebHookMessageProcessor {
   // 累計発言数を更新
   static async updateTotalMessageCount(roomId, accountId) {
     try {
-      await pool.query(`
+      await dbQuery(`
         INSERT INTO total_message_counts (room_id, account_id, message_count)
         VALUES ($1, $2, 1)
         ON CONFLICT (room_id, account_id)
@@ -1310,7 +1378,7 @@ class WebHookMessageProcessor {
 
       // ★★★ 発言禁止チェック ★★★
       if (eventType === 'message_created') {
-        const prohibitResult = await pool.query(
+        const prohibitResult = await dbQuery(
           'SELECT ends_at FROM prohibit WHERE room_id = $1 AND ends_at > NOW()',
           [roomId]
         );
@@ -1327,7 +1395,7 @@ class WebHookMessageProcessor {
 
       // ★★★ NGワードチェック ★★★
       if (eventType === 'message_created') {
-        const ngResult = await pool.query(
+        const ngResult = await dbQuery(
           'SELECT word FROM ng_words WHERE room_id = $1',
           [roomId]
         );
@@ -1358,13 +1426,13 @@ class WebHookMessageProcessor {
         else if (isAdm2) basePoint = 2;
 
         // フィーバーチェック
-        const feverResult = await pool.query(
+        const feverResult = await dbQuery(
           'SELECT ends_at FROM fever WHERE room_id = $1 AND ends_at > NOW()',
           [roomId]
         );
         if (feverResult.rowCount > 0) basePoint *= 10;
 
-        await pool.query(`
+        await dbQuery(`
           INSERT INTO points (room_id, account_id, point)
           VALUES ($1, $2, $3)
           ON CONFLICT (room_id, account_id)
@@ -1419,7 +1487,7 @@ class WebHookMessageProcessor {
               const discordMsgId = await sendToDiscord(discordContent);
               if (discordMsgId) {
                 discordWebhookMessageIds.add(discordMsgId);
-                await pool.query(
+                await dbQuery(
                   'INSERT INTO discord_bridge (cw_message_id, discord_message_id, cw_account_id) VALUES ($1, $2, $3)',
                   [String(messageId), discordMsgId, String(accountId)]
                 );
@@ -1688,7 +1756,7 @@ class WebHookMessageProcessor {
       const scheduledTime = new Date(`${date}T${time}:00+09:00`);
 
       try {
-        await pool.query(
+        await dbQuery(
           'INSERT INTO alarms (room_id, scheduled_time, message, created_by) VALUES ($1, $2, $3, $4)',
           [roomId, scheduledTime, message, accountId]
         );
@@ -1706,7 +1774,7 @@ class WebHookMessageProcessor {
     // ★★★ /message-total コマンド ★★★
     if (messageBody === '/message-total') {
       try {
-        const result = await pool.query(
+        const result = await dbQuery(
           'SELECT account_id, message_count FROM total_message_counts WHERE room_id = $1 ORDER BY message_count DESC',
           [roomId]
         );
@@ -1722,7 +1790,7 @@ class WebHookMessageProcessor {
         try {
           const roomInfo = await ChatworkBotUtils.getRoomInfo(roomId);
           const roomTotal = roomInfo ? (roomInfo.message_num || 0) : 0;
-          const dbCountResult = await pool.query(
+          const dbCountResult = await dbQuery(
             `SELECT COUNT(*) as count FROM webhooks WHERE room_id = $1 AND webhook_event_type = 'message_created'`,
             [roomId]
           );
@@ -1937,12 +2005,16 @@ class WebHookMessageProcessor {
 
     // ★★★ ブラックリストコマンド（管理者専用） ★★★
     if (messageBody === '/blacklist') {
+      if (!dbAvailable) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]今はDBに接続できないよ…`);
+        return;
+      }
       if (!isSenderAdmin) {
         await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
       }
       try {
-        const result = await pool.query(
+        const result = await dbQuery(
           'SELECT account_id FROM black_list WHERE room_id = $1 ORDER BY account_id ASC',
           [roomId]
         );
@@ -1997,7 +2069,7 @@ class WebHookMessageProcessor {
       }
       const deleted = [];
       for (const tid of targetIds) {
-        await pool.query('DELETE FROM black_list WHERE room_id = $1 AND account_id = $2', [roomId, tid]);
+        await dbQuery('DELETE FROM black_list WHERE room_id = $1 AND account_id = $2', [roomId, tid]);
         const name = await ChatworkBotUtils.getNameById(tid, currentMembers, roomId);
         deleted.push(`[picon:${tid}]${name}`);
       }
@@ -2076,6 +2148,10 @@ class WebHookMessageProcessor {
     }
 
     if (messageBody === '/romera') {
+      if (!dbAvailable) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]今はDBに接続できないからランキングを表示できないよ…`);
+        return;
+      }
       try {
         const data = await get60DayCountsFromAPI(roomId);
         const msg = await buildRankingMessage('メッセージ数ランキングだよ', data, currentMembers, roomId);
@@ -2088,8 +2164,12 @@ class WebHookMessageProcessor {
 
     // ★★★ ポイントコマンド ★★★
     if (messageBody === '/points') {
+      if (!dbAvailable) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId, `[rp aid=${accountId} to=${roomId}-${messageId}]今はDBに接続できないからポイントを確認できないよ…`);
+        return;
+      }
       try {
-        const res = await pool.query(
+        const res = await dbQuery(
           'SELECT point FROM points WHERE room_id = $1 AND account_id = $2',
           [roomId, accountId]
         );
@@ -2102,7 +2182,7 @@ class WebHookMessageProcessor {
 
     if (messageBody === '/points-all') {
       try {
-        const res = await pool.query(
+        const res = await dbQuery(
           'SELECT account_id, point FROM points WHERE room_id = $1 ORDER BY point DESC',
           [roomId]
         );
@@ -2135,15 +2215,15 @@ class WebHookMessageProcessor {
         return;
       }
       try {
-        const myRes = await pool.query('SELECT point FROM points WHERE room_id=$1 AND account_id=$2', [roomId, accountId]);
+        const myRes = await dbQuery('SELECT point FROM points WHERE room_id=$1 AND account_id=$2', [roomId, accountId]);
         const myPt = myRes.rowCount > 0 ? parseInt(myRes.rows[0].point) : 0;
         if (myPt < sendPt) {
           await ChatworkBotUtils.sendChatworkMessage(roomId,
             `[rp aid=${accountId} to=${roomId}-${messageId}]ポイントが足りないよ！今持ってるのは ${myPt}pt だよ`);
           return;
         }
-        await pool.query(`UPDATE points SET point = point - $1 WHERE room_id=$2 AND account_id=$3`, [sendPt, roomId, accountId]);
-        await pool.query(`
+        await dbQuery(`UPDATE points SET point = point - $1 WHERE room_id=$2 AND account_id=$3`, [sendPt, roomId, accountId]);
+        await dbQuery(`
           INSERT INTO points (room_id, account_id, point) VALUES ($1, $2, $3)
           ON CONFLICT (room_id, account_id) DO UPDATE SET point = points.point + $3, updated_at = NOW()
         `, [roomId, targetId, sendPt]);
@@ -2167,7 +2247,7 @@ class WebHookMessageProcessor {
           `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /point-add {ユーザーID} {ポイント} だよ`);
         return;
       }
-      await pool.query(`
+      await dbQuery(`
         INSERT INTO points (room_id, account_id, point) VALUES ($1, $2, $3)
         ON CONFLICT (room_id, account_id) DO UPDATE SET point = points.point + $3, updated_at = NOW()
       `, [roomId, targetId, addPt]);
@@ -2190,7 +2270,7 @@ class WebHookMessageProcessor {
           `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /point-del {ユーザーID} {ポイント} だよ`);
         return;
       }
-      await pool.query(`
+      await dbQuery(`
         INSERT INTO points (room_id, account_id, point) VALUES ($1, $2, 0)
         ON CONFLICT (room_id, account_id) DO UPDATE SET point = GREATEST(points.point - $3, 0), updated_at = NOW()
       `, [roomId, targetId, delPt]);
@@ -2217,7 +2297,7 @@ class WebHookMessageProcessor {
         return;
       }
       const endsAt = new Date(Date.now() + secs * 1000);
-      await pool.query(`
+      await dbQuery(`
         INSERT INTO fever (room_id, ends_at) VALUES ($1, $2)
         ON CONFLICT (room_id) DO UPDATE SET ends_at = $2
       `, [roomId, endsAt]);
@@ -2245,7 +2325,7 @@ class WebHookMessageProcessor {
         return;
       }
       const endsAt = new Date(Date.now() + secs * 1000);
-      await pool.query(`
+      await dbQuery(`
         INSERT INTO prohibit (room_id, ends_at) VALUES ($1, $2)
         ON CONFLICT (room_id) DO UPDATE SET ends_at = $2
       `, [roomId, endsAt]);
@@ -2261,7 +2341,7 @@ class WebHookMessageProcessor {
           `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
       }
-      await pool.query('DELETE FROM prohibit WHERE room_id = $1', [roomId]);
+      await dbQuery('DELETE FROM prohibit WHERE room_id = $1', [roomId]);
       await ChatworkBotUtils.sendChatworkMessage(roomId,
         `[rp aid=${accountId} to=${roomId}-${messageId}]発言禁止を解除したよ！`);
       return;
@@ -2280,7 +2360,7 @@ class WebHookMessageProcessor {
           `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /ng {言葉} だよ`);
         return;
       }
-      await pool.query(
+      await dbQuery(
         'INSERT INTO ng_words (room_id, word) VALUES ($1, $2) ON CONFLICT (room_id, word) DO NOTHING',
         [roomId, word]
       );
@@ -2301,7 +2381,7 @@ class WebHookMessageProcessor {
           `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /ok {言葉} だよ`);
         return;
       }
-      await pool.query('DELETE FROM ng_words WHERE room_id = $1 AND word = $2', [roomId, word]);
+      await dbQuery('DELETE FROM ng_words WHERE room_id = $1 AND word = $2', [roomId, word]);
       await ChatworkBotUtils.sendChatworkMessage(roomId,
         `[rp aid=${accountId} to=${roomId}-${messageId}]「${word}」をNGワードから削除したよ！`);
       return;
@@ -2313,7 +2393,7 @@ class WebHookMessageProcessor {
           `[rp aid=${accountId} to=${roomId}-${messageId}]管理者しか実行できないコマンドだよ！`);
         return;
       }
-      const res = await pool.query('SELECT word FROM ng_words WHERE room_id = $1 ORDER BY created_at', [roomId]);
+      const res = await dbQuery('SELECT word FROM ng_words WHERE room_id = $1 ORDER BY created_at', [roomId]);
       if (res.rowCount === 0) {
         await ChatworkBotUtils.sendChatworkMessage(roomId,
           `[rp aid=${accountId} to=${roomId}-${messageId}]NGワードはまだ登録されてないよ`);
@@ -3117,7 +3197,7 @@ async function getTodayCountsFromDB(roomId) {
   const todayStartTs = getTodayStartTs();
 
   // 今日のwebhooks
-  const todayResult = await pool.query(
+  const todayResult = await dbQuery(
     `SELECT account_id, COUNT(*) as count
      FROM webhooks
      WHERE room_id = $1
@@ -3375,7 +3455,7 @@ async function cleanupOldMessageLogs() {
     const twoDaysAgo = new Date();
     twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
 
-    const result = await pool.query(
+    const result = await dbQuery(
       'DELETE FROM message_logs WHERE created_at < $1 AND room_id = $2',
       [twoDaysAgo, LOG_ROOM_ID]
     );
@@ -3390,14 +3470,14 @@ async function cleanupOldMessageLogs() {
 async function checkAndSendAlarms() {
   try {
     const now = new Date();
-    const result = await pool.query(
+    const result = await dbQuery(
       'SELECT * FROM alarms WHERE scheduled_time <= $1',
       [now]
     );
 
     for (const alarm of result.rows) {
       await ChatworkBotUtils.sendChatworkMessage(alarm.room_id, alarm.message);
-      await pool.query('DELETE FROM alarms WHERE id = $1', [alarm.id]);
+      await dbQuery('DELETE FROM alarms WHERE id = $1', [alarm.id]);
       console.log(`アラーム送信完了: ID ${alarm.id}`);
     }
   } catch (error) {
@@ -3742,7 +3822,7 @@ if (DISCORD_BOT_TOKEN) {
       // ★ /points
       if (cmd === 'points') {
         const cwId = getCwId();
-        const res = await pool.query('SELECT point FROM points WHERE room_id=$1 AND account_id=$2', [roomId, cwId]);
+        const res = await dbQuery('SELECT point FROM points WHERE room_id=$1 AND account_id=$2', [roomId, cwId]);
         const pt = res.rowCount > 0 ? res.rows[0].point : 0;
         const name = await ChatworkBotUtils.getNameById(cwId, [], roomId);
         await interaction.editReply(`${name}（ID:${cwId}）のポイントは **${pt}pt** だよ！`);
@@ -3751,7 +3831,7 @@ if (DISCORD_BOT_TOKEN) {
 
       // ★ /points_all
       if (cmd === 'points_all') {
-        const res = await pool.query('SELECT account_id, point FROM points WHERE room_id=$1 ORDER BY point DESC LIMIT 15', [roomId]);
+        const res = await dbQuery('SELECT account_id, point FROM points WHERE room_id=$1 ORDER BY point DESC LIMIT 15', [roomId]);
         if (res.rowCount === 0) { await interaction.editReply('まだポイントを持ってる人がいないみたい'); return; }
         let msg = '**ポイントランキング**\n';
         for (let i = 0; i < res.rows.length; i++) {
@@ -3790,7 +3870,7 @@ if (DISCORD_BOT_TOKEN) {
         let secs = mM ? parseInt(mM[1]) * 60 : hM ? parseInt(hM[1]) * 3600 : 0;
         if (secs <= 0 || secs > 10800) { await interaction.editReply('時間の指定がおかしいよ！5分なら `5m`、3時間なら `3h`（最大3時間）'); return; }
         const endsAt = new Date(Date.now() + secs * 1000);
-        await pool.query(`INSERT INTO fever (room_id, ends_at) VALUES ($1, $2) ON CONFLICT (room_id) DO UPDATE SET ends_at = $2`, [roomId, endsAt]);
+        await dbQuery(`INSERT INTO fever (room_id, ends_at) VALUES ($1, $2) ON CONFLICT (room_id) DO UPDATE SET ends_at = $2`, [roomId, endsAt]);
         await interaction.editReply(`🔥フィーバータイム開始！${endsAt.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} まで獲得ポイント10倍だよっ！`);
         return;
       }
@@ -3805,7 +3885,7 @@ if (DISCORD_BOT_TOKEN) {
 
       // ★ /message_total
       if (cmd === 'message_total') {
-        const res = await pool.query('SELECT account_id, message_count FROM total_message_counts WHERE room_id=$1 ORDER BY message_count DESC', [roomId]);
+        const res = await dbQuery('SELECT account_id, message_count FROM total_message_counts WHERE room_id=$1 ORDER BY message_count DESC', [roomId]);
         if (res.rowCount === 0) { await interaction.editReply('累計発言数はまだないみたい'); return; }
         let msg = '**累計発言数ランキング**\n';
         for (let i = 0; i < res.rows.length; i++) {
@@ -3857,7 +3937,7 @@ if (DISCORD_BOT_TOKEN) {
         const match = datetime.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})$/);
         if (!match) { await interaction.editReply('日時の形式がおかしいよ！例: `2026-04-10 15:30`'); return; }
         const scheduledTime = new Date(`${match[1]}T${match[2]}:00+09:00`);
-        await pool.query('INSERT INTO alarms (room_id, scheduled_time, message, created_by) VALUES ($1, $2, $3, $4)',
+        await dbQuery('INSERT INTO alarms (room_id, scheduled_time, message, created_by) VALUES ($1, $2, $3, $4)',
           [roomId, scheduledTime, msg, 0]);
         await interaction.editReply(`アラームを設定したよ！${scheduledTime.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} に「${msg}」を送信するね`);
         return;
@@ -3866,7 +3946,7 @@ if (DISCORD_BOT_TOKEN) {
       // ★ /blacklist
       if (cmd === 'blacklist') {
         if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
-        const res = await pool.query('SELECT account_id FROM black_list WHERE room_id=$1 ORDER BY account_id', [roomId]);
+        const res = await dbQuery('SELECT account_id FROM black_list WHERE room_id=$1 ORDER BY account_id', [roomId]);
         if (res.rowCount === 0) { await interaction.editReply('ブラックリストは空だよ'); return; }
         let msg = '**ブラックリスト**\n';
         for (const r of res.rows) {
@@ -3891,7 +3971,7 @@ if (DISCORD_BOT_TOKEN) {
       if (cmd === 'blacklist_del') {
         if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
         const cwId = getCwId();
-        await pool.query('DELETE FROM black_list WHERE room_id=$1 AND account_id=$2', [roomId, cwId]);
+        await dbQuery('DELETE FROM black_list WHERE room_id=$1 AND account_id=$2', [roomId, cwId]);
         const name = await ChatworkBotUtils.getNameById(cwId, [], roomId);
         await interaction.editReply(`${name}（${cwId}）をブラックリストから削除したよ`);
         return;
@@ -3905,7 +3985,7 @@ if (DISCORD_BOT_TOKEN) {
         let secs = mM ? parseInt(mM[1]) * 60 : hM ? parseInt(hM[1]) * 3600 : 0;
         if (secs <= 0 || secs > 10800) { await interaction.editReply('時間の指定がおかしいよ！5分なら `5m`、3時間なら `3h`（最大3時間）'); return; }
         const endsAt = new Date(Date.now() + secs * 1000);
-        await pool.query(`INSERT INTO prohibit (room_id, ends_at) VALUES ($1, $2) ON CONFLICT (room_id) DO UPDATE SET ends_at = $2`, [roomId, endsAt]);
+        await dbQuery(`INSERT INTO prohibit (room_id, ends_at) VALUES ($1, $2) ON CONFLICT (room_id) DO UPDATE SET ends_at = $2`, [roomId, endsAt]);
         await interaction.editReply(`${endsAt.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} まで発言禁止にしたよ！`);
         return;
       }
@@ -3913,7 +3993,7 @@ if (DISCORD_BOT_TOKEN) {
       // ★ /release
       if (cmd === 'release') {
         if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
-        await pool.query('DELETE FROM prohibit WHERE room_id=$1', [roomId]);
+        await dbQuery('DELETE FROM prohibit WHERE room_id=$1', [roomId]);
         await interaction.editReply('発言禁止を解除したよ！');
         return;
       }
@@ -3922,7 +4002,7 @@ if (DISCORD_BOT_TOKEN) {
       if (cmd === 'ng') {
         if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
         const word = interaction.options.getString('word');
-        await pool.query('INSERT INTO ng_words (room_id, word) VALUES ($1, $2) ON CONFLICT (room_id, word) DO NOTHING', [roomId, word]);
+        await dbQuery('INSERT INTO ng_words (room_id, word) VALUES ($1, $2) ON CONFLICT (room_id, word) DO NOTHING', [roomId, word]);
         await interaction.editReply(`「${word}」をNGワードに登録したよ！`);
         return;
       }
@@ -3931,7 +4011,7 @@ if (DISCORD_BOT_TOKEN) {
       if (cmd === 'ok') {
         if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
         const word = interaction.options.getString('word');
-        await pool.query('DELETE FROM ng_words WHERE room_id=$1 AND word=$2', [roomId, word]);
+        await dbQuery('DELETE FROM ng_words WHERE room_id=$1 AND word=$2', [roomId, word]);
         await interaction.editReply(`「${word}」をNGワードから削除したよ！`);
         return;
       }
@@ -3939,7 +4019,7 @@ if (DISCORD_BOT_TOKEN) {
       // ★ /ng_check
       if (cmd === 'ng_check') {
         if (!isAdmin) { await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
-        const res = await pool.query('SELECT word FROM ng_words WHERE room_id=$1 ORDER BY created_at', [roomId]);
+        const res = await dbQuery('SELECT word FROM ng_words WHERE room_id=$1 ORDER BY created_at', [roomId]);
         if (res.rowCount === 0) { await interaction.editReply('NGワードはまだ登録されてないよ'); return; }
         await interaction.editReply('**NGワード一覧**\n' + res.rows.map(r => `・${r.word}`).join('\n'));
         return;
@@ -4009,7 +4089,7 @@ if (DISCORD_BOT_TOKEN) {
       // 返信かどうか確認
       let cwMessage = '';
       if (message.reference && message.reference.messageId) {
-        const result = await pool.query(
+        const result = await dbQuery(
           'SELECT cw_message_id, cw_account_id FROM discord_bridge WHERE discord_message_id = $1',
           [message.reference.messageId]
         );
@@ -4028,7 +4108,7 @@ if (DISCORD_BOT_TOKEN) {
       console.log(`Discord→Chatwork転送完了: ${userName}`);
 
       if (cwMsgId) {
-        await pool.query(
+        await dbQuery(
           'INSERT INTO discord_bridge (cw_message_id, discord_message_id, cw_account_id) VALUES ($1, $2, $3)',
           [String(cwMsgId), message.id, '0']
         );
@@ -4061,6 +4141,8 @@ app.listen(port, async () => {
   console.log('動作モードはすべてのルームで反応、ログは', LOG_ROOM_ID, 'から', LOG_DESTINATION_ROOM_ID, 'へ送信だよ');
 
   console.log('\nデータベースを初期化するね...');
+  const dbOk = await checkDbConnection();
+  console.log('DB接続:', dbOk ? '✅ 成功' : '❌ 失敗（DB不要な機能は動くよ）');
   await initializeDatabase();
 
   console.log('\nメッセージカウントを初期化するね...');
