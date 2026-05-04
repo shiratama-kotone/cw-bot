@@ -19,12 +19,14 @@ let dbAvailable = false;
 
 function createPool() {
   if (!DB_URL) return null;
+  // IPv6問題回避: URLにfamilyパラメータを追加しIPv4を強制
   return new Pool({
     connectionString: DB_URL,
-    ssl: DB_URL.includes('supabase') ? { rejectUnauthorized: false } : (DB_URL.includes('localhost') ? false : { rejectUnauthorized: false }),
+    ssl: { rejectUnauthorized: false },
     connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
-    max: 10
+    max: 10,
+    family: 4  // IPv4強制
   });
 }
 
