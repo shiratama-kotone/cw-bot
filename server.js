@@ -1448,66 +1448,6 @@ class WebHookMessageProcessor {
         `, [roomId, accountId, basePoint]);
       }
 
-      // ★★★ 転送処理 ★★★
-      if (roomId === '415060980' || roomId === 415060980) {
-        const forwardRoomId = '420890621';
-        const editLabel = eventType === 'message_updated' ? '(編集)' : '';
-        const senderName = await ChatworkBotUtils.getNameById(accountId, []);
-        const forwardMessage = `[info][title]${senderName}${editLabel}[/title]${messageBody}[/info]`;
-
-        try {
-          await ChatworkBotUtils.sendChatworkMessage(forwardRoomId, forwardMessage);
-          console.log(`メッセージ転送完了 [${eventType}]: ${roomId} → ${forwardRoomId}`);
-        } catch (error) {
-          console.error(`メッセージ転送エラー (${roomId} → ${forwardRoomId}):`, error.message);
-        }
-
-        // ★ Chatwork → Discord転送（新規メッセージのみ）
-        if (eventType === 'message_created' && DISCORD_WEBHOOK_URL) {
-          try {
-            const convertCwToDiscord = (text) => {
-              return text
-                .replace(/\[dtext:chatroom_member_is\]/g, 'メンバー「')
-                .replace(/\[dtext:chatroom_leaved\]/g, 'が退席しました。')
-                .replace(/\[dtext:chatroom_added\]/g, 'を追加しました。')
-                .replace(/\[dtext:chatroom_chat_joined\]/g, 'チャットに参加しました。')
-                .replace(/\[dtext:chatroom_description_is\]/g, '概要を「')
-                .replace(/\[dtext:chatroom_changed\]/g, '」に変更しました。')
-                .replace(/\[dtext:task_added\]/g, 'タスクを追加しました。')
-                .replace(/\[dtext:task_edited\]/g, 'タスクを編集しました。')
-                .replace(/\[dtext:task_deleted\]/g, 'このタスクは削除されました')
-                .replace(/\[dtext:chatroom_deleted\]/g, '」を削除しました。')
-                .replace(/\[dtext:chatroom_set\]/g, '」に設定しました。')
-                .replace(/\[deleted\]/g, 'メッセージは削除されました')
-                .replace(/\[info\]\[title\]([^\[]*)\[\/title\]([\s\S]*?)\[\/info\]/g, '【$1】$2')
-                .replace(/\[info\]([\s\S]*?)\[\/info\]/g, '$1')
-                .replace(/\[piconname:\d+\]/g, '')
-                .replace(/\[picon:\d+\]/g, '')
-                .replace(/\[To:\d+\]/g, '')
-                .replace(/\[rp aid=\d+ to=\d+-\d+\]\s*/g, '（返信）')
-                .replace(/\[qt\][\s\S]*?\[\/qt\]/g, '（引用）')
-                .trim();
-            };
-
-            const converted = convertCwToDiscord(messageBody);
-            if (converted) {
-              const discordContent = `${senderName}：${converted}`;
-              const discordMsgId = await sendToDiscord(discordContent);
-              if (discordMsgId) {
-                discordWebhookMessageIds.add(discordMsgId);
-                await dbQuery(
-                  'INSERT INTO discord_bridge (cw_message_id, discord_message_id, cw_account_id) VALUES ($1, $2, $3)',
-                  [String(messageId), discordMsgId, String(accountId)]
-                );
-                console.log(`Chatwork→Discord転送完了: ${senderName}`);
-              }
-            }
-          } catch (e) {
-            console.error('Chatwork→Discord転送エラー:', e.message);
-          }
-        }
-      }
-
       // ★★★ ウェルカムメッセージ & ブラックリスト再参加チェック ★★★
       if (messageBody.includes('[dtext:chatroom_member_is]') && 
           messageBody.includes('[dtext:chatroom_added]')) {
@@ -1588,6 +1528,63 @@ class WebHookMessageProcessor {
       // ログ送信（userName解決後）
       console.log(`ログ送信チェック: sourceRoomId=${roomId}, LOG_ROOM_ID=${LOG_ROOM_ID}`);
       await ChatworkBotUtils.sendLogToChatwork(userName, messageBody, roomId);
+
+      // ★★★ 転送処理（userName解決後） ★★★
+      if (roomId === '415060980' || roomId === 415060980) {
+        const forwardRoomId = '420890621';
+        const editLabel = eventType === 'message_updated' ? '(編集)' : '';
+        const forwardMessage = `[info][title]${userName}${editLabel}[/title]${messageBody}[/info]`;
+
+        try {
+          await ChatworkBotUtils.sendChatworkMessage(forwardRoomId, forwardMessage);
+          console.log(`メッセージ転送完了 [${eventType}]: ${roomId} → ${forwardRoomId}`);
+        } catch (error) {
+          console.error(`メッセージ転送エラー (${roomId} → ${forwardRoomId}):`, error.message);
+        }
+
+        // Chatwork → Discord転送（新規メッセージのみ）
+        if (eventType === 'message_created' && DISCORD_WEBHOOK_URL) {
+          try {
+            const convertCwToDiscord = (text) => {
+              return text
+                .replace(/\[dtext:chatroom_member_is\]/g, 'メンバー「')
+                .replace(/\[dtext:chatroom_leaved\]/g, 'が退席しました。')
+                .replace(/\[dtext:chatroom_added\]/g, 'を追加しました。')
+                .replace(/\[dtext:chatroom_chat_joined\]/g, 'チャットに参加しました。')
+                .replace(/\[dtext:chatroom_description_is\]/g, '概要を「')
+                .replace(/\[dtext:chatroom_changed\]/g, '」に変更しました。')
+                .replace(/\[dtext:task_added\]/g, 'タスクを追加しました。')
+                .replace(/\[dtext:task_edited\]/g, 'タスクを編集しました。')
+                .replace(/\[dtext:task_deleted\]/g, 'このタスクは削除されました')
+                .replace(/\[dtext:chatroom_deleted\]/g, '」を削除しました。')
+                .replace(/\[dtext:chatroom_set\]/g, '」に設定しました。')
+                .replace(/\[deleted\]/g, 'メッセージは削除されました')
+                .replace(/\[info\]\[title\]([^\[]*)\[\/title\]([\s\S]*?)\[\/info\]/g, '【$1】$2')
+                .replace(/\[info\]([\s\S]*?)\[\/info\]/g, '$1')
+                .replace(/\[piconname:\d+\]/g, '')
+                .replace(/\[picon:\d+\]/g, '')
+                .replace(/\[To:\d+\]/g, '')
+                .replace(/\[rp aid=\d+ to=\d+-\d+\]\s*/g, '（返信）')
+                .replace(/\[qt\][\s\S]*?\[\/qt\]/g, '（引用）')
+                .trim();
+            };
+            const converted = convertCwToDiscord(messageBody);
+            if (converted) {
+              const discordMsgId = await sendToDiscord(`${userName}：${converted}`);
+              if (discordMsgId) {
+                discordWebhookMessageIds.add(discordMsgId);
+                await dbQuery(
+                  'INSERT INTO discord_bridge (cw_message_id, discord_message_id, cw_account_id) VALUES ($1, $2, $3)',
+                  [String(messageId), discordMsgId, String(accountId)]
+                );
+                console.log(`Chatwork→Discord転送完了: ${userName}`);
+              }
+            }
+          } catch (e) {
+            console.error('Chatwork→Discord転送エラー:', e.message);
+          }
+        }
+      }
 
       // ★★★ 地雷踏んだね (LOG_ROOM_IDのみ) ★★★
       console.log(`地雷チェック: roomId=${roomId} (型=${typeof roomId}), LOG_ROOM_ID=${LOG_ROOM_ID} (型=${typeof LOG_ROOM_ID}), 一致=${String(roomId) === LOG_ROOM_ID}`);
