@@ -34,7 +34,7 @@ pool = createPool();
 
 // DB操作のラッパー（失敗しても例外を投げずnullを返す）
 async function dbQuery(text, params = []) {
-  if (!pool) return null;
+  if (!pool) return { rows: [], rowCount: 0 };
   try {
     const result = await pool.query(text, params);
     if (!dbAvailable) {
@@ -49,7 +49,7 @@ async function dbQuery(text, params = []) {
       console.error('DB接続エラー:', e.message);
       await setBotChatworkName('白玉 湊音(DB接続失敗)', '');
     }
-    return null;
+    return { rows: [], rowCount: 0 };
   }
 }
 
@@ -923,9 +923,11 @@ class ChatworkBotUtils {
       );
 
       const counts = {};
-      dbResult.rows.forEach(row => {
-        counts[row.account_id] = parseInt(row.count);
-      });
+      if (dbResult && dbResult.rows) {
+        dbResult.rows.forEach(row => {
+          counts[row.account_id] = parseInt(row.count);
+        });
+      }
 
       // データベースに保存
       for (const [accountId, count] of Object.entries(counts)) {
@@ -4151,18 +4153,28 @@ app.listen(port, async () => {
   console.log('- DATABASE_URL:', process.env.DATABASE_URL ? '設定済み' : '未設定');
   const dbOk = await checkDbConnection();
   console.log('DB接続:', dbOk ? '✅ 成功' : '❌ 失敗（DB不要な機能は動くよ）');
-  await initializeDatabase();
+  if (dbOk) {
+    await initializeDatabase();
+  }
 
   console.log('\nメッセージカウントを初期化するね...');
   for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
-    await ChatworkBotUtils.initializeMessageCount(roomId);
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      await ChatworkBotUtils.initializeMessageCount(roomId);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (e) {
+      console.error(`メッセージカウント初期化エラー (${roomId}):`, e.message);
+    }
   }
 
   console.log('\n累計発言数を初期化するね...');
   for (const roomId of DIRECT_CHAT_WITH_DATE_CHANGE) {
-    await ChatworkBotUtils.initializeTotalMessageCounts(roomId);
-    await new Promise(resolve => setTimeout(resolve, 500));
+    try {
+      if (dbOk) await ChatworkBotUtils.initializeTotalMessageCounts(roomId);
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (e) {
+      console.error(`累計発言数初期化エラー (${roomId}):`, e.message);
+    }
   }
 
   // ★★★ 地雷トグル状態確認 ★★★
