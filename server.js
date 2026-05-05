@@ -802,11 +802,6 @@ class ChatworkBotUtils {
       return `歌詞の取得中にエラーが発生しちゃった: ${error.message}`;
     }
   }
-    } catch (error) {
-      console.error('歌詞取得エラー:', error.message);
-      return `歌詞の取得中にエラーが発生しちゃった: ${error.message}`;
-    }
-  }
 
   // 歌詞タイピング情報取得
   static async getSongTypingInfo(songId) {
