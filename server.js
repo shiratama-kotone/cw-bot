@@ -6,7 +6,7 @@ const axios = require('axios');
 const cron = require('node-cron');
 const { Pool } = require('pg');
 const cheerio = require('cheerio');
-const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder, AttachmentBuilder } = require('discord.js');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -19,14 +19,23 @@ let dbAvailable = false;
 
 function createPool() {
   if (!DB_URL) return null;
-  // IPv6問題回避: URLにfamilyパラメータを追加しIPv4を強制
+  // SupabaseのIPv6問題回避：db.xxx.supabase.co:5432 → aws-0-xxx.pooler.supabase.com:6543 に変換
+  let connectionString = DB_URL;
+  const supabaseMatch = DB_URL.match(/postgresql:\/\/([^:]+):([^@]+)@db\.([^.]+)\.supabase\.co:5432\/postgres/);
+  if (supabaseMatch) {
+    const user = supabaseMatch[1];
+    const pass = supabaseMatch[2];
+    const projectRef = supabaseMatch[3];
+    // Transaction mode pooler（IPv4対応）に切り替え
+    connectionString = `postgresql://postgres.${projectRef}:${pass}@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres`;
+    console.log('Supabase Transaction modeプーラーに切り替え（IPv6問題回避）');
+  }
   return new Pool({
-    connectionString: DB_URL,
+    connectionString,
     ssl: { rejectUnauthorized: false },
     connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
-    max: 10,
-    family: 4  // IPv4強制
+    max: 10
   });
 }
 
@@ -506,13 +515,13 @@ class ChatworkBotUtils {
     if (Math.random() < specialChance) return specialFortune;
 
     const fortunes = [
-      { name: '大吉', weight: 0.1 },
-      { name: '中吉', weight: 0.4 },
-      { name: '吉',   weight: 0.5 },
-      { name: '小吉', weight: 1 },
-      { name: '末吉', weight: 1 },
-      { name: '凶',   weight: 2 },
-      { name: '大凶', weight: 95 }
+      { name: '大吉', weight: 1 },
+      { name: '中吉', weight: 5 },
+      { name: '吉',   weight: 9 },
+      { name: '小吉', weight: 15 },
+      { name: '末吉', weight: 20 },
+      { name: '凶',   weight: 20 },
+      { name: '大凶', weight: 30 }
     ];
 
     const total = fortunes.reduce((sum, f) => sum + f.weight, 0);
@@ -687,7 +696,9 @@ class ChatworkBotUtils {
       const response = await axios.get(url, {
         timeout: 15000,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3'
         }
       });
 
@@ -696,29 +707,46 @@ class ChatworkBotUtils {
       let lyrics = '';
 
       if (url.includes('utaten.com')) {
-        const titleMain = $('h2.newLyricTitle__main').text().trim();
-        const titleAfter = $('span.newLyricTitle_afterTxt').text().trim();
-        title = titleMain.replace(titleAfter, '').trim();
+        // タイトル取得（複数セレクタ試行）
+        title = $('h2.newLyricTitle__main').text().trim() ||
+                $('h1.lyricTitle').text().trim() ||
+                $('title').text().split('の歌詞')[0].trim();
 
-        $('div.hiragana span.rt').remove();
+        // ルビ除去
+        $('span.rt').remove();
+        $('rp').remove();
+        $('rt').remove();
 
-        lyrics = $('div.hiragana').html() || '';
+        // 歌詞取得（複数セレクタ試行）
+        const lyricsEl = $('div.hiragana').first() ||
+                         $('p.hiragana').first();
+        lyrics = lyricsEl.html() || '';
 
-        lyrics = lyrics.replace(/<br\s*\/?>/gi, '\n')
-                      .replace(/<[^>]+>/g, '')
-                      .trim();
+        if (!lyrics) {
+          // 別セレクタで試行
+          lyrics = $('[class*="lyric"]').first().html() || '';
+        }
+
+        lyrics = lyrics
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<[^>]+>/g, '')
+          .trim();
 
       } else if (url.includes('uta-net.com')) {
-        title = $('h2.ms-2.ms-md-3.kashi-title').text().trim();
+        title = $('h2.ms-2.ms-md-3.kashi-title').text().trim() ||
+                $('h2[class*="kashi"]').text().trim() ||
+                $('h1').first().text().trim();
 
-        lyrics = $('div#kashi_area[itemprop="text"]').html() || '';
+        const lyricsEl = $('div#kashi_area').first() ||
+                         $('[itemprop="text"]').first();
+        lyrics = lyricsEl.html() || '';
 
-        lyrics = lyrics.replace(/<br\s*\/?>/gi, '\n')
-                      .replace(/<[^>]+>/g, '')
-                      .trim();
+        lyrics = lyrics
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<[^>]+>/g, '')
+          .trim();
+
       } else if (url.includes('atwiki.jp')) {
-        // @wikiの処理
-        // 曲名を「曲紹介」セクションから取得
         const songIntroH3 = $('h3:contains("曲紹介")');
         if (songIntroH3.length > 0) {
           let currentElement = songIntroH3.next();
@@ -732,38 +760,22 @@ class ChatworkBotUtils {
             currentElement = currentElement.next();
           }
         }
-
-        // タイトルが見つからなければページタイトルから取得
         if (!title) {
           title = $('title').text().trim();
-          if (title.includes(' - ')) {
-            title = title.split(' - ')[0].trim();
-          }
+          if (title.includes(' - ')) title = title.split(' - ')[0].trim();
         }
 
-        // 歌詞セクションを抽出
         const lyricsStart = $('h3:contains("歌詞")');
-        const relatedStart = $('h3:contains("関連動画")');
+        if (lyricsStart.length === 0) return '歌詞セクションが見つからなかったよ';
 
-        if (lyricsStart.length === 0) {
-          return '歌詞セクションが見つからなかったよ';
-        }
-
-        // 歌詞セクションと関連動画セクションの間のdivを取得
         let lyricsHtml = '';
         let currentElement = lyricsStart.next();
-
         while (currentElement.length > 0) {
-          if (currentElement.is('h3') && currentElement.text().includes('関連動画')) {
-            break;
-          }
-          if (currentElement.is('div') || currentElement.is('br')) {
-            lyricsHtml += $.html(currentElement);
-          }
+          if (currentElement.is('h3') && currentElement.text().includes('関連動画')) break;
+          if (currentElement.is('div') || currentElement.is('br')) lyricsHtml += $.html(currentElement);
           currentElement = currentElement.next();
         }
 
-        // HTMLを整形
         lyrics = lyricsHtml
           .replace(/<br\s*\/?>/gi, '\n')
           .replace(/<div>/gi, '')
@@ -776,11 +788,20 @@ class ChatworkBotUtils {
         return '対応していないURLだよっ！utaten.com、uta-net.com、またはatwiki.jpのURLを指定してねっ！';
       }
 
-      if (!title || !lyrics) {
-        return '歌詞の取得に失敗しちゃった。URLを確認してくれるとうれしいな';
-      }
+      console.log(`歌詞取得: title="${title}", lyrics length=${lyrics.length}`);
+
+      if (!lyrics) return `歌詞の取得に失敗しちゃった（歌詞が空）。URLを確認してくれるとうれしいな`;
+      if (!title) title = '不明';
+
+      // Chatworkのメッセージ制限（4000文字）に合わせてトリム
+      if (lyrics.length > 3500) lyrics = lyrics.substring(0, 3500) + '\n…（以下省略）';
 
       return `[info][title]${title}の歌詞だよっ！[/title]${lyrics}[/info]`;
+    } catch (error) {
+      console.error('歌詞取得エラー:', error.message);
+      return `歌詞の取得中にエラーが発生しちゃった: ${error.message}`;
+    }
+  }
     } catch (error) {
       console.error('歌詞取得エラー:', error.message);
       return `歌詞の取得中にエラーが発生しちゃった: ${error.message}`;
@@ -1697,6 +1718,51 @@ class WebHookMessageProcessor {
       } catch (error) {
         console.error('権限変更エラー:', error.message);
       }
+    }
+
+    // ★★★ /miaq コマンド ★★★
+    if (messageBody.startsWith('/miaq ')) {
+      const parts = messageBody.substring('/miaq '.length).trim().split(/\s+/);
+      const targetRoomId = parts[0];
+      const targetMessageId = parts[1];
+      if (!targetRoomId || !targetMessageId) {
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]つかいかたは /miaq {ルームID} {メッセージID} だよ`);
+        return;
+      }
+      try {
+        await apiCallLimiter();
+        const msgRes = await axios.get(
+          `https://api.chatwork.com/v2/rooms/${targetRoomId}/messages/${targetMessageId}`,
+          { headers: { 'X-ChatWorkToken': CHATWORK_API_TOKEN } }
+        );
+        const targetMsg = msgRes.data;
+        const targetBody = (targetMsg.body || '').replace(/\[.*?\]/g, '').trim();
+        const targetAccountId = targetMsg.account?.account_id || '';
+        const targetName = targetAccountId
+          ? await ChatworkBotUtils.getNameById(targetAccountId, currentMembers, roomId)
+          : '不明';
+
+        const miaqRes = await axios.post('https://makeit-a66a.onrender.com/', {
+          text: targetBody,
+          name: targetName,
+          id: String(targetAccountId)
+        }, {
+          headers: { 'Content-Type': 'application/json' },
+          responseType: 'arraybuffer',
+          timeout: 20000
+        });
+
+        // 画像バイナリをBase64に変換してURLを生成（Chatworkはファイルアップロードが必要なのでURLのみ返す）
+        // とりあえずURLを案内
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]Make it a Quote を生成したよ！\nDiscordの /miaq コマンドで画像として受け取れるよ（Chatworkはファイル添付APIが必要なため画像直貼りはできないよ）`);
+      } catch (e) {
+        console.error('/miaqエラー:', e.message);
+        await ChatworkBotUtils.sendChatworkMessage(roomId,
+          `[rp aid=${accountId} to=${roomId}-${messageId}]Make it a Quote の取得に失敗しちゃった: ${e.message}`);
+      }
+      return;
     }
 
     // 歌詞取得コマンド
@@ -3760,6 +3826,8 @@ if (DISCORD_BOT_TOKEN) {
         .addStringOption(o => cwIdOpt(o)),
       new SlashCommandBuilder().setName('mute').setDescription('閲覧のみに変更（管理者のみ）')
         .addStringOption(o => cwIdOpt(o)),
+      new SlashCommandBuilder().setName('miaq').setDescription('メッセージをMake it a Quoteにする')
+        .addStringOption(o => o.setName('message_id').setDescription('対象のメッセージID').setRequired(true)),
       new SlashCommandBuilder().setName('alarm').setDescription('アラームを設定')
         .addStringOption(o => o.setName('datetime').setDescription('日時（YYYY-MM-DD HH:MM）').setRequired(true))
         .addStringOption(o => o.setName('message').setDescription('メッセージ').setRequired(true)),
@@ -3935,7 +4003,37 @@ if (DISCORD_BOT_TOKEN) {
         return;
       }
 
-      // ★ /alarm
+      // ★ /miaq
+      if (cmd === 'miaq') {
+        const targetMsgId = interaction.options.getString('message_id');
+        try {
+          const channel = interaction.channel;
+          const targetMsg = await channel.messages.fetch(targetMsgId);
+          if (!targetMsg) { await interaction.editReply('メッセージが見つからなかったよ'); return; }
+
+          const text = targetMsg.content || '';
+          const author = targetMsg.member?.displayName || targetMsg.author.username;
+          const discordId = targetMsg.author.id;
+
+          const miaqRes = await axios.post('https://makeit-a66a.onrender.com/', {
+            text,
+            name: author,
+            id: discordId
+          }, {
+            headers: { 'Content-Type': 'application/json' },
+            responseType: 'arraybuffer',
+            timeout: 20000
+          });
+
+          const imageBuffer = Buffer.from(miaqRes.data);
+          const attachment = new AttachmentBuilder(imageBuffer, { name: 'quote.png' });
+          await interaction.editReply({ files: [attachment] });
+        } catch (e) {
+          console.error('Discord /miaqエラー:', e.message);
+          await interaction.editReply(`エラーが発生したよ: ${e.message}`);
+        }
+        return;
+      }
       if (cmd === 'alarm') {
         const datetime = interaction.options.getString('datetime');
         const msg = interaction.options.getString('message');
@@ -4076,11 +4174,15 @@ if (DISCORD_BOT_TOKEN) {
     }
   });
 
+  const DISCORD_BRIDGE_CHANNEL_ID = '1371130293888745554';
+
   // Discord → Chatwork転送
   discordClient.on(Events.MessageCreate, async (message) => {
     try {
       // bot自身のメッセージは無視
       if (message.author.bot) return;
+      // 特定チャンネルのみ処理
+      if (message.channel.id !== DISCORD_BRIDGE_CHANNEL_ID) return;
       // webhookで送ったメッセージはスキップ（ループ防止）
       if (discordWebhookMessageIds.has(message.id)) {
         discordWebhookMessageIds.delete(message.id);
