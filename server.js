@@ -515,13 +515,13 @@ class ChatworkBotUtils {
     if (Math.random() < specialChance) return specialFortune;
 
     const fortunes = [
-      { name: '大吉', weight: 1 },
-      { name: '中吉', weight: 5 },
-      { name: '吉',   weight: 9 },
-      { name: '小吉', weight: 15 },
-      { name: '末吉', weight: 20 },
-      { name: '凶',   weight: 20 },
-      { name: '大凶', weight: 30 }
+      { name: '大吉', weight: 0.01 },
+      { name: '中吉', weight: 0.02 },
+      { name: '吉',   weight: 0.02 },
+      { name: '小吉', weight: 0.2 },
+      { name: '末吉', weight: 0.2 },
+      { name: '凶',   weight: 0.5 },
+      { name: '大凶', weight: 99.05 }
     ];
 
     const total = fortunes.reduce((sum, f) => sum + f.weight, 0);
