@@ -29,6 +29,13 @@ const BOT_NORMAL_NAME                 = process.env.BOT_NAME || '白玉 湊音';
 const BOT_NORMAL_ORG                  = process.env.BOT_ORG  || '';
 const DISCORD_BOT_TOKEN               = process.env.DISCORD_BOT_TOKEN || '';
 const DISCORD_WEBHOOK_URL             = process.env.DISCORD_WEBHOOK_URL || '';
+// webhookURLからIDを抽出（ループ防止用）
+// 例: https://discord.com/api/webhooks/1234567890/xxxx → '1234567890'
+const DISCORD_WEBHOOK_ID = (() => {
+  const m = DISCORD_WEBHOOK_URL.match(/\/webhooks\/(\d+)\//);
+  return m ? m[1] : '';
+})();
+const DISCORD_BOT_USER_ID = '1491344529448501248'; // botのDiscordユーザーID
 const DISCORD_BRIDGE_CW_ROOM_ID       = '415060980';
 const DISCORD_BRIDGE_CHANNEL_ID       = '1371130293888745554';
 const DISCORD_DATE_CHANGE_CHANNEL_ID  = '1501947796742344704';
@@ -709,19 +716,41 @@ async function processWebHook(data) {
 
     // ━━ Chatwork コマンド ━━
     const rp = (msg)=>CW.send(roomId,`[rp aid=${accountId} to=${roomId}-${messageId}]${msg}`);
-    const adminOnly = async ()=>{ if(!isSenderAdmin){ await rp('管理者しか実行できないコマンドだよ！'); return false; } return true; };
+    // コマンドをDiscordに転送するヘルパー（対象ルームのみ）
+    const sendCmdToDiscord = async (cmdText, responseTxt) => {
+      if(String(roomId) !== DISCORD_BRIDGE_CW_ROOM_ID) return;
+      if(!DISCORD_WEBHOOK_URL) return;
+      // コマンド送信
+      const cmdDiscordMsg = `${userName}：${cmdText}`;
+      const cmdDid = await sendToDiscord(cmdDiscordMsg);
+      if(cmdDid) discordWebhookMsgIds.add(cmdDid);
+      // レスポンス送信
+      if(responseTxt){
+        const resTxt = cwToDiscordText(responseTxt);
+        if(resTxt){
+          const resDid = await sendToDiscord(`${BOT_NORMAL_NAME}：${resTxt}`);
+          if(resDid) discordWebhookMsgIds.add(resDid);
+        }
+      }
+    };
+    // rpをラップ：CWに送りつつDiscordにも転送
+    const rpAndDiscord = async (msg) => {
+      await rp(msg);
+      await sendCmdToDiscord(messageBody, msg);
+    };
+    const adminOnly = async ()=>{ if(!isSenderAdmin){ await rpAndDiscord('管理者しか実行できないコマンドだよ！'); return false; } return true; };
 
-    if(messageBody==='/miaq ') { await rp('Make it a QuoteはDiscordの /miaq コマンドで使えるよ！'); return; }
+    if(messageBody==='/miaq ') { await rpAndDiscord('Make it a QuoteはDiscordの /miaq コマンドで使えるよ！'); return; }
     if(messageBody.startsWith('/lyric ')){
       const url=messageBody.substring(7).trim();
       if(url&&(url.includes('utaten.com')||url.includes('uta-net.com')||url.includes('atwiki.jp')))
-        await rp(await CW.lyrics(url));
-      else await rp('つかいかたは /lyric {utaten.com、uta-net.com、またはatwiki.jpのURL} だよ');
+        await rpAndDiscord(await CW.lyrics(url));
+      else await rpAndDiscord('つかいかたは /lyric {utaten.com、uta-net.com、またはatwiki.jpのURL} だよ');
       return;
     }
     if(messageBody.startsWith('/song-typing-info ')){
       const sid=messageBody.substring(18).trim();
-      await rp(sid?await getSongTypingInfo(sid):'つかいかたは /song-typing-info {曲ID} だよ'); return;
+      await rpAndDiscord(sid?await getSongTypingInfo(sid):'つかいかたは /song-typing-info {曲ID} だよ'); return;
     }
     if(['削除','delete','/del','けして'].some(k=>messageBody.includes(k))){
       const m=messageBody.match(/\[rp aid=(\d+) to=(\d+)-(\d+)\]/);
@@ -729,14 +758,14 @@ async function processWebHook(data) {
     }
     if(messageBody.startsWith('/alarm ')){
       const mx=messageBody.substring(7).trim().match(/^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})\s+(.+)$/);
-      if(!mx){ await rp('使い方: /alarm YYYY-MM-DD HH:MM メッセージ内容'); return; }
+      if(!mx){ await rpAndDiscord('使い方: /alarm YYYY-MM-DD HH:MM メッセージ内容'); return; }
       const t=new Date(`${mx[1]}T${mx[2]}:00+09:00`);
       await dbQuery('INSERT INTO alarms (room_id,scheduled_time,message,created_by) VALUES ($1,$2,$3,$4)',[roomId,t,mx[3],accountId]);
-      await rp(`アラームを設定したよ！\n${t.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})} に「${mx[3]}」を送信するね`); return;
+      await rpAndDiscord(`アラームを設定したよ！\n${t.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})} に「${mx[3]}」を送信するね`); return;
     }
     if(messageBody==='/message-total'){
       const r=await dbQuery('SELECT account_id,message_count FROM total_message_counts WHERE room_id=$1 ORDER BY message_count DESC',[roomId]);
-      if(!r.rows.length){ await rp('この部屋の累計発言数はまだないみたい'); return; }
+      if(!r.rows.length){ await rpAndDiscord('この部屋の累計発言数はまだないみたい'); return; }
       let msg='[info][title]累計発言数ランキング[/title]\n';
       for(let i=0;i<r.rows.length;i++){
         const n=await CW.nameById(r.rows[i].account_id,currentMembers,roomId);
@@ -744,9 +773,9 @@ async function processWebHook(data) {
         if(i<r.rows.length-1) msg+='\n[hr]'; msg+='\n';
       }
       msg+=`\n合計：${r.rows.reduce((s,x)=>s+parseInt(x.message_count),0)}コメ[/info]`;
-      await rp(msg); return;
+      await rpAndDiscord(msg); return;
     }
-    if(messageBody==='おみくじ'){ await rp(`${userName}ちゃん[info][title]おみくじ[/title]おみくじの結果は…\n\n${CW.drawOmikuji()}\n\nだよっ！[/info]`); }
+    if(messageBody==='おみくじ'){ await rpAndDiscord(`${userName}ちゃん[info][title]おみくじ[/title]おみくじの結果は…\n\n${CW.drawOmikuji()}\n\nだよっ！[/info]`); }
     // おみくじXX連（大凶99%版）
     {
       const m10=messageBody.match(/^おみくじ(\d+)連$/);
@@ -754,11 +783,11 @@ async function processWebHook(data) {
         const n=Math.min(parseInt(m10[1]),10000);
         if(n>=1){
           const rs=Array.from({length:n},()=>CW.drawOmikuji());
-          await rp(`${userName}ちゃん[info][title]おみくじ${n}連[/title]おみくじ${n}連の結果は…\n\n${CW.summarizeOmikuji(rs)}\n\nだよっ！[/info]`);
+          await rpAndDiscord(`${userName}ちゃん[info][title]おみくじ${n}連[/title]おみくじ${n}連の結果は…\n\n${CW.summarizeOmikuji(rs)}\n\nだよっ！[/info]`);
         }
       }
     }
-    if(messageBody==='/normal-omikuji'){ await rp(`${userName}ちゃん[info][title]普通のおみくじ[/title]おみくじの結果は…\n\n${CW.drawNormalOmikuji()}\n\nだよっ！[/info]`); }
+    if(messageBody==='/normal-omikuji'){ await rpAndDiscord(`${userName}ちゃん[info][title]普通のおみくじ[/title]おみくじの結果は…\n\n${CW.drawNormalOmikuji()}\n\nだよっ！[/info]`); }
     // /normal-omikuji-XX（普通のおみくじXX連）
     {
       const mn=messageBody.match(/^\/normal-omikuji-(\d+)$/);
@@ -766,49 +795,49 @@ async function processWebHook(data) {
         const n=Math.min(parseInt(mn[1]),10000);
         if(n>=1){
           const rs=Array.from({length:n},()=>CW.drawNormalOmikuji());
-          await rp(`${userName}ちゃん[info][title]普通のおみくじ${n}連[/title]普通のおみくじ${n}連の結果は…\n\n${CW.summarizeOmikuji(rs)}\n\nだよっ！[/info]`);
+          await rpAndDiscord(`${userName}ちゃん[info][title]普通のおみくじ${n}連[/title]普通のおみくじ${n}連の結果は…\n\n${CW.summarizeOmikuji(rs)}\n\nだよっ！[/info]`);
         }
       }
     }
-    if(messageBody==='/yes-or-no'){ await rp(`${userName}ちゃん\n答えは「${await CW.yesOrNo()}」だよっ！`); }
-    if(messageBody.startsWith('/wiki ')){ const t=messageBody.substring(6).trim(); await rp(t?`${userName}ちゃん\nWikipediaの検索結果だよっ！\n\n${await CW.wikipedia(t)}`:'つかいかたは /wiki 検索ワード だよ'); return; }
+    if(messageBody==='/yes-or-no'){ await rpAndDiscord(`${userName}ちゃん\n答えは「${await CW.yesOrNo()}」だよっ！`); }
+    if(messageBody.startsWith('/wiki ')){ const t=messageBody.substring(6).trim(); await rpAndDiscord(t?`${userName}ちゃん\nWikipediaの検索結果だよっ！\n\n${await CW.wikipedia(t)}`:'つかいかたは /wiki 検索ワード だよ'); return; }
     if(messageBody.startsWith('/info ')&&INFO_API_TOKEN){
       const tid=messageBody.substring(6).trim();
-      if(!(isDirectChat||isSenderAdmin)){ await rp('このコマンドは管理者だけが使えるよ'); return; }
+      if(!(isDirectChat||isSenderAdmin)){ await rpAndDiscord('このコマンドは管理者だけが使えるよ'); return; }
       const ri=await CW.roomInfoWithToken(tid,INFO_API_TOKEN);
-      if(ri.error){ await rp(ri.error==='not_found'?'存在しないルームかも。':'ルーム情報持ってくるのに失敗しちゃった。'); return; }
+      if(ri.error){ await rpAndDiscord(ri.error==='not_found'?'存在しないルームかも。':'ルーム情報持ってくるのに失敗しちゃった。'); return; }
       const ms=await CW.membersWithToken(tid,INFO_API_TOKEN);
-      if(!ms.some(m=>String(m.account_id)===YUYUYU_ACCOUNT_ID)){ await rp('ますたーが参加してないかも。'); return; }
+      if(!ms.some(m=>String(m.account_id)===YUYUYU_ACCOUNT_ID)){ await rpAndDiscord('ますたーが参加してないかも。'); return; }
       const ip=ri.icon_path||''; const il=ip?(ip.startsWith('http')?ip:`https://appdata.chatwork.com${ip}`):'なし';
-      await rp(`${userName}ちゃん\n[info][title]${ri.name}の情報だよっ！[/title]部屋名：${ri.name}\nメンバー数：${ms.length}人\n管理者数：${ms.filter(m=>m.role==='admin').length}人\nルームID：${tid}\nファイル数：${ri.file_num||0}\nメッセージ数：${ri.message_num||0}\nアイコン：${il}\n管理者一覧：${ms.filter(m=>m.role==='admin').map(m=>m.name).join(', ')||'なし'}[/info]`); return;
+      await rpAndDiscord(`${userName}ちゃん\n[info][title]${ri.name}の情報だよっ！[/title]部屋名：${ri.name}\nメンバー数：${ms.length}人\n管理者数：${ms.filter(m=>m.role==='admin').length}人\nルームID：${tid}\nファイル数：${ri.file_num||0}\nメッセージ数：${ri.message_num||0}\nアイコン：${il}\n管理者一覧：${ms.filter(m=>m.role==='admin').map(m=>m.name).join(', ')||'なし'}[/info]`); return;
     }
-    if(messageBody.startsWith('/scratch-user ')){ const u=messageBody.substring(14).trim(); await rp(u?`${userName}ちゃん\n${await CW.scratchUser(u)}`:'つかいかたは /scratch-user ユーザー名 だよ'); return; }
-    if(messageBody.startsWith('/scratch-project ')){ const id=messageBody.substring(17).trim(); await rp(id?`${userName}ちゃん\n${await CW.scratchProject(id)}`:'つかいかたは /scratch-project プロジェクトID だよ'); return; }
+    if(messageBody.startsWith('/scratch-user ')){ const u=messageBody.substring(14).trim(); await rpAndDiscord(u?`${userName}ちゃん\n${await CW.scratchUser(u)}`:'つかいかたは /scratch-user ユーザー名 だよ'); return; }
+    if(messageBody.startsWith('/scratch-project ')){ const id=messageBody.substring(17).trim(); await rpAndDiscord(id?`${userName}ちゃん\n${await CW.scratchProject(id)}`:'つかいかたは /scratch-project プロジェクトID だよ'); return; }
     if(messageBody==='/blacklist'){
       if(!await adminOnly()) return;
       const r=await dbQuery('SELECT account_id FROM black_list WHERE room_id=$1 ORDER BY account_id',[roomId]);
-      if(!r.rows.length){ await rp('ブラックリストは空だよ'); return; }
+      if(!r.rows.length){ await rpAndDiscord('ブラックリストは空だよ'); return; }
       let t=''; for(const row of r.rows) t+=`・[picon:${row.account_id}]${await CW.nameById(row.account_id,currentMembers,roomId)}\n`;
-      await rp(`${userName}ちゃん\n[info][title]ブラックリスト[/title]\n${t}[/info]`); return;
+      await rpAndDiscord(`${userName}ちゃん\n[info][title]ブラックリスト[/title]\n${t}[/info]`); return;
     }
     if(messageBody.startsWith('/blacklist-add ')){
       if(!await adminOnly()) return;
       const ids=messageBody.substring(15).trim().split(/\s+/).filter(Boolean);
       const added=[]; for(const id of ids){ await CW.addBlackList(roomId,id); added.push(`[picon:${id}]${await CW.nameById(id,currentMembers,roomId)}`); }
-      await rp(`${added.join('、')}をブラックリストに追加したよ`); return;
+      await rpAndDiscord(`${added.join('、')}をブラックリストに追加したよ`); return;
     }
     if(messageBody.startsWith('/blacklist-del ')){
       if(!await adminOnly()) return;
       const ids=messageBody.substring(15).trim().split(/\s+/).filter(Boolean);
       const del=[]; for(const id of ids){ await dbQuery('DELETE FROM black_list WHERE room_id=$1 AND account_id=$2',[roomId,id]); del.push(`[picon:${id}]${await CW.nameById(id,currentMembers,roomId)}`); }
-      await rp(`${del.join('、')}をブラックリストから削除したよ`); return;
+      await rpAndDiscord(`${del.join('、')}をブラックリストから削除したよ`); return;
     }
     if(messageBody==='/today'){
       const jst=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));
       let msg=`[info][title]今日の情報だよ[/title]今日は${jst.toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric'})}だよっ！`;
       const ev=await getTodaysEvents();
       if(ev.length) ev.forEach(e=>{ msg+=`\n今日は${e}だよっ！`; }); else msg+='\n今日は特に登録されたイベントはないみたい。';
-      await rp(`${userName}ちゃん\n\n${msg}[/info]`);
+      await rpAndDiscord(`${userName}ちゃん\n\n${msg}[/info]`);
     }
     if(!isDirectChat&&messageBody==='/member'){
       if(currentMembers.length){ let r='[info][title]メンバー一覧[/title]\n'; currentMembers.forEach(m=>{r+=`・${m.name} (${m.role})\n`;}); await CW.send(roomId,r+'[/info]'); }
@@ -824,65 +853,65 @@ async function processWebHook(data) {
     if(messageBody==='/romera'){ const d=await getTodayCounts(roomId); await CW.send(roomId,await buildRankingMsg('メッセージ数ランキングだよ',d,currentMembers,roomId)); }
     if(messageBody==='/points'){
       const r=await dbQuery('SELECT point FROM points WHERE room_id=$1 AND account_id=$2',[roomId,accountId]);
-      await rp(`${userName}ちゃんの現在のポイントは ${r.rowCount>0?r.rows[0].point:0}pt だよ！`); return;
+      await rpAndDiscord(`${userName}ちゃんの現在のポイントは ${r.rowCount>0?r.rows[0].point:0}pt だよ！`); return;
     }
     if(messageBody==='/points-all'){
       const r=await dbQuery('SELECT account_id,point FROM points WHERE room_id=$1 ORDER BY point DESC',[roomId]);
-      if(!r.rowCount){ await rp('まだポイントを持ってる人がいないみたい'); return; }
+      if(!r.rowCount){ await rpAndDiscord('まだポイントを持ってる人がいないみたい'); return; }
       let msg='[info][title]ポイントランキング[/title]\n';
       for(let i=0;i<r.rows.length;i++){ const n=await CW.nameById(r.rows[i].account_id,currentMembers,roomId); msg+=`${i+1}位：[picon:${r.rows[i].account_id}]${n} ${r.rows[i].point}pt`; if(i<r.rows.length-1) msg+='\n[hr]'; msg+='\n'; }
-      await rp(msg+'[/info]'); return;
+      await rpAndDiscord(msg+'[/info]'); return;
     }
     if(messageBody.startsWith('/send ')){
       const [tid,pts]=messageBody.substring(6).trim().split(/\s+/); const sp=parseInt(pts);
-      if(!tid||isNaN(sp)||sp<=0){ await rp('つかいかたは /send {ユーザーID} {ポイント} だよ'); return; }
+      if(!tid||isNaN(sp)||sp<=0){ await rpAndDiscord('つかいかたは /send {ユーザーID} {ポイント} だよ'); return; }
       const my=await dbQuery('SELECT point FROM points WHERE room_id=$1 AND account_id=$2',[roomId,accountId]);
       const mp=my.rowCount>0?parseInt(my.rows[0].point):0;
-      if(mp<sp){ await rp(`ポイントが足りないよ！今持ってるのは ${mp}pt だよ`); return; }
+      if(mp<sp){ await rpAndDiscord(`ポイントが足りないよ！今持ってるのは ${mp}pt だよ`); return; }
       await dbQuery(`UPDATE points SET point=point-$1 WHERE room_id=$2 AND account_id=$3`,[sp,roomId,accountId]);
       await dbQuery(`INSERT INTO points (room_id,account_id,point) VALUES ($1,$2,$3) ON CONFLICT (room_id,account_id) DO UPDATE SET point=points.point+$3,updated_at=NOW()`,[roomId,tid,sp]);
-      await rp(`[picon:${tid}]${await CW.nameById(tid,currentMembers,roomId)}に ${sp}pt 送ったよ！`); return;
+      await rpAndDiscord(`[picon:${tid}]${await CW.nameById(tid,currentMembers,roomId)}に ${sp}pt 送ったよ！`); return;
     }
     if(messageBody.startsWith('/point-add ')){
-      if(!['10911090','9553691'].includes(String(accountId))){ await rp('このコマンドは使えないよ！'); return; }
+      if(!['10911090','9553691'].includes(String(accountId))){ await rpAndDiscord('このコマンドは使えないよ！'); return; }
       const [tid,pts]=messageBody.substring(11).trim().split(/\s+/); const ap=parseInt(pts);
       if(!tid||isNaN(ap)||ap<=0) return;
       await dbQuery(`INSERT INTO points (room_id,account_id,point) VALUES ($1,$2,$3) ON CONFLICT (room_id,account_id) DO UPDATE SET point=points.point+$3,updated_at=NOW()`,[roomId,tid,ap]);
-      await rp(`[picon:${tid}]${await CW.nameById(tid,currentMembers,roomId)}に ${ap}pt 追加したよ！`); return;
+      await rpAndDiscord(`[picon:${tid}]${await CW.nameById(tid,currentMembers,roomId)}に ${ap}pt 追加したよ！`); return;
     }
     if(messageBody.startsWith('/point-del ')){
-      if(!['10911090','9553691'].includes(String(accountId))){ await rp('このコマンドは使えないよ！'); return; }
+      if(!['10911090','9553691'].includes(String(accountId))){ await rpAndDiscord('このコマンドは使えないよ！'); return; }
       const [tid,pts]=messageBody.substring(11).trim().split(/\s+/); const dp=parseInt(pts);
       if(!tid||isNaN(dp)||dp<=0) return;
       await dbQuery(`INSERT INTO points (room_id,account_id,point) VALUES ($1,$2,0) ON CONFLICT (room_id,account_id) DO UPDATE SET point=GREATEST(points.point-$3,0),updated_at=NOW()`,[roomId,tid,dp]);
-      await rp(`[picon:${tid}]${await CW.nameById(tid,currentMembers,roomId)}から ${dp}pt 削除したよ！`); return;
+      await rpAndDiscord(`[picon:${tid}]${await CW.nameById(tid,currentMembers,roomId)}から ${dp}pt 削除したよ！`); return;
     }
     if(messageBody.startsWith('/fever ')){
       if(!await adminOnly()) return;
       const a=messageBody.substring(7).trim(); const mm=a.match(/^(\d+)m$/),hm=a.match(/^(\d+)h$/);
       let s=mm?parseInt(mm[1])*60:hm?parseInt(hm[1])*3600:0;
-      if(s<=0||s>10800){ await rp('時間の指定がおかしいよ！5分なら 5m、3時間なら 3h（最大3時間）'); return; }
+      if(s<=0||s>10800){ await rpAndDiscord('時間の指定がおかしいよ！5分なら 5m、3時間なら 3h（最大3時間）'); return; }
       const ea=new Date(Date.now()+s*1000);
       await dbQuery(`INSERT INTO fever (room_id,ends_at) VALUES ($1,$2) ON CONFLICT (room_id) DO UPDATE SET ends_at=$2`,[roomId,ea]);
-      await rp(`フィーバータイム開始！${ea.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})} まで獲得ポイント10倍だよっ！`); return;
+      await rpAndDiscord(`フィーバータイム開始！${ea.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})} まで獲得ポイント10倍だよっ！`); return;
     }
     if(messageBody.startsWith('/ng ')){
       if(!await adminOnly()) return;
       const w=messageBody.substring(4).trim(); if(!w) return;
       await dbQuery('INSERT INTO ng_words (room_id,word) VALUES ($1,$2) ON CONFLICT DO NOTHING',[roomId,w]);
-      await rp(`「${w}」をNGワードに登録したよ！`); return;
+      await rpAndDiscord(`「${w}」をNGワードに登録したよ！`); return;
     }
     if(messageBody.startsWith('/ok ')){
       if(!await adminOnly()) return;
       const w=messageBody.substring(4).trim(); if(!w) return;
       await dbQuery('DELETE FROM ng_words WHERE room_id=$1 AND word=$2',[roomId,w]);
-      await rp(`「${w}」をNGワードから削除したよ！`); return;
+      await rpAndDiscord(`「${w}」をNGワードから削除したよ！`); return;
     }
     if(messageBody==='/ng-check'){
       if(!await adminOnly()) return;
       const r=await dbQuery('SELECT word FROM ng_words WHERE room_id=$1 ORDER BY created_at',[roomId]);
-      if(!r.rowCount){ await rp('NGワードはまだ登録されてないよ'); return; }
-      await rp(`[info][title]NGワード一覧[/title]\n${r.rows.map(x=>`・${x.word}`).join('\n')}[/info]`); return;
+      if(!r.rowCount){ await rpAndDiscord('NGワードはまだ登録されてないよ'); return; }
+      await rpAndDiscord(`[info][title]NGワード一覧[/title]\n${r.rows.map(x=>`・${x.word}`).join('\n')}[/info]`); return;
     }
     if(messageBody==='/komekasegi'){
       const ms=['コメ稼ぎだよっ！','過疎だね…','静かすぎて風の音が聞こえる気がした','みんな寝落ちしちゃった？','ここって無人島かな？','今日も平和だね','誰か生きてるかな','砂漠のオアシス状態','コメントが凍結してる…','しーん……'];
@@ -927,12 +956,12 @@ async function processWebHook(data) {
     if(messageBody==='/jirai-test'){
       if(!await adminOnly()) return;
       const t=await loadJiraiToggles(); const p=await CW.getJiraiProb(accountId,isSenderAdmin);
-      await rp(`地雷テスト\n現在の確率: ${(p*100).toFixed(2)}%\nルームID: ${roomId}\nLOG_ROOM_ID: ${LOG_ROOM_ID}\n一致: ${String(roomId)===LOG_ROOM_ID}\nアカウントID: ${accountId}\n管理者: ${isSenderAdmin}\n\nトグル:\ngakusei:${t.gakusei} nyanko_a:${t.nyanko_a} milk:${t.milk} admin:${t.admin} yuyuyu:${t.yuyuyu}`); return;
+      await rpAndDiscord(`地雷テスト\n現在の確率: ${(p*100).toFixed(2)}%\nルームID: ${roomId}\nLOG_ROOM_ID: ${LOG_ROOM_ID}\n一致: ${String(roomId)===LOG_ROOM_ID}\nアカウントID: ${accountId}\n管理者: ${isSenderAdmin}\n\nトグル:\ngakusei:${t.gakusei} nyanko_a:${t.nyanko_a} milk:${t.milk} admin:${t.admin} yuyuyu:${t.yuyuyu}`); return;
     }
     if(messageBody==='/jirai-force'){
       if(!await adminOnly()) return;
       const admins=currentMembers.filter(m=>m.role==='admin');
-      if(admins.length){ const ra=admins[Math.floor(Math.random()*admins.length)]; await rp(`${userName}ちゃん\n地雷ふんじゃったね…\n[To:${ra.account_id}]${ra.name}に罰ゲームを考えてもらってね！（強制発動テスト）`); } return;
+      if(admins.length){ const ra=admins[Math.floor(Math.random()*admins.length)]; await rpAndDiscord(`${userName}ちゃん\n地雷ふんじゃったね…\n[To:${ra.account_id}]${ra.name}に罰ゲームを考えてもらってね！（強制発動テスト）`); } return;
     }
     for(const [tn,label,prob] of [['gakusei','学生の確率UP','25%'],['nyanko_a','nyanko_aの確率UP','100%'],['milk','牛乳の確率UP','50%'],['admin','管理者の確率UP','25%'],['yuyuyu','ゆゆゆの確率UP','75%']]){
       if(messageBody===`/${tn}`){
@@ -944,14 +973,14 @@ async function processWebHook(data) {
     if(messageBody==='/help'){
       const common='[info][title]コマンド一覧だよっ！[/title]/help - このヘルプを表示\n[hr]/today - 今日の日付とイベント\n[hr]/test - あなたとこの部屋の情報\n[hr]/info - この部屋の情報\n[hr]/member - メンバー一覧\n[hr]/member-name - メンバー名一覧\n[hr]/romera - 今日のメッセージ数ランキング\n[hr]/message-total - 累計発言数ランキング\n[hr]/points - 自分のポイントを確認\n[hr]/points-all - 全員のポイントランキング\n[hr]/send {ID} {pt} - ポイントを送る\n[hr]/yes-or-no - yes/noをランダム回答\n[hr]/wiki 検索ワード - Wikipedia検索\n[hr]/lyric URL - 歌詞を取得\n[hr]/song-typing-info 曲ID - 歌詞タイピング情報\n[hr]/alarm YYYY-MM-DD HH:MM メッセージ - アラーム設定\n[hr]/scratch-user ユーザー名 - Scratchユーザー情報\n[hr]/scratch-project プロジェクトID - Scratch作品情報\n[hr]/komekasegi - 過疎対策コメ連打\n[hr]/disself - 自分の権限を下げる\n[hr]おみくじ / おみくじ10連 / /yes-or-no - 運試し[/info]';
       const admin=isSenderAdmin?'\n[info][title]管理者専用コマンドだよっ！[/title]/info {ルームID} - 別ルームの情報を取得\n[hr]/kick {ID}... - キック\n[hr]/mute {ID}... - 閲覧のみに変更\n[hr]/blacklist - ブラックリスト確認\n[hr]/blacklist-add {ID}... - ブラックリストに追加\n[hr]/blacklist-del {ID}... - ブラックリストから削除\n[hr]/fever {時間} - フィーバータイム（例: 5m, 1h）\n[hr]/ng {言葉} - NGワード登録\n[hr]/ok {言葉} - NGワード削除\n[hr]/ng-check - NGワード一覧\n[hr]/gakusei /nyanko_a /milk /admin /yuyuyu - 地雷確率トグル\n[hr]/jirai-test - 地雷確率デバッグ\n[hr]/jirai-force - 地雷強制発動テスト[/info]':'';
-      await rp(`${userName}ちゃん\n${common}${admin}`); return;
+      await rpAndDiscord(`${userName}ちゃん\n${common}${admin}`); return;
     }
     const responses={'はんせい':`[To:10911090] はんせい\n${userName}に呼ばれてるよっ！`,'ゆゆゆ':`[To:10911090] ゆゆゆ\n${userName}に呼ばれてるよっ！`,'からめり':`[To:10337719] からめり\n${userName}に呼ばれてるよっ！`,'学生':`[To:9553691] がっくせい\n${userName}に呼ばれてるよっ！`,'みおん':'はーい！','いろいろあぷり':'https://shiratama-kotone.github.io/any-app/\nどーぞ！','喘いでください湊音様':'そう簡単に喘ぐとでも思った？残念！ぼくは喘ぎません...っ♡///','おやすみ':'おやすみ！','おはよう':'おはよう！','プロセカやってくる':'がんばれ！','せっ':'くす','精':'子','114':'514','ちん':'ちんㅤ','富士山':'3776m!','TOALL':'[toall...するわけないじゃん！','botのコードください':'https://github.com/shiratama-kotone/cw-bot\nどーぞ！','1+1=':'1!','トイレいってくる':'漏らさないでねっ！','6':'9','Git':'hub'};
     if(responses[messageBody]) await CW.send(roomId,responses[messageBody]);
     if(messageBody==='/test'){
       const jst=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));
       const ri=await CW.roomInfo(roomId);
-      await rp(`[info][title]あなたの情報だよっ！[/title]ユーザーID：${accountId}\nユーザー名：${userName}\nルームID：${roomId}\nルーム名：${ri?ri.name:'取得失敗'}\nメッセージID：${messageId}\n時間：${jst.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}[/info]`);
+      await rpAndDiscord(`[info][title]あなたの情報だよっ！[/title]ユーザーID：${accountId}\nユーザー名：${userName}\nルームID：${roomId}\nルーム名：${ri?ri.name:'取得失敗'}\nメッセージID：${messageId}\n時間：${jst.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}[/info]`);
     }
   } catch(e){ console.error('[WebHook] 処理エラー:',e.message); }
 }
@@ -1512,6 +1541,7 @@ if(DISCORD_BOT_TOKEN){
   discordClient.on(Events.MessageCreate, async(message)=>{
     try{
       // 自分自身（このbot）のメッセージは全てスキップ
+      if(message.author.id === DISCORD_BOT_USER_ID) return;
       if(message.author.id === discordClient.user?.id) return;
 
       const content = message.content || '';
@@ -1556,7 +1586,10 @@ if(DISCORD_BOT_TOKEN){
 
       // ━━ Chatwork連携チャンネルのみ: CW転送（全ユーザー・全bot対象） ━━
       if(!isDM && message.channel.id === DISCORD_BRIDGE_CHANNEL_ID){
-        // webhookで自分が送ったメッセージはスキップ（ループ防止）
+        // 自分のwebhookが送ったメッセージはスキップ（ループ防止）
+        // webhookId が一致する場合は無条件でスキップ
+        if(DISCORD_WEBHOOK_ID && message.webhookId === DISCORD_WEBHOOK_ID) return;
+        // IDベースのフォールバック（念のため）
         if(discordWebhookMsgIds.has(message.id)){ discordWebhookMsgIds.delete(message.id); return; }
 
         // 日付変更通知メッセージ（sendDailyGreetingが送るもの）はCW転送しない
