@@ -657,13 +657,19 @@ async function processWebHook(data) {
       const editLabel=eventType==='message_updated'?'(編集)':'';
       await CW.send(LOG_DESTINATION_ROOM_ID,`[info][title]${userName}${editLabel}[/title]${messageBody}[/info]`).catch(()=>{});
       if(eventType==='message_created'&&DISCORD_WEBHOOK_URL){
-        const txt=cwToDiscordText(messageBody);
-        if(txt){
-          const did=await sendToDiscord(`${userName}：${txt}`);
-          if(did){
-            discordWebhookMsgIds.add(did);
-            await dbQuery('INSERT INTO discord_bridge (cw_message_id,discord_message_id,cw_account_id) VALUES ($1,$2,$3)',
-              [String(messageId),did,String(accountId)]).catch(()=>{});
+        // Discord→CWで送ったメッセージはDiscordに折り返さない（ループ防止）
+        if(isCwMsgFromDiscord(messageId)) {
+          // キャッシュから削除しておく
+          cwMsgIdsFromDiscord.delete(String(messageId));
+        } else {
+          const txt=cwToDiscordText(messageBody);
+          if(txt){
+            const did=await sendToDiscord(`${userName}：${txt}`);
+            if(did){
+              discordWebhookMsgIds.add(did);
+              await dbQuery('INSERT INTO discord_bridge (cw_message_id,discord_message_id,cw_account_id) VALUES ($1,$2,$3)',
+                [String(messageId),did,String(accountId)]).catch(()=>{});
+            }
           }
         }
       }
@@ -1205,6 +1211,22 @@ async function sendToDiscord(content) {
 
 let discordClient = null;
 const discordWebhookMsgIds = new Set();
+// Discord→CWで送ったCWメッセージIDのキャッシュ（ループ防止、1分TTL）
+// Map<cwMessageId, expireAt(ms)>
+const cwMsgIdsFromDiscord = new Map();
+function addCwMsgFromDiscord(cwId) {
+  cwMsgIdsFromDiscord.set(String(cwId), Date.now() + 60000);
+  // 期限切れエントリを定期削除
+  for(const [k, exp] of cwMsgIdsFromDiscord) {
+    if(Date.now() > exp) cwMsgIdsFromDiscord.delete(k);
+  }
+}
+function isCwMsgFromDiscord(cwId) {
+  const exp = cwMsgIdsFromDiscord.get(String(cwId));
+  if(!exp) return false;
+  if(Date.now() > exp) { cwMsgIdsFromDiscord.delete(String(cwId)); return false; }
+  return true;
+}
 
 if(DISCORD_BOT_TOKEN){
   discordClient = new Client({intents:[
@@ -1603,9 +1625,13 @@ if(DISCORD_BOT_TOKEN){
         const cwMsg = `${name}：${content}`;
 
         const cwId = await CW.send(DISCORD_BRIDGE_CW_ROOM_ID, cwMsg);
-        if(cwId && !message.author.bot){
-          await dbQuery('INSERT INTO discord_bridge (cw_message_id,discord_message_id,cw_account_id) VALUES ($1,$2,$3)',
-            [String(cwId), message.id, '0']).catch(()=>{});
+        if(cwId){
+          // このCWメッセージIDをキャッシュ（1分間）→CW→Discord転送をスキップさせる
+          addCwMsgFromDiscord(cwId);
+          if(!message.author.bot){
+            await dbQuery('INSERT INTO discord_bridge (cw_message_id,discord_message_id,cw_account_id) VALUES ($1,$2,$3)',
+              [String(cwId), message.id, '0']).catch(()=>{});
+          }
         }
       }
     } catch(e){ console.error('[Discord] MessageCreate エラー:',e.message); }
