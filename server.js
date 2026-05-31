@@ -540,7 +540,22 @@ async function processWebHook(data) {
     const {room_id:roomId, body:messageBody, message_id:messageId, account_id:accountId, account} = data;
     const eventType = data.webhook_event_type||'message_created';
 
-    if(String(accountId)===BOT_ACCOUNT_ID) return;
+    if(String(accountId)===BOT_ACCOUNT_ID) {
+      // botのメッセージもDiscord転送対象にするが、コマンド処理等はスキップ
+      if(String(roomId)===DISCORD_BRIDGE_CW_ROOM_ID && eventType==='message_created' && DISCORD_WEBHOOK_URL){
+        const botName = account?.name || BOT_NORMAL_NAME;
+        const txt = cwToDiscordText(messageBody);
+        if(txt){
+          const did = await sendToDiscord(`${botName}：${txt}`);
+          if(did){
+            discordWebhookMsgIds.add(did);
+            await dbQuery('INSERT INTO discord_bridge (cw_message_id,discord_message_id,cw_account_id) VALUES ($1,$2,$3)',
+              [String(messageId),did,String(accountId)]).catch(()=>{});
+          }
+        }
+      }
+      return;
+    }
     if(!roomId||!accountId||!messageBody) return;
 
     // 累計発言数
@@ -635,12 +650,7 @@ async function processWebHook(data) {
       const editLabel=eventType==='message_updated'?'(編集)':'';
       await CW.send(LOG_DESTINATION_ROOM_ID,`[info][title]${userName}${editLabel}[/title]${messageBody}[/info]`).catch(()=>{});
       if(eventType==='message_created'&&DISCORD_WEBHOOK_URL){
-        const txt=messageBody
-          .replace(/\[info\]\[title\]([^\[]*)\[\/title\]([\s\S]*?)\[\/info\]/g,'【$1】$2')
-          .replace(/\[info\]([\s\S]*?)\[\/info\]/g,'$1')
-          .replace(/\[piconname:\d+\]/g,'').replace(/\[picon:\d+\]/g,'')
-          .replace(/\[To:\d+\]/g,'').replace(/\[rp aid=\d+ to=\d+-\d+\]\s*/g,'（返信）')
-          .replace(/\[qt\][\s\S]*?\[\/qt\]/g,'（引用）').trim();
+        const txt=cwToDiscordText(messageBody);
         if(txt){
           const did=await sendToDiscord(`${userName}：${txt}`);
           if(did){
@@ -854,7 +864,7 @@ async function processWebHook(data) {
       if(s<=0||s>10800){ await rp('時間の指定がおかしいよ！5分なら 5m、3時間なら 3h（最大3時間）'); return; }
       const ea=new Date(Date.now()+s*1000);
       await dbQuery(`INSERT INTO fever (room_id,ends_at) VALUES ($1,$2) ON CONFLICT (room_id) DO UPDATE SET ends_at=$2`,[roomId,ea]);
-      await rp(`🔥フィーバータイム開始！${ea.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})} まで獲得ポイント10倍だよっ！`); return;
+      await rp(`フィーバータイム開始！${ea.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})} まで獲得ポイント10倍だよっ！`); return;
     }
     if(messageBody.startsWith('/ng ')){
       if(!await adminOnly()) return;
@@ -1025,7 +1035,7 @@ async function sendDailyGreeting() {
   if(discordClient){
     try{
       const ch=await discordClient.channels.fetch(DISCORD_DATE_CHANGE_CHANNEL_ID);
-      if(ch){ let dm=`📅 **日付変更！今日は${tf}だよっ！**`; if(ev.length) ev.forEach(e=>{dm+=`\n🎉 今日は${e}だよっ！`;}); await ch.send(dm); }
+      if(ch){ let dm=`日付変更！今日は${tf}だよっ！`; if(ev.length) ev.forEach(e=>{dm+=`\n今日は${e}だよっ！`;}); await ch.send(dm); }
     } catch(e){ console.error('[Discord] 日付変更通知エラー:',e.message); }
   }
 }
@@ -1091,11 +1101,11 @@ async function checkNhkNews(){
     const rid=rm[1]; const lt=lm[1].replace(/<!\[CDATA\[|\]\]>/g,'').trim();
     if(rid===mem.lastNhkNewsId) return; mem.lastNhkNewsId=rid;
     const lnk=(xml.match(/link="([^"]+)"/))?.[1]||'';
-    const msg=`[info][title]📢 NHK速報[/title]${lt}${lnk?'\n'+lnk:''}[/info]`;
+    const msg=`[info][title]NHK速報[/title]${lt}${lnk?'\n'+lnk:''}[/info]`;
     for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){ await CW.send(r,msg).catch(()=>{}); await new Promise(r=>setTimeout(r,300)); }
   } catch{}
 }
-const WN={暴風警報:'🌀',大雨警報:'🌧️',洪水警報:'🌊',大雪警報:'❄️',暴風雪警報:'🌨️',波浪警報:'🌊',高潮警報:'🌊',暴風注意報:'💨',大雨注意報:'🌧️',洪水注意報:'🌊',大雪注意報:'❄️',雷注意報:'⚡',濃霧注意報:'🌫️',乾燥注意報:'🔥',強風注意報:'💨',波浪注意報:'🌊',高潮注意報:'🌊',霜注意報:'🧊',低温注意報:'🥶'};
+const WN={暴風警報:'',大雨警報:'',洪水警報:'',大雪警報:'',暴風雪警報:'',波浪警報:'',高潮警報:'',暴風注意報:'',大雨注意報:'',洪水注意報:'',大雪注意報:'',雷注意報:'',濃霧注意報:'',乾燥注意報:'',強風注意報:'',波浪注意報:'',高潮注意報:'',霜注意報:'',低温注意報:''};
 async function checkWarnings(){
   try{
     const d=(await axios.get('https://www.jma.go.jp/bosai/warning/data/warning/map.json',{timeout:8000,headers:{'User-Agent':'ChatworkBot/1.0'}})).data;
@@ -1104,8 +1114,8 @@ async function checkWarnings(){
       const cw=new Set(); if(pd.warning?.items) for(const it of pd.warning.items) if(it.warnings) for(const w of it.warnings) if(w.status==='発表'||w.status==='継続') cw.add(w.type);
       const pw=mem.sentWarnings.get(pc)||new Set();
       const issued=[...cw].filter(w=>!pw.has(w)); const lifted=[...pw].filter(w=>!cw.has(w));
-      if(issued.length){ const ic=issued.map(w=>`${WN[w]||'⚠️'} ${w}`).join('、'); const msg=`[info][title]⚠️ 気象警報・注意報 発令[/title]${pd.areaName||pc}に\n${ic}\nが発令されました。引き続き情報に注意してね！[/info]`; for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){ await CW.send(r,msg).catch(()=>{}); await new Promise(r=>setTimeout(r,300)); } }
-      if(lifted.length){ const ic=lifted.map(w=>`${WN[w]||'⚠️'} ${w}`).join('、'); const msg=`[info][title]✅ 気象警報・注意報 解除[/title]${pd.areaName||pc}の\n${ic}\nが解除されました。[/info]`; for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){ await CW.send(r,msg).catch(()=>{}); await new Promise(r=>setTimeout(r,300)); } }
+      if(issued.length){ const ic=issued.map(w=>`${WN[w]} ${w}`).join('、'); const msg=`[info][title]気象警報・注意報 発令[/title]${pd.areaName||pc}に\n${ic}\nが発令されました。引き続き情報に注意してね！[/info]`; for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){ await CW.send(r,msg).catch(()=>{}); await new Promise(r=>setTimeout(r,300)); } }
+      if(lifted.length){ const ic=lifted.map(w=>`${WN[w]} ${w}`).join('、'); const msg=`[info][title]気象警報・注意報 解除[/title]${pd.areaName||pc}の\n${ic}\nが解除されました。[/info]`; for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){ await CW.send(r,msg).catch(()=>{}); await new Promise(r=>setTimeout(r,300)); } }
       mem.sentWarnings.set(pc,cw);
     }
   } catch{}
@@ -1131,6 +1141,34 @@ cron.schedule('46 14 11 3 *', async()=>await send311(false), {timezone:'Asia/Tok
 // ============================================================
 // Discord
 // ============================================================
+
+// Chatworkタグ → Discord用テキスト変換
+// [info][title]タイトル[/title]本文[/info] → **タイトル**\n本文
+function cwToDiscordText(text) {
+  return text
+    .replace(/\[info\]\[title\]([\s\S]*?)\[\/title\]([\s\S]*?)\[\/info\]/g, (_,t,body)=>`**${t.trim()}**\n${body.trim()}`)
+    .replace(/\[info\]([\s\S]*?)\[\/info\]/g, '$1')
+    .replace(/\[title\]([\s\S]*?)\[\/title\]/g, '**$1**')
+    .replace(/\[dtext:chatroom_member_is\]/g, 'メンバー「')
+    .replace(/\[dtext:chatroom_leaved\]/g, 'が退席しました。')
+    .replace(/\[dtext:chatroom_added\]/g, 'を追加しました。')
+    .replace(/\[dtext:chatroom_chat_joined\]/g, 'チャットに参加しました。')
+    .replace(/\[dtext:chatroom_description_is\]/g, '概要を「')
+    .replace(/\[dtext:chatroom_changed\]/g, '」に変更しました。')
+    .replace(/\[dtext:task_added\]/g, 'タスクを追加しました。')
+    .replace(/\[dtext:task_edited\]/g, 'タスクを編集しました。')
+    .replace(/\[dtext:task_deleted\]/g, 'このタスクは削除されました')
+    .replace(/\[dtext:chatroom_deleted\]/g, '」を削除しました。')
+    .replace(/\[dtext:chatroom_set\]/g, '」に設定しました。')
+    .replace(/\[deleted\]/g, 'メッセージは削除されました')
+    .replace(/\[piconname:\d+\]/g, '').replace(/\[picon:\d+\]/g, '')
+    .replace(/\[To:\d+\]/g, '').replace(/\[rp aid=\d+ to=\d+-\d+\]\s*/g, '（返信）')
+    .replace(/\[qt\][\s\S]*?\[\/qt\]/g, '（引用）')
+    .replace(/\[hr\]/g, '──────────')
+    .replace(/\[[^\]]+\]/g, '')
+    .trim();
+}
+
 async function sendToDiscord(content) {
   if(!DISCORD_WEBHOOK_URL) return null;
   try{ return (await axios.post(DISCORD_WEBHOOK_URL+'?wait=true',{content},{headers:{'Content-Type':'application/json'}})).data.id||null; } catch{ return null; }
@@ -1211,7 +1249,7 @@ if(DISCORD_BOT_TOKEN){
       // ── /help ──
       if(cmd==='help'){
         const lines=[
-          '**📋 コマンド一覧**',
+          '**コマンド一覧**',
           '`/normal_omikuji` - 普通のおみくじ（均等な確率）',
           '`/normal_omikuji_n [count]` - 普通のおみくじN連（均等な確率）',
           '`/omikuji_n [count]` - おみくじN連（大凶99%版）',
@@ -1229,7 +1267,7 @@ if(DISCORD_BOT_TOKEN){
           '`/miaq [message_id]` - Make it a Quote',
           '`/room_info [room_id]` - CWルーム情報表示',
           '',
-          '**🔒 管理者専用**',
+          '**管理者専用**',
           '`/clear [count]` - メッセージを指定数削除（最大100）',
           '`/prohibit [duration]` - このチャンネルで発言禁止（例: 5m, 1h）',
           '`/release` - このチャンネルの発言禁止を解除',
@@ -1247,16 +1285,16 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── おみくじ系スラッシュコマンド ──
-      if(cmd==='normal_omikuji'){ await interaction.editReply(`🎋 普通のおみくじの結果は…\n**${CW.drawNormalOmikuji()}**\nだよっ！`); return; }
+      if(cmd==='normal_omikuji'){ await interaction.editReply(`普通のおみくじの結果は…\n**${CW.drawNormalOmikuji()}**\nだよっ！`); return; }
       if(cmd==='normal_omikuji_n'){
         const n=Math.min(interaction.options.getInteger('count'),10000);
         const rs=Array.from({length:n},()=>CW.drawNormalOmikuji());
-        await interaction.editReply(`🎋 普通のおみくじ${n}連の結果は…\n**${CW.summarizeOmikuji(rs)}**\nだよっ！`); return;
+        await interaction.editReply(`普通のおみくじ${n}連の結果は…\n**${CW.summarizeOmikuji(rs)}**\nだよっ！`); return;
       }
       if(cmd==='omikuji_n'){
         const n=Math.min(interaction.options.getInteger('count'),10000);
         const rs=Array.from({length:n},()=>CW.drawOmikuji());
-        await interaction.editReply(`🎋 おみくじ${n}連（大凶99%版）の結果は…\n**${CW.summarizeOmikuji(rs)}**\nだよっ！`); return;
+        await interaction.editReply(`おみくじ${n}連（大凶99%版）の結果は…\n**${CW.summarizeOmikuji(rs)}**\nだよっ！`); return;
       }
       if(cmd==='yes_or_no'){ await interaction.editReply(`答えは「**${await CW.yesOrNo()}**」だよっ！`); return; }
 
@@ -1267,8 +1305,8 @@ if(DISCORD_BOT_TOKEN){
       if(cmd==='today'){
         const jst=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));
         const ev=await getTodaysEvents();
-        let msg=`📅 今日は**${jst.toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric'})}**だよっ！`;
-        if(ev.length) ev.forEach(e=>{msg+=`\n🎉 今日は${e}だよっ！`;}); await interaction.editReply(msg); return;
+        let msg=`今日は**${jst.toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric'})}**だよっ！`;
+        if(ev.length) ev.forEach(e=>{msg+=`\n今日は${e}だよっ！`;}); await interaction.editReply(msg); return;
       }
 
       // ── lyric ──
@@ -1291,7 +1329,7 @@ if(DISCORD_BOT_TOKEN){
       // ── romera ──
       if(cmd==='romera'){
         const d=await getTodayCounts(CW_ROOM);
-        let msg='**📊 今日のメッセージ数ランキング**\n';
+        let msg='**今日のメッセージ数ランキング**\n';
         if(!d.rows.length){ msg+='今日のメッセージはまだないみたい。'; }
         else{ for(let i=0;i<d.rows.length;i++){ const n=await CW.nameById(d.rows[i].accountId,[],CW_ROOM); msg+=`${i+1}位：${n} ${d.rows[i].count}コメ\n`; } }
         msg+=`\n合計：${d.rows.reduce((s,r)=>s+r.count,0)}コメ（ぼく込み）`;
@@ -1302,7 +1340,7 @@ if(DISCORD_BOT_TOKEN){
       if(cmd==='message_total'){
         const r=await dbQuery('SELECT account_id,message_count FROM total_message_counts WHERE room_id=$1 ORDER BY message_count DESC',[CW_ROOM]);
         if(!r.rows.length){ await interaction.editReply('累計発言数はまだないみたい'); return; }
-        let msg='**📊 累計発言数ランキング**\n';
+        let msg='**累計発言数ランキング**\n';
         for(let i=0;i<r.rows.length;i++){ const n=await CW.nameById(r.rows[i].account_id,[],CW_ROOM); msg+=`${i+1}位：${n} ${r.rows[i].message_count}コメ\n`; }
         await interaction.editReply(msg.substring(0,1900)); return;
       }
@@ -1350,7 +1388,7 @@ if(DISCORD_BOT_TOKEN){
         const del=fetched.filter(m=>(Date.now()-m.createdTimestamp)<14*24*60*60*1000);
         if(!del.size){ await interaction.editReply('削除できるメッセージがないよ（14日以上前は削除不可）'); return; }
         await interaction.channel.bulkDelete(del,true);
-        await interaction.editReply(`🗑️ ${del.size}件のメッセージを削除したよ！`); return;
+        await interaction.editReply(`${del.size}件のメッセージを削除したよ！`); return;
       }
 
       // ── prohibit ──
@@ -1361,14 +1399,14 @@ if(DISCORD_BOT_TOKEN){
         if(s<=0||s>10800){ await interaction.editReply('時間の指定がおかしいよ！5分なら `5m`、3時間なら `3h`（最大3時間）'); return; }
         const ea=new Date(Date.now()+s*1000);
         await dbQuery('INSERT INTO discord_prohibit (channel_id,ends_at) VALUES ($1,$2) ON CONFLICT (channel_id) DO UPDATE SET ends_at=$2',[interaction.channelId,ea]);
-        await interaction.editReply(`🚫 **${ea.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}** まで、このチャンネルで発言禁止にしたよ！`); return;
+        await interaction.editReply(`発言禁止：**${ea.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}** まで、このチャンネルで発言禁止にしたよ！`); return;
       }
 
       // ── release ──
       if(cmd==='release'){
         if(!isAdmin){ await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
         await dbQuery('DELETE FROM discord_prohibit WHERE channel_id=$1',[interaction.channelId]);
-        await interaction.editReply('✅ このチャンネルの発言禁止を解除したよ！'); return;
+        await interaction.editReply('このチャンネルの発言禁止を解除したよ！'); return;
       }
 
       // ── ban ──
@@ -1397,7 +1435,7 @@ if(DISCORD_BOT_TOKEN){
         if(!isAdmin){ await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
         const r=await dbQuery('SELECT account_id FROM black_list WHERE room_id=$1 ORDER BY account_id',[CW_ROOM]);
         if(!r.rows.length){ await interaction.editReply('CWブラックリストは空だよ'); return; }
-        let msg='**🚫 CWブラックリスト**\n';
+        let msg='**CWブラックリスト**\n';
         for(const row of r.rows){ const n=await CW.nameById(row.account_id,[],CW_ROOM); msg+=`・${n}（${row.account_id}）\n`; }
         await interaction.editReply(msg.substring(0,1900)); return;
       }
@@ -1436,7 +1474,7 @@ if(DISCORD_BOT_TOKEN){
         if(s<=0||s>10800){ await interaction.editReply('時間の指定がおかしいよ！5分なら `5m`、3時間なら `3h`（最大3時間）'); return; }
         const ea=new Date(Date.now()+s*1000);
         await dbQuery(`INSERT INTO fever (room_id,ends_at) VALUES ($1,$2) ON CONFLICT (room_id) DO UPDATE SET ends_at=$2`,[CW_ROOM,ea]);
-        await interaction.editReply(`🔥 CWフィーバータイム開始！**${ea.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}** まで獲得ポイント10倍だよっ！`); return;
+        await interaction.editReply(`CWフィーバータイム開始！**${ea.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}** まで獲得ポイント10倍だよっ！`); return;
       }
 
       // ── ng_add ──
@@ -1460,7 +1498,7 @@ if(DISCORD_BOT_TOKEN){
         if(!isAdmin){ await interaction.editReply('管理者しか実行できないコマンドだよ！'); return; }
         const r=await dbQuery('SELECT word FROM ng_words WHERE room_id=$1 ORDER BY created_at',[CW_ROOM]);
         if(!r.rows.length){ await interaction.editReply('CW NGワードはまだ登録されてないよ'); return; }
-        await interaction.editReply(`**📋 CW NGワード一覧**\n${r.rows.map(x=>`・${x.word}`).join('\n')}`); return;
+        await interaction.editReply(`**CW NGワード一覧**\n${r.rows.map(x=>`・${x.word}`).join('\n')}`); return;
       }
 
       await interaction.editReply('不明なコマンドだよ');
@@ -1473,54 +1511,40 @@ if(DISCORD_BOT_TOKEN){
   // Discord → Chatwork転送 + 投稿規制 + メッセージ反応
   discordClient.on(Events.MessageCreate, async(message)=>{
     try{
-      if(message.author.bot) return;
+      // 自分自身（このbot）のメッセージは全てスキップ
+      if(message.author.id === discordClient.user?.id) return;
 
       const content = message.content || '';
       if(!content) return;
 
-      // DMかどうか
       const isDM = !message.guild;
-      // サーバーの場合のみ投稿規制チェック・Chatwork転送を行う
       const isAdmin = isDM ? false : (message.member?.permissions?.has(PermissionFlagsBits.ManageMessages)||false);
-
-      // ━━ 全チャンネル・DM共通のメッセージ反応 ━━
-      // 投稿規制中でも反応させる（反応は削除しない）
       const trimmed = content.trim();
 
-      // おみくじ（大凶99%版）
+      // ━━ 全チャンネル・DM共通のメッセージ反応（全ユーザー対象） ━━
       if(trimmed === 'おみくじ'){
-        await message.reply(`🎋 おみくじの結果は…\n**${CW.drawOmikuji()}**\nだよっ！`).catch(()=>{});
-        // Chatwork転送の前にreturnしない（転送も行う）
+        await message.reply(`おみくじの結果は…\n**${CW.drawOmikuji()}**\nだよっ！`).catch(()=>{});
       }
-      // おみくじXX連（大凶99%版）
       {
         const m = trimmed.match(/^おみくじ(\d+)連$/);
         if(m){
           const n = Math.min(parseInt(m[1]), 10000);
           if(n >= 1){
             const rs = Array.from({length:n}, ()=>CW.drawOmikuji());
-            await message.reply(`🎋 おみくじ${n}連（大凶99%版）の結果は…\n**${CW.summarizeOmikuji(rs)}**\nだよっ！`).catch(()=>{});
+            await message.reply(`おみくじ${n}連（大凶99%版）の結果は…\n**${CW.summarizeOmikuji(rs)}**\nだよっ！`).catch(()=>{});
           }
         }
       }
-      // おやすみ
-      if(trimmed === 'おやすみ'){
-        await message.reply('おやすみ！').catch(()=>{});
-      }
-      // おはよう
-      if(trimmed === 'おはよう'){
-        await message.reply('おはよう！').catch(()=>{});
-      }
-      // ゆゆゆ → @shiratama_kotone をメンション
+      if(trimmed === 'おやすみ') await message.reply('おやすみ！').catch(()=>{});
+      if(trimmed === 'おはよう') await message.reply('おはよう！').catch(()=>{});
       if(trimmed === 'ゆゆゆ'){
-        // shiratama_kotone のユーザーIDを環境変数から取得（なければユーザー名で表示）
-        const yuyuyu_discord_id = process.env.YUYUYU_DISCORD_ID || '';
-        const mention = yuyuyu_discord_id ? `<@${yuyuyu_discord_id}>` : '@shiratama_kotone';
+        const yid = process.env.YUYUYU_DISCORD_ID || '';
+        const mention = yid ? `<@${yid}>` : '@shiratama_kotone';
         await message.reply(`${mention} ゆゆゆ\n${message.author.username}に呼ばれてるよっ！`).catch(()=>{});
       }
 
-      // ━━ サーバー内のみ: 投稿規制チェック ━━
-      if(!isDM && !isAdmin){
+      // ━━ サーバー内のみ: 投稿規制チェック（botは除外） ━━
+      if(!isDM && !isAdmin && !message.author.bot){
         const pr = await dbQuery('SELECT ends_at FROM discord_prohibit WHERE channel_id=$1 AND ends_at>NOW()',[message.channel.id]);
         if(pr.rowCount > 0){
           await message.delete().catch(()=>{});
@@ -1530,24 +1554,26 @@ if(DISCORD_BOT_TOKEN){
         }
       }
 
-      // ━━ Chatwork連携チャンネルのみ: CW転送 ━━
+      // ━━ Chatwork連携チャンネルのみ: CW転送（全ユーザー・全bot対象） ━━
       if(!isDM && message.channel.id === DISCORD_BRIDGE_CHANNEL_ID){
+        // webhookで自分が送ったメッセージはスキップ（ループ防止）
         if(discordWebhookMsgIds.has(message.id)){ discordWebhookMsgIds.delete(message.id); return; }
 
-        const name = message.member?.displayName || message.author.username;
+        // 日付変更通知メッセージ（sendDailyGreetingが送るもの）はCW転送しない
+        if(trimmed.startsWith('日付変更！')) return;
 
-        let cwMsg = '';
-        if(message.reference?.messageId){
-          const br = await dbQuery('SELECT cw_message_id,cw_account_id FROM discord_bridge WHERE discord_message_id=$1',[message.reference.messageId]);
-          if(br.rowCount>0 && br.rows[0].cw_message_id)
-            cwMsg = `[rp aid=${br.rows[0].cw_account_id||0} to=${DISCORD_BRIDGE_CW_ROOM_ID}-${br.rows[0].cw_message_id}][info][title]Discord[/title]${name}：${content}[/info]`;
-          else cwMsg = `[info][title]Discord（返信）[/title]${name}：${content}[/info]`;
-        } else {
-          cwMsg = `[info][title]Discord[/title]${name}：${content}[/info]`;
-        }
+        const name = message.author.bot
+          ? (message.author.username || 'Bot')
+          : (message.member?.displayName || message.author.username);
+
+        // Discord→CW: 「名前：内容」形式
+        const cwMsg = `${name}：${content}`;
 
         const cwId = await CW.send(DISCORD_BRIDGE_CW_ROOM_ID, cwMsg);
-        if(cwId) await dbQuery('INSERT INTO discord_bridge (cw_message_id,discord_message_id,cw_account_id) VALUES ($1,$2,$3)',[String(cwId),message.id,'0']).catch(()=>{});
+        if(cwId && !message.author.bot){
+          await dbQuery('INSERT INTO discord_bridge (cw_message_id,discord_message_id,cw_account_id) VALUES ($1,$2,$3)',
+            [String(cwId), message.id, '0']).catch(()=>{});
+        }
       }
     } catch(e){ console.error('[Discord] MessageCreate エラー:',e.message); }
   });
@@ -1560,15 +1586,15 @@ if(DISCORD_BOT_TOKEN){
 // ============================================================
 app.listen(port, async()=>{
   console.log(`\n=== 湊音BOT 起動中 (ポート${port}) ===`);
-  console.log('CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN?'✅':'❌ 未設定');
-  console.log('DISCORD_BOT_TOKEN:', DISCORD_BOT_TOKEN?'✅':'❌ 未設定');
-  console.log('DISCORD_WEBHOOK_URL:', DISCORD_WEBHOOK_URL?'✅':'❌ 未設定');
-  console.log('DB_URL (raw):', RAW_DB_URL?'✅ 設定済':'❌ 未設定');
+  console.log('CHATWORK_API_TOKEN:', CHATWORK_API_TOKEN?'設定済':'未設定');
+  console.log('DISCORD_BOT_TOKEN:', DISCORD_BOT_TOKEN?'設定済':'未設定');
+  console.log('DISCORD_WEBHOOK_URL:', DISCORD_WEBHOOK_URL?'設定済':'未設定');
+  console.log('DB_URL (raw):', RAW_DB_URL?'設定済':'未設定');
   const cs=buildConnectionString(RAW_DB_URL);
   console.log('DB_URL (変換後):', cs?cs.replace(/:[^@]+@/,':***@'):'未設定');
 
   const dbOk=await checkDbConnection();
-  console.log('DB接続:', dbOk?'✅ 成功':'❌ 失敗');
+  console.log('DB接続:', dbOk?'成功':'失敗');
   if(dbOk){
     await initializeDatabase();
     // 起動時にChatwork名前を正常に戻す
