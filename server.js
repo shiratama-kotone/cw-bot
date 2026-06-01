@@ -6,6 +6,7 @@ const axios = require('axios');
 const cron = require('node-cron');
 const { Pool } = require('pg');
 const cheerio = require('cheerio');
+const cors = require('cors');
 const {
   Client, GatewayIntentBits, Events, REST, Routes,
   SlashCommandBuilder, AttachmentBuilder, PermissionFlagsBits, Partials
