@@ -787,7 +787,7 @@ async function processWebHook(data) {
     {
       const m10=messageBody.match(/^おみくじ(\d+)連$/);
       if(m10){
-        const n=Math.min(parseInt(m10[1]),10000);
+        const n=Math.min(parseInt(m10[1]),114514);
         if(n>=1){
           const rs=Array.from({length:n},()=>CW.drawOmikuji());
           await rpAndDiscord(`${userName}ちゃん[info][title]おみくじ${n}連[/title]おみくじ${n}連の結果は…\n\n${CW.summarizeOmikuji(rs)}\n\nだよっ！[/info]`);
@@ -799,7 +799,7 @@ async function processWebHook(data) {
     {
       const mn=messageBody.match(/^\/normal-omikuji-(\d+)$/);
       if(mn){
-        const n=Math.min(parseInt(mn[1]),10000);
+        const n=Math.min(parseInt(mn[1]),114514);
         if(n>=1){
           const rs=Array.from({length:n},()=>CW.drawNormalOmikuji());
           await rpAndDiscord(`${userName}ちゃん[info][title]普通のおみくじ${n}連[/title]普通のおみくじ${n}連の結果は…\n\n${CW.summarizeOmikuji(rs)}\n\nだよっ！[/info]`);
