@@ -39,108 +39,7 @@ const DISCORD_BOT_USER_ID = '1491344529448501248'; // botのDiscordユーザーI
 const DISCORD_BRIDGE_CW_ROOM_ID       = '415060980';
 const DISCORD_BRIDGE_CHANNEL_ID       = '1371130293888745554';
 const DISCORD_DATE_CHANGE_CHANNEL_ID  = '1501947796742344704';
-const CW_ROOM_ID_FOR_DISCORD          = '415060980';
-const DISCORD_BBS_CHANNEL_ID          = '1512403977029816420';
-const DISCORD_WELCOME_CHANNEL_ID      = '1512793318805995670';
-const DISCORD_RULES_CHANNEL_ID        = '1369677945513443508';
-const DISCORD_INTRO_CHANNEL_ID        = '1357983908691574875';
-const DISCORD_LEVEL_UP_CHANNEL_ID     = '1501654246234390598';
-
-// ============================================================
-// レベルシステム（Discord専用）
-// ============================================================
-// [レベル, そのレベルに達するまでの累計XP]
-const XP_TABLE = [
-  [0,    0],      [10,  100],    [50,  1000],
-  [100,  3000],   [200, 8000],   [300, 15000],
-  [400,  25000],  [500, 40000],  [600, 60000],
-  [700,  85000],  [800, 120000], [900, 170000],
-  [1000, 250000],
-];
-function totalXpForLevel(lv) {
-  if(lv <= 0) return 0;
-  for(let i = 1; i < XP_TABLE.length; i++) {
-    const [l0, x0] = XP_TABLE[i-1], [l1, x1] = XP_TABLE[i];
-    if(lv <= l1) return Math.round(x0 + (lv-l0)/(l1-l0) * (x1-x0));
-  }
-  return Math.round(250000 + (lv-1000)*800); // lv>1000: 800xp/lv
-}
-function calcLevel(xp) {
-  let lo=0, hi=10000;
-  while(lo < hi){ const mid=(lo+hi+1)>>1; totalXpForLevel(mid)<=xp?lo=mid:hi=mid-1; }
-  return lo;
-}
-const LEVEL_ROLES = [
-  {level:10,  roleId:'1512803149772226652'},
-  {level:50,  roleId:'1512803414042476617'},
-  {level:100, roleId:'1512804446013358090'},
-  {level:200, roleId:'1512804689744498688'},
-  {level:300, roleId:'1512805503271571536'},
-  {level:400, roleId:'1512805730829205675'},
-  {level:500, roleId:'1512805854217371668'},
-  {level:600, roleId:'1512805977924042802'},
-  {level:700, roleId:'1512806132161450024'},
-  {level:800, roleId:'1512806266047561758'},
-  {level:900, roleId:'1512806383899119657'},
-  {level:1000,roleId:'1512806527805952000'},
-];
-function getRoleForLevel(lv) {
-  let r=null;
-  for(const lr of LEVEL_ROLES){ if(lv>=lr.level) r=lr; }
-  return r;
-}
-// XP加算・レベルアップ処理
-async function addDiscordXp(member, guildId) {
-  if(!member || member.user.bot) return;
-  const userId = member.user.id;
-  // フィーバー中はXP 10倍（CWルーム415060980のfeverを参照）
-  const fv = await dbQuery('SELECT ends_at FROM fever WHERE room_id=$1 AND ends_at>NOW()', [CW_ROOM_ID_FOR_DISCORD]);
-  const xpGain = fv.rowCount > 0 ? 10 : 1;
-
-  const res = await dbQuery(`
-    INSERT INTO discord_levels (guild_id, user_id, xp, level)
-    VALUES ($1, $2, $3, 0)
-    ON CONFLICT (guild_id, user_id)
-    DO UPDATE SET xp = discord_levels.xp + $3, updated_at = NOW()
-    RETURNING xp, level
-  `, [guildId, userId, xpGain]);
-
-  if(!res.rows.length) return;
-  const newXp  = parseInt(res.rows[0].xp);
-  const oldLev = parseInt(res.rows[0].level);
-  const newLev = calcLevel(newXp);
-  if(newLev <= oldLev) return;
-
-  // レベルが上がった
-  await dbQuery('UPDATE discord_levels SET level=$1 WHERE guild_id=$2 AND user_id=$3', [newLev, guildId, userId]);
-
-  // ロール変化確認
-  const oldRole = getRoleForLevel(oldLev);
-  const newRole = getRoleForLevel(newLev);
-  let roleMsg = '';
-  if(newRole && oldRole?.roleId !== newRole.roleId) {
-    try {
-      if(oldRole) await member.roles.remove(oldRole.roleId).catch(()=>{});
-      const addedRole = await member.guild.roles.fetch(newRole.roleId).catch(()=>null);
-      if(addedRole) {
-        await member.roles.add(addedRole).catch(()=>{});
-        roleMsg = `\n${addedRole.name}が付与されました。`;
-      }
-    } catch(e) { console.error('[Level] ロール付与エラー:', e.message); }
-  }
-
-  // レベルアップ通知
-  try {
-    const ch = await discordClient.channels.fetch(DISCORD_LEVEL_UP_CHANNEL_ID).catch(()=>null);
-    if(ch) {
-      await ch.send({embeds:[{
-        description: `<@${userId}>さんは**レベル${newLev}**になりました！${roleMsg}`,
-        color: newRole ? 0xf39c12 : 0x7289da,
-        footer: { text: `XP: ${newXp.toLocaleString()} | 次のレベルまで: ${(totalXpForLevel(newLev+1)-newXp).toLocaleString()} XP` },
-      }]});
-    }
-  } catch(e) { console.error('[Level] 通知エラー:', e.message); }
-}
+const CW_ROOM_ID_FOR_DISCORD          = '415060980'; // Discordコマンドが対象とするCWルーム
 
 const WEATHER_AREAS = [
   { name: 'さぽろー', code: '016010' },
@@ -312,16 +211,6 @@ async function initializeDatabase() {
       id SERIAL PRIMARY KEY, cw_message_id TEXT, discord_message_id TEXT,
       cw_account_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
     await dbQuery(`ALTER TABLE discord_bridge ADD COLUMN IF NOT EXISTS cw_account_id TEXT`);
-
-    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_levels (
-      id SERIAL PRIMARY KEY,
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      xp BIGINT DEFAULT 0,
-      level INT DEFAULT 0,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(guild_id, user_id))`);
-    await dbQuery(`CREATE INDEX IF NOT EXISTS idx_discord_levels_guild ON discord_levels(guild_id, xp DESC)`);
 
     console.log('[DB] テーブル初期化完了');
   } catch (e) { console.error('[DB] 初期化エラー:', e.message); }
@@ -1378,7 +1267,6 @@ if(DISCORD_BOT_TOKEN){
     const cmds = [
       // ━━ 誰でも使えるコマンド ━━
       new SlashCommandBuilder().setName('help').setDescription('コマンド一覧を表示するよ'),
-      new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
       new SlashCommandBuilder().setName('normal_omikuji').setDescription('普通のおみくじを引くよっ！（大凶が極端に多くないよ）'),
       new SlashCommandBuilder().setName('normal_omikuji_n').setDescription('普通のおみくじをN回引くよ（大凶が極端に多くないよ）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
       new SlashCommandBuilder().setName('omikuji_n').setDescription('おみくじをN回引くよ（大凶99%版）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
@@ -1479,37 +1367,11 @@ if(DISCORD_BOT_TOKEN){
           '`/ng_add [word]` - CW NGワード登録',
           '`/ng_del [word]` - CW NGワード削除',
           '`/ng_check` - CW NGワード一覧',
-          '`/role_panel [title] [roles]` - ロールパネル作成（ロールIDカンマ区切り、最大25個）',
-          '',
-          '**レベルシステム**',
-          '`/rank` - 自分のレベルとXPを確認',
         ];
         await reply(lines.join('\n'), {title:'コマンド一覧'}); return;
       }
 
-      // ── rank ──
-      if(cmd==='rank'){
-        if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
-        const uid = interaction.user.id;
-        const r = await dbQuery('SELECT xp, level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id, uid]);
-        const xp  = r.rows.length ? parseInt(r.rows[0].xp)    : 0;
-        const lv  = r.rows.length ? parseInt(r.rows[0].level)  : 0;
-        const nextXp = totalXpForLevel(lv+1);
-        const role = getRoleForLevel(lv);
-        const guild = interaction.guild;
-        const addedRole = role ? guild.roles.cache.get(role.roleId) : null;
-        await reply(null, {
-          title: `${interaction.member.displayName} のランク`,
-          fields:[
-            {name:'レベル',  value:`**${lv}**`,                              inline:true},
-            {name:'XP',      value:`${xp.toLocaleString()}`,                 inline:true},
-            {name:'次のLvまで', value:`${(nextXp-xp).toLocaleString()} XP`, inline:true},
-            {name:'現在のロール', value: addedRole ? addedRole.name : 'なし', inline:true},
-          ],
-          color: role ? 0xf39c12 : 0x7289da,
-          footer: `次のLv${lv+1}に必要な累計XP: ${nextXp.toLocaleString()}`
-        }); return;
-      }
+      // ── おみくじ系スラッシュコマンド ──
       if(cmd==='normal_omikuji'){ await reply(`普通のおみくじの結果は…\n**${CW.drawNormalOmikuji()}**\nだよっ！`, {title:'普通のおみくじ'}); return; }
       if(cmd==='normal_omikuji_n'){
         const n=Math.min(interaction.options.getInteger('count'),10000);
@@ -1789,8 +1651,6 @@ if(DISCORD_BOT_TOKEN){
           if(w) setTimeout(()=>w.delete().catch(()=>{}), 5000);
           return;
         }
-        // XP加算（bot以外、サーバー内のみ）
-        if(message.guild) addDiscordXp(message.member, message.guild.id).catch(()=>{});
       }
 
       // ━━ Chatwork連携チャンネルのみ: CW転送（全ユーザー・全bot対象） ━━
