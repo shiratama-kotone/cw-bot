@@ -91,11 +91,13 @@ function getRoleForLevel(lv) {
 // XP加算・レベルアップ処理（MessageCreateから呼ぶ）
 async function addDiscordXp(member, guildId) {
   if(!member || member.user.bot) return;
-  if(!dbAvailable) return; // DB未接続時はスキップ
+  if(!dbAvailable) { console.log('[XP] DB未接続のためスキップ'); return; }
   const userId = member.user.id;
+  console.log(`[XP] 加算開始: userId=${userId}, guildId=${guildId}`);
   // フィーバー中はXP10倍
   const fv = await dbQuery('SELECT ends_at FROM fever WHERE room_id=$1 AND ends_at>NOW()', [CW_ROOM_ID_FOR_DISCORD]);
   const xpGain = fv.rowCount > 0 ? 10 : 1;
+  console.log(`[XP] xpGain=${xpGain}`);
 
   const res = await dbQuery(`
     INSERT INTO discord_levels (guild_id, user_id, xp, level)
@@ -105,6 +107,7 @@ async function addDiscordXp(member, guildId) {
     RETURNING xp, level
   `, [guildId, userId, xpGain]);
 
+  console.log(`[XP] クエリ結果: rowCount=${res?.rowCount}, rows=${JSON.stringify(res?.rows)}`);
   if(!res || !res.rows || !res.rows.length) return;
   const newXp  = parseInt(res.rows[0].xp);
   const oldLev = parseInt(res.rows[0].level);
@@ -1876,7 +1879,11 @@ if(DISCORD_BOT_TOKEN){
           return;
         }
         // XP加算（1メッセージ = 1XP、フィーバー中は10XP）
-        if(message.guild) addDiscordXp(message.member, message.guild.id).catch(()=>{});
+        if(message.guild) {
+          addDiscordXp(message.member, message.guild.id).catch(e=>{
+            console.error('[XP] addDiscordXpエラー:', e.message, e.stack);
+          });
+        }
       }
 
       // ━━ Chatwork連携チャンネルのみ: CW転送（全ユーザー・全bot対象） ━━
