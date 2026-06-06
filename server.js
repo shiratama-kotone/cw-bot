@@ -39,7 +39,11 @@ const DISCORD_BOT_USER_ID = '1491344529448501248'; // botのDiscordユーザーI
 const DISCORD_BRIDGE_CW_ROOM_ID       = '415060980';
 const DISCORD_BRIDGE_CHANNEL_ID       = '1371130293888745554';
 const DISCORD_DATE_CHANGE_CHANNEL_ID  = '1501947796742344704';
-const CW_ROOM_ID_FOR_DISCORD          = '415060980'; // Discordコマンドが対象とするCWルーム
+const CW_ROOM_ID_FOR_DISCORD          = '415060980';
+const DISCORD_BBS_CHANNEL_ID          = '1512403977029816420'; // BBS webhook通知先
+const DISCORD_WELCOME_CHANNEL_ID      = '1512793318805995670'; // ようこそチャンネル
+const DISCORD_RULES_CHANNEL_ID        = '1369677945513443508'; // #ルール
+const DISCORD_INTRO_CHANNEL_ID        = '1357983908691574875'; // #自己紹介 // Discordコマンドが対象とするCWルーム
 
 const WEATHER_AREAS = [
   { name: 'さぽろー', code: '016010' },
@@ -1024,6 +1028,36 @@ app.post('/webhook', async (req,res) => {
   } catch { res.status(500).json({error:'Internal server error'}); }
 });
 
+// BBSからのwebhook
+app.post('/bbs-webhook', async (req,res) => {
+  try{
+    const { event_time, id, name, no, content, channel } = req.body;
+    if(!name || !content){ res.status(400).json({error:'Invalid BBS webhook data'}); return; }
+    if(discordClient){
+      const ch = await discordClient.channels.fetch(DISCORD_BBS_CHANNEL_ID).catch(()=>null);
+      if(ch){
+        const jst = event_time
+          ? new Date(event_time).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})
+          : new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
+        await ch.send({embeds:[{
+          title: `${name}`,
+          description: content,
+          color: 0x5cb85c,
+          fields: [
+            no!=null ? {name:'No', value:String(no), inline:true} : null,
+            channel ? {name:'チャンネル', value:channel, inline:true} : null,
+          ].filter(Boolean),
+          footer: {text: `BBS | ${jst}`},
+        }]});
+      }
+    }
+    res.status(200).json({status:'success'});
+  } catch(e){
+    console.error('[BBS webhook] エラー:',e.message);
+    res.status(500).json({error:'Internal server error'});
+  }
+});
+
 app.get('/',(req,res)=>res.json({status:'OK',message:'ぼくは元気に稼働中！',timestamp:new Date().toISOString(),dbAvailable}));
 
 app.get('/status',async(req,res)=>{
@@ -1255,6 +1289,7 @@ if(DISCORD_BOT_TOKEN){
   discordClient = new Client({intents:[
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.DirectMessageReactions,
@@ -1295,6 +1330,11 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('ng_add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      // ロールパネル（最大25ロール、Discord SelectMenu制限）
+      new SlashCommandBuilder().setName('role_panel').setDescription('ロールパネルを作成するよ（最大25ロール）')
+        .addStringOption(o=>o.setName('title').setDescription('パネルのタイトル').setRequired(true))
+        .addStringOption(o=>o.setName('roles').setDescription('ロールIDをカンマ区切りで（例: 111,222,333）').setRequired(true))
+        .setDefaultMemberPermissions(ADMIN_PERM),
     ].map(c=>c.toJSON());
 
     try{
@@ -1367,6 +1407,7 @@ if(DISCORD_BOT_TOKEN){
           '`/ng_add [word]` - CW NGワード登録',
           '`/ng_del [word]` - CW NGワード削除',
           '`/ng_check` - CW NGワード一覧',
+          '`/role_panel [title] [roles]` - ロールパネル作成（ロールIDカンマ区切り、最大25個）',
         ];
         await reply(lines.join('\n'), {title:'コマンド一覧'}); return;
       }
@@ -1599,11 +1640,89 @@ if(DISCORD_BOT_TOKEN){
         await reply(r.rows.map(x=>`・${x.word}`).join('\n'), {title:'CW NGワード一覧'}); return;
       }
 
+      // ── role_panel ──
+      if(cmd==='role_panel'){
+        if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
+        const title = interaction.options.getString('title');
+        const roleIds = interaction.options.getString('roles').split(',').map(s=>s.trim()).filter(Boolean).slice(0,25);
+        if(!roleIds.length){ await replyErr('ロールIDを1つ以上指定してね'); return; }
+        const guild = interaction.guild;
+        const options = [];
+        for(const rid of roleIds){
+          const role = guild.roles.cache.get(rid) || await guild.roles.fetch(rid).catch(()=>null);
+          if(role) options.push({ label: role.name, value: rid });
+        }
+        if(!options.length){ await replyErr('有効なロールIDが見つからなかったよ'); return; }
+        const { ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId('role_panel_select')
+          .setPlaceholder('ロールを選択してね（複数選択可）')
+          .setMinValues(0).setMaxValues(options.length)
+          .addOptions(options);
+        await interaction.editReply({
+          embeds:[{title, description:'メニューからロールを選択するとロールが付与・解除されるよ！', color:0x7289da}],
+          components:[new ActionRowBuilder().addComponents(menu)],
+          content:''
+        });
+        return;
+      }
+
       await reply('不明なコマンドだよ', {color:0xe74c3c});
     } catch(e){
       console.error('[Discord] コマンドエラー:',e.message);
-      try{ if(!interaction.replied&&!interaction.deferred) await interaction.reply('エラーが発生したよ'); else await reply('エラーが発生したよ'); } catch{}
+      try{
+        const e2={embeds:[{title:'エラー',description:'エラーが発生したよ',color:0xe74c3c}]};
+        if(!interaction.replied&&!interaction.deferred) await interaction.reply(e2);
+        else await interaction.editReply(e2);
+      } catch{}
     }
+  });
+
+  // ロールパネルのSelectMenu処理
+  discordClient.on(Events.InteractionCreate, async(interaction)=>{
+    if(!interaction.isStringSelectMenu()) return;
+    if(interaction.customId !== 'role_panel_select') return;
+    try{
+      await interaction.deferReply({ephemeral:true});
+      const member = interaction.member;
+      const guild  = interaction.guild;
+      const selected = new Set(interaction.values);
+      const allOptions = interaction.component.options.map(o=>o.value);
+      const added=[], removed=[];
+      for(const roleId of allOptions){
+        const role = guild.roles.cache.get(roleId);
+        if(!role) continue;
+        const has = member.roles.cache.has(roleId);
+        if(selected.has(roleId) && !has){ await member.roles.add(role).catch(()=>{}); added.push(role.name); }
+        else if(!selected.has(roleId) && has){ await member.roles.remove(role).catch(()=>{}); removed.push(role.name); }
+      }
+      const lines=[];
+      if(added.length)   lines.push(`付与：${added.join('、')}`);
+      if(removed.length) lines.push(`解除：${removed.join('、')}`);
+      await interaction.editReply({
+        embeds:[{title:'ロール更新完了', description:lines.length?lines.join('\n'):'変更なし', color:0x2ecc71}]
+      });
+    } catch(e){
+      console.error('[Discord] ロールパネルエラー:',e.message);
+      await interaction.editReply({embeds:[{title:'エラー',description:'ロールの更新に失敗したよ',color:0xe74c3c}]}).catch(()=>{});
+    }
+  });
+
+  // ようこそメッセージ
+  discordClient.on(Events.GuildMemberAdd, async(member)=>{
+    try{
+      const ch = await discordClient.channels.fetch(DISCORD_WELCOME_CHANNEL_ID).catch(()=>null);
+      if(!ch) return;
+      const memberCount = member.guild.members.cache.filter(m=>!m.user.bot).size;
+      await ch.send({embeds:[{
+        title: `${member.displayName}さんこんにちは！`,
+        description:
+          `現在のサーバーメンバーは**${memberCount}人**です！\n` +
+          `<#${DISCORD_RULES_CHANNEL_ID}> の確認と <#${DISCORD_INTRO_CHANNEL_ID}> をお願いします！`,
+        color: 0x7289da,
+        thumbnail: {url: member.user.displayAvatarURL()},
+      }]});
+    } catch(e){ console.error('[Discord] ようこそメッセージエラー:',e.message); }
   });
 
   // Discord → Chatwork転送 + 投稿規制 + メッセージ反応
