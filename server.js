@@ -97,10 +97,8 @@ async function addDiscordXp(member,guildId){
   if(!member||member.user.bot) return;
   if(!dbAvailable) return;
   const userId=member.user.id;
-  // 現在レベルを取得
   const cur=await dbQuery('SELECT xp,level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[guildId,userId]);
   const curLev=cur.rows.length?parseInt(cur.rows[0].level):0;
-  // フィーバー中は×10
   const fv=await dbQuery('SELECT ends_at FROM fever WHERE room_id=$1 AND ends_at>NOW()',[CW_ROOM_ID_FOR_DISCORD]);
   const xpGain=baseXpForLevel(curLev)*(fv.rowCount>0?10:1);
   const res=await dbQuery(`
@@ -136,6 +134,7 @@ async function addDiscordXp(member,guildId){
     }]});
   }catch(e){console.error('[Level] 通知エラー:',e.message);}
 }
+ // Discordコマンドが対象とするCWルーム
 
 const WEATHER_AREAS = [
   { name: 'さぽろー', code: '016010' },
@@ -1120,6 +1119,36 @@ app.post('/webhook', async (req,res) => {
   } catch { res.status(500).json({error:'Internal server error'}); }
 });
 
+
+// BBSからのwebhook
+app.post('/bbs-webhook', async (req,res) => {
+  try{
+    const {event_time,id,name,no,content,channel}=req.body;
+    if(!name||!content){res.status(400).json({error:'Invalid BBS webhook data'}); return;}
+    if(discordClient){
+      const ch=await discordClient.channels.fetch(DISCORD_BBS_CHANNEL_ID).catch(()=>null);
+      if(ch){
+        const jst=event_time
+          ?new Date(event_time).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})
+          :new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
+        await ch.send({embeds:[{
+          title:name,
+          description:content,
+          color:0x5cb85c,
+          fields:[
+            no!=null?{name:'No',value:String(no),inline:true}:null,
+            channel?{name:'チャンネル',value:channel,inline:true}:null,
+          ].filter(Boolean),
+          footer:{text:`BBS | ${jst}`},
+        }]});
+      }
+    }
+    res.status(200).json({status:'success'});
+  }catch(e){
+    console.error('[BBS webhook] エラー:',e.message);
+    res.status(500).json({error:'Internal server error'});
+  }
+});
 app.get('/',(req,res)=>res.json({status:'OK',message:'ぼくは元気に稼働中！',timestamp:new Date().toISOString(),dbAvailable}));
 
 app.get('/status',async(req,res)=>{
@@ -1363,6 +1392,7 @@ if(DISCORD_BOT_TOKEN){
     const cmds = [
       // ━━ 誰でも使えるコマンド ━━
       new SlashCommandBuilder().setName('help').setDescription('コマンド一覧を表示するよ'),
+      new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
       new SlashCommandBuilder().setName('normal_omikuji').setDescription('普通のおみくじを引くよっ！（大凶が極端に多くないよ）'),
       new SlashCommandBuilder().setName('normal_omikuji_n').setDescription('普通のおみくじをN回引くよ（大凶が極端に多くないよ）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
       new SlashCommandBuilder().setName('omikuji_n').setDescription('おみくじをN回引くよ（大凶99%版）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
@@ -1468,6 +1498,29 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── おみくじ系スラッシュコマンド ──
+      // ── rank ──
+      if(cmd==='rank'){
+        if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
+        const uid=interaction.user.id;
+        const r=await dbQuery('SELECT xp,level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,uid]);
+        const xp =r.rows.length?parseInt(r.rows[0].xp):0;
+        const lv =r.rows.length?parseInt(r.rows[0].level):0;
+        const nextXp=totalXpForLevel(lv+1);
+        const role=getRoleForLevel(lv);
+        const addedRole=role?interaction.guild.roles.cache.get(role.roleId):null;
+        await reply(null,{
+          title:`${interaction.member.displayName} のランク`,
+          fields:[
+            {name:'レベル',      value:`**${lv}**`,                           inline:true},
+            {name:'XP',         value:`${xp.toLocaleString()}`,              inline:true},
+            {name:'次のLvまで', value:`${(nextXp-xp).toLocaleString()} XP`, inline:true},
+            {name:'現在のロール',value:addedRole?addedRole.name:'なし',       inline:true},
+          ],
+          color:role?0xf39c12:0x7289da,
+          footer:`次のLv${lv+1}に必要な累計XP: ${nextXp.toLocaleString()}`
+        }); return;
+      }
+
       if(cmd==='normal_omikuji'){ await reply(`普通のおみくじの結果は…\n**${CW.drawNormalOmikuji()}**\nだよっ！`, {title:'普通のおみくじ'}); return; }
       if(cmd==='normal_omikuji_n'){
         const n=Math.min(interaction.options.getInteger('count'),10000);
@@ -1738,14 +1791,17 @@ if(DISCORD_BOT_TOKEN){
         await message.reply(`${mention} ゆゆゆ\n${message.author.username}に呼ばれてるよっ！`).catch(()=>{});
       }
 
-      // ━━ サーバー内のみ: 投稿規制チェック（botは除外） ━━
-      if(!isDM && !isAdmin && !message.author.bot){
-        const pr = await dbQuery('SELECT ends_at FROM discord_prohibit WHERE channel_id=$1 AND ends_at>NOW()',[message.channel.id]);
-        if(pr.rowCount > 0){
-          await message.delete().catch(()=>{});
-          const w = await message.channel.send(`<@${message.author.id}> 現在このチャンネルは発言禁止中だよ！`).catch(()=>null);
-          if(w) setTimeout(()=>w.delete().catch(()=>{}), 5000);
-          return;
+      // ━━ サーバー内のみ: 投稿規制チェック（botは除外）＋XP加算 ━━
+      if(!isDM && !message.author.bot){
+        addDiscordXp(message.member, message.guild.id).catch(()=>{});
+        if(!isAdmin){
+          const pr=await dbQuery('SELECT ends_at FROM discord_prohibit WHERE channel_id=$1 AND ends_at>NOW()',[message.channel.id]);
+          if(pr.rowCount>0){
+            await message.delete().catch(()=>{});
+            const w=await message.channel.send(`<@${message.author.id}> 現在このチャンネルは発言禁止中だよ！`).catch(()=>null);
+            if(w) setTimeout(()=>w.delete().catch(()=>{}),5000);
+            return;
+          }
         }
       }
 
@@ -1778,6 +1834,71 @@ if(DISCORD_BOT_TOKEN){
         }
       }
     } catch(e){ console.error('[Discord] MessageCreate エラー:',e.message); }
+  });
+
+
+  // ようこそメッセージ
+  discordClient.on(Events.GuildMemberAdd, async(member)=>{
+    try{
+      const ch=await discordClient.channels.fetch(DISCORD_WELCOME_CHANNEL_ID).catch(()=>null);
+      if(!ch) return;
+      const memberCount=member.guild.members.cache.filter(m=>!m.user.bot).size;
+      await ch.send({embeds:[{
+        title:`${member.displayName}さんこんにちは！`,
+        description:
+          `現在のサーバーメンバーは**${memberCount}人**です！\n`+
+          `<#${DISCORD_RULES_CHANNEL_ID}> の確認と <#${DISCORD_INTRO_CHANNEL_ID}> をお願いします！`,
+        color:0x7289da,
+        thumbnail:{url:member.user.displayAvatarURL()},
+      }]});
+    }catch(e){console.error('[Discord] ようこそメッセージエラー:',e.message);}
+  });
+
+  // ロールパネル SelectMenu処理
+  discordClient.on(Events.InteractionCreate, async(interaction)=>{
+    if(!interaction.isStringSelectMenu()) return;
+    if(interaction.customId!=='role_panel_select') return;
+    try{
+      await interaction.deferReply({ephemeral:true});
+      const member=interaction.member, guild=interaction.guild;
+      const selected=new Set(interaction.values);
+      const allOpts=interaction.component.options.map(o=>o.value);
+      const added=[],removed=[];
+      for(const roleId of allOpts){
+        const role=guild.roles.cache.get(roleId); if(!role) continue;
+        const has=member.roles.cache.has(roleId);
+        if(selected.has(roleId)&&!has){await member.roles.add(role).catch(()=>{}); added.push(role.name);}
+        else if(!selected.has(roleId)&&has){await member.roles.remove(role).catch(()=>{}); removed.push(role.name);}
+      }
+      const lines=[];
+      if(added.length)   lines.push(`付与：${added.join('、')}`);
+      if(removed.length) lines.push(`解除：${removed.join('、')}`);
+      await interaction.editReply({embeds:[{title:'ロール更新完了',description:lines.length?lines.join('\n'):'変更なし',color:0x2ecc71}]});
+    }catch(e){
+      console.error('[Discord] ロールパネルエラー:',e.message);
+      try{await interaction.editReply({embeds:[{title:'エラー',description:'ロールの更新に失敗したよ',color:0xe74c3c}]});}catch{}
+    }
+  });
+
+  // 認証ボタン処理
+  discordClient.on(Events.InteractionCreate, async(interaction)=>{
+    if(!interaction.isButton()) return;
+    if(!interaction.customId.startsWith('verify_btn:')) return;
+    try{
+      await interaction.deferReply({ephemeral:true});
+      const roleId=interaction.customId.split(':')[1];
+      const member=interaction.member;
+      if(member.roles.cache.has(roleId)){
+        await interaction.editReply({embeds:[{description:'すでに認証済みだよ！',color:0x2ecc71}]}); return;
+      }
+      const role=interaction.guild.roles.cache.get(roleId)||await interaction.guild.roles.fetch(roleId).catch(()=>null);
+      if(!role){await interaction.editReply({embeds:[{description:'ロールが見つからなかったよ',color:0xe74c3c}]}); return;}
+      await member.roles.add(role);
+      await interaction.editReply({embeds:[{description:`認証完了！**${role.name}**が付与されたよ！`,color:0x2ecc71}]});
+    }catch(e){
+      console.error('[Discord] 認証ボタンエラー:',e.message);
+      try{await interaction.editReply({embeds:[{description:'認証に失敗したよ…',color:0xe74c3c}]});}catch{}
+    }
   });
 
   discordClient.login(DISCORD_BOT_TOKEN).catch(e=>console.error('[Discord] ログインエラー:',e.message));
