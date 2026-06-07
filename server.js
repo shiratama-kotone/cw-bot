@@ -1295,10 +1295,10 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('ng_add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      // ロールパネル（ロール候補から選択式、最大25個）
+      // ロールパネル（ロール候補から選択式、最大24個＋title=25個）
       (() => {
-        const cmd = new SlashCommandBuilder().setName('role_panel').setDescription('ロールパネルを作成するよ（最大25ロール）').addStringOption(o=>o.setName('title').setDescription('パネルのタイトル').setRequired(true));
-        for(let i=1;i<=25;i++) cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));
+        const cmd = new SlashCommandBuilder().setName('role_panel').setDescription('ロールパネルを作成するよ（最大24ロール）').addStringOption(o=>o.setName('title').setDescription('パネルのタイトル').setRequired(true));
+        for(let i=1;i<=24;i++) cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));
         return cmd.setDefaultMemberPermissions(ADMIN_PERM);
       })(),
       // 認証パネル
@@ -1616,7 +1616,7 @@ if(DISCORD_BOT_TOKEN){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
         const title = interaction.options.getString('title');
         const options = [];
-        for(let i=1;i<=25;i++){
+        for(let i=1;i<=24;i++){
           const role = interaction.options.getRole(`role${i}`);
           if(role) options.push({label:role.name, value:role.id});
         }
