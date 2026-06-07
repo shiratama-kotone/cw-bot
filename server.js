@@ -49,12 +49,12 @@ const DISCORD_LEVEL_UP_CHANNEL_ID     = '1501654246234390598';
 // ============================================================
 // レベルシステム（Discord専用）
 // ============================================================
-const XP_TABLE = [
+const XP_TABLE=[
   [0,0],[10,100],[50,1000],[100,3000],[200,8000],[300,15000],
   [400,25000],[500,40000],[600,60000],[700,85000],[800,120000],
   [900,170000],[1000,250000],
 ];
-function totalXpForLevel(lv) {
+function totalXpForLevel(lv){
   if(lv<=0) return 0;
   for(let i=1;i<XP_TABLE.length;i++){
     const [l0,x0]=XP_TABLE[i-1],[l1,x1]=XP_TABLE[i];
@@ -62,7 +62,7 @@ function totalXpForLevel(lv) {
   }
   return Math.round(250000+(lv-1000)*800);
 }
-function calcLevel(xp) {
+function calcLevel(xp){
   let lo=0,hi=10000;
   while(lo<hi){const mid=(lo+hi+1)>>1;totalXpForLevel(mid)<=xp?lo=mid:hi=mid-1;}
   return lo;
@@ -86,9 +86,7 @@ function getRoleForLevel(lv){
   for(const lr of LEVEL_ROLES){if(lv>=lr.level)r=lr;}
   return r;
 }
-// XP加算・レベルアップ処理
-// discordClientはこの関数が呼ばれる時点で初期化済みなのでグローバル参照でOK
-async function addDiscordXp(member, guildId) {
+async function addDiscordXp(member,guildId){
   if(!member||member.user.bot) return;
   if(!dbAvailable) return;
   const userId=member.user.id;
@@ -98,7 +96,7 @@ async function addDiscordXp(member, guildId) {
     INSERT INTO discord_levels (guild_id,user_id,xp,level)
     VALUES ($1,$2,$3,0)
     ON CONFLICT (guild_id,user_id)
-    DO UPDATE SET xp=discord_levels.xp+$3, updated_at=NOW()
+    DO UPDATE SET xp=discord_levels.xp+$3,updated_at=NOW()
     RETURNING xp,level
   `,[guildId,userId,xpGain]);
   if(!res?.rows?.length) return;
@@ -106,9 +104,7 @@ async function addDiscordXp(member, guildId) {
   const oldLev=parseInt(res.rows[0].level);
   const newLev=calcLevel(newXp);
   if(newLev<=oldLev) return;
-  // レベルアップ
   await dbQuery('UPDATE discord_levels SET level=$1 WHERE guild_id=$2 AND user_id=$3',[newLev,guildId,userId]);
-  // ロール変化
   const oldRole=getRoleForLevel(oldLev);
   const newRole=getRoleForLevel(newLev);
   let roleMsg='';
@@ -119,7 +115,6 @@ async function addDiscordXp(member, guildId) {
       if(addedRole){await member.roles.add(addedRole).catch(()=>{}); roleMsg=`\n${addedRole.name}が付与されました。`;}
     }catch(e){console.error('[Level] ロール付与エラー:',e.message);}
   }
-  // レベルアップ通知（レベルアップ時のみ）
   try{
     if(!discordClient) return;
     const ch=await discordClient.channels.fetch(DISCORD_LEVEL_UP_CHANNEL_ID).catch(()=>null);
@@ -1114,6 +1109,36 @@ app.post('/webhook', async (req,res) => {
   } catch { res.status(500).json({error:'Internal server error'}); }
 });
 
+// BBSからのwebhook
+app.post('/bbs-webhook', async (req,res) => {
+  try{
+    const {event_time,id,name,no,content,channel}=req.body;
+    if(!name||!content){res.status(400).json({error:'Invalid BBS webhook data'}); return;}
+    if(discordClient){
+      const ch=await discordClient.channels.fetch(DISCORD_BBS_CHANNEL_ID).catch(()=>null);
+      if(ch){
+        const jst=event_time
+          ?new Date(event_time).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})
+          :new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
+        await ch.send({embeds:[{
+          title:name,
+          description:content,
+          color:0x5cb85c,
+          fields:[
+            no!=null?{name:'No',value:String(no),inline:true}:null,
+            channel?{name:'チャンネル',value:channel,inline:true}:null,
+          ].filter(Boolean),
+          footer:{text:`BBS | ${jst}`},
+        }]});
+      }
+    }
+    res.status(200).json({status:'success'});
+  }catch(e){
+    console.error('[BBS webhook] エラー:',e.message);
+    res.status(500).json({error:'Internal server error'});
+  }
+});
+
 app.get('/',(req,res)=>res.json({status:'OK',message:'ぼくは元気に稼働中！',timestamp:new Date().toISOString(),dbAvailable}));
 
 app.get('/status',async(req,res)=>{
@@ -1386,18 +1411,6 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('ng_add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      // ロールパネル（ロール候補から選択式、最大24個＋title=25個）
-      (() => {
-        const cmd = new SlashCommandBuilder().setName('role_panel').setDescription('ロールパネルを作成するよ（最大24ロール）').addStringOption(o=>o.setName('title').setDescription('パネルのタイトル').setRequired(true));
-        for(let i=1;i<=24;i++) cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));
-        return cmd.setDefaultMemberPermissions(ADMIN_PERM);
-      })(),
-      // 認証パネル
-      new SlashCommandBuilder().setName('verify').setDescription('認証パネルを作成するよ')
-        .addRoleOption(o=>o.setName('role').setDescription('認証時に付与するロール').setRequired(true))
-        .addStringOption(o=>o.setName('title').setDescription('パネルのタイトル（省略可）'))
-        .addStringOption(o=>o.setName('description').setDescription('パネルの説明文（省略可）'))
-        .setDefaultMemberPermissions(ADMIN_PERM),
     ].map(c=>c.toJSON());
 
     try{
@@ -1725,127 +1738,11 @@ if(DISCORD_BOT_TOKEN){
         await reply(r.rows.map(x=>`・${x.word}`).join('\n'), {title:'CW NGワード一覧'}); return;
       }
 
-      // ── role_panel ──
-      if(cmd==='role_panel'){
-        if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const title = interaction.options.getString('title');
-        const options = [];
-        for(let i=1;i<=24;i++){
-          const role = interaction.options.getRole(`role${i}`);
-          if(role) options.push({label:role.name, value:role.id});
-        }
-        if(!options.length){ await replyErr('ロールを1つ以上指定してね'); return; }
-        const { ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
-        const menu = new StringSelectMenuBuilder()
-          .setCustomId('role_panel_select')
-          .setPlaceholder('ロールを選択してね（複数選択可）')
-          .setMinValues(0).setMaxValues(options.length)
-          .addOptions(options);
-        await interaction.editReply({
-          embeds:[{title, description:'メニューからロールを選択するとロールが付与・解除されるよ！', color:0x7289da}],
-          components:[new ActionRowBuilder().addComponents(menu)],
-          content:''
-        });
-        return;
-      }
-
-      // ── verify ──
-      if(cmd==='verify'){
-        if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const role  = interaction.options.getRole('role');
-        const title = interaction.options.getString('title') || '認証';
-        const desc  = interaction.options.getString('description') || 'ボタンを押すと認証されてロールが付与されるよ！';
-        const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-        const btn = new ButtonBuilder()
-          .setCustomId(`verify_btn:${role.id}`)
-          .setLabel('認証する')
-          .setStyle(ButtonStyle.Primary);
-        await interaction.editReply({
-          embeds:[{title, description:desc, color:0x2ecc71, footer:{text:`付与されるロール: ${role.name}`}}],
-          components:[new ActionRowBuilder().addComponents(btn)],
-          content:''
-        });
-        return;
-      }
-
       await reply('不明なコマンドだよ', {color:0xe74c3c});
     } catch(e){
       console.error('[Discord] コマンドエラー:',e.message);
-      try{
-        const e2={embeds:[{title:'エラー',description:'エラーが発生したよ',color:0xe74c3c}]};
-        if(!interaction.replied&&!interaction.deferred) await interaction.reply(e2);
-        else await interaction.editReply(e2);
-      } catch{}
+      try{ if(!interaction.replied&&!interaction.deferred) await interaction.reply('エラーが発生したよ'); else await reply('エラーが発生したよ'); } catch{}
     }
-  });
-
-  // ロールパネル SelectMenu処理
-  discordClient.on(Events.InteractionCreate, async(interaction)=>{
-    if(!interaction.isStringSelectMenu()) return;
-    if(interaction.customId !== 'role_panel_select') return;
-    try{
-      await interaction.deferReply({ephemeral:true});
-      const member   = interaction.member;
-      const guild    = interaction.guild;
-      const selected = new Set(interaction.values);
-      const allOpts  = interaction.component.options.map(o=>o.value);
-      const added=[], removed=[];
-      for(const roleId of allOpts){
-        const role = guild.roles.cache.get(roleId);
-        if(!role) continue;
-        const has = member.roles.cache.has(roleId);
-        if(selected.has(roleId) && !has){ await member.roles.add(role).catch(()=>{}); added.push(role.name); }
-        else if(!selected.has(roleId) && has){ await member.roles.remove(role).catch(()=>{}); removed.push(role.name); }
-      }
-      const lines=[];
-      if(added.length)   lines.push(`付与：${added.join('、')}`);
-      if(removed.length) lines.push(`解除：${removed.join('、')}`);
-      await interaction.editReply({
-        embeds:[{title:'ロール更新完了', description:lines.length?lines.join('\n'):'変更なし', color:0x2ecc71}]
-      });
-    } catch(e){
-      console.error('[Discord] ロールパネルエラー:',e.message);
-      try{ await interaction.editReply({embeds:[{title:'エラー',description:'ロールの更新に失敗したよ',color:0xe74c3c}]}); } catch{}
-    }
-  });
-
-  // 認証ボタン処理
-  discordClient.on(Events.InteractionCreate, async(interaction)=>{
-    if(!interaction.isButton()) return;
-    if(!interaction.customId.startsWith('verify_btn:')) return;
-    try{
-      await interaction.deferReply({ephemeral:true});
-      const roleId = interaction.customId.split(':')[1];
-      const member = interaction.member;
-      if(member.roles.cache.has(roleId)){
-        await interaction.editReply({embeds:[{description:'すでに認証済みだよ！', color:0x2ecc71}]});
-        return;
-      }
-      const role = interaction.guild.roles.cache.get(roleId) || await interaction.guild.roles.fetch(roleId).catch(()=>null);
-      if(!role){ await interaction.editReply({embeds:[{description:'ロールが見つからなかったよ', color:0xe74c3c}]}); return; }
-      await member.roles.add(role);
-      await interaction.editReply({embeds:[{description:`認証完了！**${role.name}**が付与されたよ！`, color:0x2ecc71}]});
-    } catch(e){
-      console.error('[Discord] 認証ボタンエラー:',e.message);
-      try{ await interaction.editReply({embeds:[{description:'認証に失敗したよ…', color:0xe74c3c}]}); } catch{}
-    }
-  });
-
-  // ようこそメッセージ
-  discordClient.on(Events.GuildMemberAdd, async(member)=>{
-    try{
-      const ch = await discordClient.channels.fetch(DISCORD_WELCOME_CHANNEL_ID).catch(()=>null);
-      if(!ch) return;
-      const memberCount = member.guild.members.cache.filter(m=>!m.user.bot).size;
-      await ch.send({embeds:[{
-        title: `${member.displayName}さんこんにちは！`,
-        description:
-          `現在のサーバーメンバーは**${memberCount}人**です！\n` +
-          `<#${DISCORD_RULES_CHANNEL_ID}> の確認と <#${DISCORD_INTRO_CHANNEL_ID}> をお願いします！`,
-        color: 0x7289da,
-        thumbnail: {url: member.user.displayAvatarURL()},
-      }]});
-    } catch(e){ console.error('[Discord] ようこそメッセージエラー:',e.message); }
   });
 
   // Discord → Chatwork転送 + 投稿規制 + メッセージ反応
@@ -1886,18 +1783,13 @@ if(DISCORD_BOT_TOKEN){
 
       // ━━ サーバー内のみ: 投稿規制チェック（botは除外）＋XP加算 ━━
       if(!isDM && !message.author.bot){
-        // XP加算（レベルアップ時のみ通知）
-        addDiscordXp(message.member, message.guild.id).catch(e=>{
-          console.error('[XP] エラー:', e.message);
-        });
-
-        // 投稿規制チェック（管理者は除外）
+        addDiscordXp(message.member, message.guild.id).catch(()=>{});
         if(!isAdmin){
-          const pr = await dbQuery('SELECT ends_at FROM discord_prohibit WHERE channel_id=$1 AND ends_at>NOW()',[message.channel.id]);
-          if(pr.rowCount > 0){
+          const pr=await dbQuery('SELECT ends_at FROM discord_prohibit WHERE channel_id=$1 AND ends_at>NOW()',[message.channel.id]);
+          if(pr.rowCount>0){
             await message.delete().catch(()=>{});
-            const w = await message.channel.send(`<@${message.author.id}> 現在このチャンネルは発言禁止中だよ！`).catch(()=>null);
-            if(w) setTimeout(()=>w.delete().catch(()=>{}), 5000);
+            const w=await message.channel.send(`<@${message.author.id}> 現在このチャンネルは発言禁止中だよ！`).catch(()=>null);
+            if(w) setTimeout(()=>w.delete().catch(()=>{}),5000);
             return;
           }
         }
@@ -1932,6 +1824,70 @@ if(DISCORD_BOT_TOKEN){
         }
       }
     } catch(e){ console.error('[Discord] MessageCreate エラー:',e.message); }
+  });
+
+  // ようこそメッセージ
+  discordClient.on(Events.GuildMemberAdd, async(member)=>{
+    try{
+      const ch=await discordClient.channels.fetch(DISCORD_WELCOME_CHANNEL_ID).catch(()=>null);
+      if(!ch) return;
+      const memberCount=member.guild.members.cache.filter(m=>!m.user.bot).size;
+      await ch.send({embeds:[{
+        title:`${member.displayName}さんこんにちは！`,
+        description:
+          `現在のサーバーメンバーは**${memberCount}人**です！\n`+
+          `<#${DISCORD_RULES_CHANNEL_ID}> の確認と <#${DISCORD_INTRO_CHANNEL_ID}> をお願いします！`,
+        color:0x7289da,
+        thumbnail:{url:member.user.displayAvatarURL()},
+      }]});
+    }catch(e){console.error('[Discord] ようこそメッセージエラー:',e.message);}
+  });
+
+  // ロールパネル SelectMenu処理
+  discordClient.on(Events.InteractionCreate, async(interaction)=>{
+    if(!interaction.isStringSelectMenu()) return;
+    if(interaction.customId!=='role_panel_select') return;
+    try{
+      await interaction.deferReply({ephemeral:true});
+      const member=interaction.member, guild=interaction.guild;
+      const selected=new Set(interaction.values);
+      const allOpts=interaction.component.options.map(o=>o.value);
+      const added=[],removed=[];
+      for(const roleId of allOpts){
+        const role=guild.roles.cache.get(roleId); if(!role) continue;
+        const has=member.roles.cache.has(roleId);
+        if(selected.has(roleId)&&!has){await member.roles.add(role).catch(()=>{}); added.push(role.name);}
+        else if(!selected.has(roleId)&&has){await member.roles.remove(role).catch(()=>{}); removed.push(role.name);}
+      }
+      const lines=[];
+      if(added.length)   lines.push(`付与：${added.join('、')}`);
+      if(removed.length) lines.push(`解除：${removed.join('、')}`);
+      await interaction.editReply({embeds:[{title:'ロール更新完了',description:lines.length?lines.join('\n'):'変更なし',color:0x2ecc71}]});
+    }catch(e){
+      console.error('[Discord] ロールパネルエラー:',e.message);
+      try{await interaction.editReply({embeds:[{title:'エラー',description:'ロールの更新に失敗したよ',color:0xe74c3c}]});}catch{}
+    }
+  });
+
+  // 認証ボタン処理
+  discordClient.on(Events.InteractionCreate, async(interaction)=>{
+    if(!interaction.isButton()) return;
+    if(!interaction.customId.startsWith('verify_btn:')) return;
+    try{
+      await interaction.deferReply({ephemeral:true});
+      const roleId=interaction.customId.split(':')[1];
+      const member=interaction.member;
+      if(member.roles.cache.has(roleId)){
+        await interaction.editReply({embeds:[{description:'すでに認証済みだよ！',color:0x2ecc71}]}); return;
+      }
+      const role=interaction.guild.roles.cache.get(roleId)||await interaction.guild.roles.fetch(roleId).catch(()=>null);
+      if(!role){await interaction.editReply({embeds:[{description:'ロールが見つからなかったよ',color:0xe74c3c}]}); return;}
+      await member.roles.add(role);
+      await interaction.editReply({embeds:[{description:`認証完了！**${role.name}**が付与されたよ！`,color:0x2ecc71}]});
+    }catch(e){
+      console.error('[Discord] 認証ボタンエラー:',e.message);
+      try{await interaction.editReply({embeds:[{description:'認証に失敗したよ…',color:0xe74c3c}]});}catch{}
+    }
   });
 
   discordClient.login(DISCORD_BOT_TOKEN).catch(e=>console.error('[Discord] ログインエラー:',e.message));
