@@ -1421,6 +1421,19 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('ng_add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+
+      // ロールパネル（ロール候補から選択式、title+role1~24=25個）
+      (() => {
+        const cmd = new SlashCommandBuilder().setName('role_panel').setDescription('ロールパネルを作成するよ（最大24ロール）').addStringOption(o=>o.setName('title').setDescription('パネルのタイトル').setRequired(true));
+        for(let i=1;i<=24;i++) cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));
+        return cmd.setDefaultMemberPermissions(ADMIN_PERM);
+      })(),
+      // 認証パネル
+      new SlashCommandBuilder().setName('verify').setDescription('認証パネルを作成するよ')
+        .addRoleOption(o=>o.setName('role').setDescription('認証時に付与するロール').setRequired(true))
+        .addStringOption(o=>o.setName('title').setDescription('パネルのタイトル（省略可）'))
+        .addStringOption(o=>o.setName('description').setDescription('パネルの説明文（省略可）'))
+        .setDefaultMemberPermissions(ADMIN_PERM),
     ].map(c=>c.toJSON());
 
     try{
@@ -1746,6 +1759,50 @@ if(DISCORD_BOT_TOKEN){
         const r=await dbQuery('SELECT word FROM ng_words WHERE room_id=$1 ORDER BY created_at',[CW_ROOM]);
         if(!r.rows.length){ await reply('NGワードはまだ登録されてないよ', {title:'CW NGワード一覧'}); return; }
         await reply(r.rows.map(x=>`・${x.word}`).join('\n'), {title:'CW NGワード一覧'}); return;
+      }
+
+
+      // ── role_panel ──
+      if(cmd==='role_panel'){
+        if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
+        const title=interaction.options.getString('title');
+        const options=[];
+        for(let i=1;i<=24;i++){
+          const role=interaction.options.getRole(`role${i}`);
+          if(role) options.push({label:role.name,value:role.id});
+        }
+        if(!options.length){ await replyErr('ロールを1つ以上指定してね'); return; }
+        const {ActionRowBuilder,StringSelectMenuBuilder}=require('discord.js');
+        const menu=new StringSelectMenuBuilder()
+          .setCustomId('role_panel_select')
+          .setPlaceholder('ロールを選択してね（複数選択可）')
+          .setMinValues(0).setMaxValues(options.length)
+          .addOptions(options);
+        await interaction.editReply({
+          embeds:[{title,description:'メニューからロールを選択するとロールが付与・解除されるよ！',color:0x7289da}],
+          components:[new ActionRowBuilder().addComponents(menu)],
+          content:''
+        });
+        return;
+      }
+
+      // ── verify ──
+      if(cmd==='verify'){
+        if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
+        const role =interaction.options.getRole('role');
+        const title=interaction.options.getString('title')||'認証';
+        const desc =interaction.options.getString('description')||'ボタンを押すと認証されてロールが付与されるよ！';
+        const {ActionRowBuilder,ButtonBuilder,ButtonStyle}=require('discord.js');
+        const btn=new ButtonBuilder()
+          .setCustomId(`verify_btn:${role.id}`)
+          .setLabel('認証する')
+          .setStyle(ButtonStyle.Primary);
+        await interaction.editReply({
+          embeds:[{title,description:desc,color:0x2ecc71,footer:{text:`付与されるロール: ${role.name}`}}],
+          components:[new ActionRowBuilder().addComponents(btn)],
+          content:''
+        });
+        return;
       }
 
       await reply('不明なコマンドだよ', {color:0xe74c3c});
