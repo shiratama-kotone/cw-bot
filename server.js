@@ -1091,6 +1091,254 @@ app.get('/status',async(req,res)=>{
   res.json({status:'元気！',timestamp:new Date().toISOString(),uptime:process.uptime(),dbAvailable,jiraiToggles:t});
 });
 
+// GET /msg-post → 送信UI（Chatwork/Discord選択可）
+app.get('/msg-post', (req,res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>メッセージ送信</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#1a1a2e;min-height:100vh;display:flex;justify-content:center;align-items:flex-start;padding:30px 20px;}
+.card{background:#16213e;border-radius:16px;padding:32px;width:100%;max-width:640px;box-shadow:0 8px 32px rgba(0,0,0,.4);}
+h1{color:#e2e8f0;font-size:22px;margin-bottom:24px;text-align:center;}
+.tabs{display:flex;gap:8px;margin-bottom:24px;}
+.tab{flex:1;padding:10px;border:2px solid #2d3748;border-radius:10px;background:transparent;color:#a0aec0;cursor:pointer;font-size:14px;transition:.2s;}
+.tab.active{border-color:#667eea;background:#667eea22;color:#e2e8f0;}
+.section{display:none;} .section.active{display:block;}
+label{display:block;color:#a0aec0;font-size:13px;margin-bottom:6px;margin-top:16px;}
+input,select,textarea{width:100%;padding:10px 14px;background:#0f3460;border:1.5px solid #2d3748;border-radius:8px;color:#e2e8f0;font-size:14px;transition:.2s;}
+input:focus,select:focus,textarea:focus{outline:none;border-color:#667eea;}
+select option{background:#0f3460;}
+textarea{min-height:130px;resize:vertical;font-family:inherit;}
+.row{display:flex;gap:10px;}
+.row>*{flex:1;}
+.emoji-bar{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:120px;overflow-y:auto;background:#0f3460;border-radius:8px;padding:8px;}
+.emoji-btn{background:#1a2744;border:1px solid #2d3748;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:18px;transition:.15s;}
+.emoji-btn:hover{background:#2d3748;}
+.send-btn{width:100%;margin-top:20px;padding:13px;background:linear-gradient(135deg,#667eea,#764ba2);border:none;border-radius:10px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;transition:.2s;}
+.send-btn:hover{opacity:.9;transform:translateY(-1px);}
+.send-btn:disabled{opacity:.5;cursor:not-allowed;transform:none;}
+.msg{padding:12px;border-radius:8px;margin-top:14px;font-size:13px;display:none;}
+.msg.ok{background:#1a3a1a;color:#68d391;border:1px solid #2f6a2f;}
+.msg.err{background:#3a1a1a;color:#fc8181;border:1px solid #6a2f2f;}
+.hint{font-size:11px;color:#718096;margin-top:4px;}
+.channel-list{max-height:200px;overflow-y:auto;margin-top:6px;}
+.channel-item{padding:8px 12px;border-radius:6px;cursor:pointer;color:#a0aec0;font-size:13px;transition:.15s;}
+.channel-item:hover{background:#1e3a6e;color:#e2e8f0;}
+.channel-item.selected{background:#667eea33;color:#e2e8f0;}
+.badge{font-size:10px;background:#2d3748;padding:2px 6px;border-radius:4px;margin-left:6px;color:#718096;}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>メッセージ送信</h1>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('cw')">Chatwork</button>
+    <button class="tab" onclick="switchTab('dc')">Discord</button>
+  </div>
+
+  <!-- Chatwork -->
+  <div id="sec-cw" class="section active">
+    <label>ルームID</label>
+    <input id="cw-room" type="text" placeholder="例: 415060980">
+    <label>メッセージ</label>
+    <textarea id="cw-msg" placeholder="送信内容を入力してください"></textarea>
+    <p class="hint">Chatworkタグも使えるよ（[info][title]...[/title]...[/info] など）</p>
+    <button class="send-btn" onclick="sendCw()">Chatworkに送信</button>
+  </div>
+
+  <!-- Discord -->
+  <div id="sec-dc" class="section">
+    <label>サーバー</label>
+    <select id="dc-guild" onchange="onGuildChange()">
+      <option value="">-- サーバーを選択 --</option>
+    </select>
+
+    <label>チャンネル</label>
+    <select id="dc-channel">
+      <option value="">-- チャンネルを選択 --</option>
+    </select>
+
+    <label>メッセージ</label>
+    <textarea id="dc-msg" placeholder="送信内容を入力してください"></textarea>
+
+    <label>絵文字 <span class="badge">クリックで挿入</span></label>
+    <div id="emoji-bar" class="emoji-bar"><span style="color:#4a5568;font-size:12px">サーバーを選択すると絵文字が表示されるよ</span></div>
+
+    <button class="send-btn" onclick="sendDc()">Discordに送信</button>
+  </div>
+
+  <div id="msg-box" class="msg"></div>
+</div>
+
+<script>
+let currentTab = 'cw';
+function switchTab(tab){
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['cw','dc'][i]===tab));
+  document.getElementById('sec-cw').classList.toggle('active',tab==='cw');
+  document.getElementById('sec-dc').classList.toggle('active',tab==='dc');
+}
+
+function showMsg(text, ok){
+  const el = document.getElementById('msg-box');
+  el.textContent = text;
+  el.className = 'msg ' + (ok?'ok':'err');
+  el.style.display = 'block';
+  setTimeout(()=>el.style.display='none', 5000);
+}
+
+// サーバー一覧を取得
+async function loadGuilds(){
+  const sel = document.getElementById('dc-guild');
+  try{
+    const r = await fetch('/api/discord/guilds');
+    const guilds = await r.json();
+    sel.innerHTML = '<option value="">-- サーバーを選択 --</option>';
+    guilds.forEach(g=>{
+      const o = document.createElement('option');
+      o.value = g.id; o.textContent = g.name;
+      sel.appendChild(o);
+    });
+  }catch(e){ sel.innerHTML = '<option value="">サーバー取得失敗</option>'; }
+}
+
+async function onGuildChange(){
+  const guildId = document.getElementById('dc-guild').value;
+  const chSel = document.getElementById('dc-channel');
+  const emojiBar = document.getElementById('emoji-bar');
+  chSel.innerHTML = '<option value="">読み込み中...</option>';
+  emojiBar.innerHTML = '<span style="color:#4a5568;font-size:12px">読み込み中...</span>';
+  if(!guildId){ chSel.innerHTML='<option value="">-- チャンネルを選択 --</option>'; emojiBar.innerHTML='<span style="color:#4a5568;font-size:12px">サーバーを選択すると絵文字が表示されるよ</span>'; return; }
+  // チャンネル取得
+  try{
+    const r = await fetch('/api/discord/channels?guild='+guildId);
+    const channels = await r.json();
+    chSel.innerHTML = '<option value="">-- チャンネルを選択 --</option>';
+    channels.forEach(c=>{
+      const o = document.createElement('option');
+      o.value = c.id; o.textContent = '#'+c.name;
+      chSel.appendChild(o);
+    });
+  }catch(e){ chSel.innerHTML='<option value="">チャンネル取得失敗</option>'; }
+  // 絵文字取得
+  try{
+    const r = await fetch('/api/discord/emojis?guild='+guildId);
+    const emojis = await r.json();
+    if(!emojis.length){ emojiBar.innerHTML='<span style="color:#4a5568;font-size:12px">絵文字なし</span>'; return; }
+    emojiBar.innerHTML = '';
+    emojis.forEach(e=>{
+      const btn = document.createElement('button');
+      btn.className = 'emoji-btn';
+      btn.title = e.name;
+      if(e.url){ const img=document.createElement('img');img.src=e.url;img.style.width='20px';img.style.height='20px';img.style.verticalAlign='middle';btn.appendChild(img); }
+      else btn.textContent = e.char;
+      btn.onclick = ()=>{
+        const ta = document.getElementById('dc-msg');
+        const ins = e.code || e.char;
+        const pos = ta.selectionStart;
+        ta.value = ta.value.slice(0,pos)+ins+ta.value.slice(ta.selectionEnd);
+        ta.selectionStart = ta.selectionEnd = pos+ins.length;
+        ta.focus();
+      };
+      emojiBar.appendChild(btn);
+    });
+  }catch(e){ emojiBar.innerHTML='<span style="color:#4a5568;font-size:12px">絵文字取得失敗</span>'; }
+}
+
+async function sendCw(){
+  const roomid = document.getElementById('cw-room').value.trim();
+  const msg = document.getElementById('cw-msg').value;
+  if(!roomid||!msg){ showMsg('ルームIDとメッセージを入力してね', false); return; }
+  const btn = document.querySelector('#sec-cw .send-btn');
+  btn.disabled = true; btn.textContent = '送信中...';
+  try{
+    const r = await fetch('/msg-post', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomid,msg})});
+    const d = await r.json();
+    if(d.status==='success') showMsg('Chatworkに送信したよ！(ID:'+d.messageId+')', true);
+    else showMsg('エラー: '+d.message, false);
+  }catch(e){ showMsg('エラー: '+e.message, false); }
+  btn.disabled = false; btn.textContent = 'Chatworkに送信';
+}
+
+async function sendDc(){
+  const channelId = document.getElementById('dc-channel').value;
+  const msg = document.getElementById('dc-msg').value;
+  if(!channelId||!msg){ showMsg('チャンネルとメッセージを入力してね', false); return; }
+  const btn = document.querySelector('#sec-dc .send-btn');
+  btn.disabled = true; btn.textContent = '送信中...';
+  try{
+    const r = await fetch('/api/discord/send', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channelId,content:msg})});
+    const d = await r.json();
+    if(d.status==='success') showMsg('Discordに送信したよ！', true);
+    else showMsg('エラー: '+d.message, false);
+  }catch(e){ showMsg('エラー: '+e.message, false); }
+  btn.disabled = false; btn.textContent = 'Discordに送信';
+}
+
+loadGuilds();
+</script>
+</body>
+</html>`);
+});
+
+// Discord API: サーバー一覧
+app.get('/api/discord/guilds', (req,res) => {
+  if(!discordClient){ return res.json([]); }
+  const guilds = discordClient.guilds.cache.map(g=>({id:g.id, name:g.name}));
+  res.json(guilds);
+});
+
+// Discord API: チャンネル一覧（テキストチャンネルのみ）
+app.get('/api/discord/channels', async(req,res) => {
+  const {guild:guildId} = req.query;
+  if(!discordClient||!guildId) return res.json([]);
+  try{
+    const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId).catch(()=>null);
+    if(!guild) return res.json([]);
+    await guild.channels.fetch().catch(()=>{});
+    const channels = guild.channels.cache
+      .filter(c => c.type === 0) // GUILD_TEXT
+      .sort((a,b) => a.position - b.position)
+      .map(c => ({id:c.id, name:c.name}));
+    res.json(channels);
+  }catch(e){ res.status(500).json([]); }
+});
+
+// Discord API: 絵文字一覧
+app.get('/api/discord/emojis', async(req,res) => {
+  const {guild:guildId} = req.query;
+  if(!discordClient||!guildId) return res.json([]);
+  try{
+    const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId).catch(()=>null);
+    if(!guild) return res.json([]);
+    await guild.emojis.fetch().catch(()=>{});
+    const emojis = guild.emojis.cache.map(e=>({
+      id: e.id, name: e.name,
+      url: e.imageURL({size:32}),
+      code: `<${e.animated?'a':''}:${e.name}:${e.id}>`,
+      char: ''
+    }));
+    res.json(emojis);
+  }catch(e){ res.status(500).json([]); }
+});
+
+// Discord API: メッセージ送信
+app.post('/api/discord/send', async(req,res) => {
+  const {channelId, content} = req.body;
+  if(!channelId||!content) return res.status(400).json({status:'error',message:'channelIdとcontentは必須です'});
+  if(!discordClient) return res.status(503).json({status:'error',message:'Discord botが起動していません'});
+  try{
+    const ch = await discordClient.channels.fetch(channelId).catch(()=>null);
+    if(!ch) return res.status(404).json({status:'error',message:'チャンネルが見つかりません'});
+    await ch.send(content);
+    res.json({status:'success'});
+  }catch(e){ res.status(500).json({status:'error',message:e.message}); }
+});
+
 app.post('/msg-post', async (req,res) => {
   try {
     const {roomid,msg}=req.body;
