@@ -72,18 +72,53 @@ async function addDiscordXp(member,guildId){
 function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min;}
 function fmt(n){return Number(n).toLocaleString()+'円';}
 const JOBS={
-  'コンビニアルバイト':{tier:'初級',cost:0,desc:'安定して少額稼げる',work:()=>{const b=rand(80,200);return{earned:b,msg:`レジ打ちをした。**${b}円**稼いだ！`};}},
-  '新聞配達':{tier:'初級',cost:30000,desc:'朝限定ボーナス(+100円)あり',work:()=>{const b=rand(100,250);const h=parseInt(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo',hour:'numeric',hour12:false}));const bo=(h>=5&&h<=8)?100:0;return{earned:b+bo,msg:`新聞を配達した。**${b}円**${bo?` + 朝ボーナス**${bo}円**`:''}稼いだ！`};}},
-  '清掃員':{tier:'初級',cost:50000,desc:'安定収入',work:()=>{const b=rand(150,300);return{earned:b,msg:`施設を清掃した。**${b}円**稼いだ！`};}},
-  'カフェ店員':{tier:'中級',cost:200000,desc:'接客成功で追加報酬',work:()=>{const b=rand(300,600);const bo=Math.random()<0.4?rand(100,300):0;return{earned:b+bo,msg:`カフェで接客した。**${b}円**${bo?` + 接客ボーナス**${bo}円**`:''}稼いだ！`};}},
-  '工場作業員':{tier:'中級',cost:300000,desc:'そこそこ安定',work:()=>{const b=rand(400,800);return{earned:b,msg:`工場ラインで作業した。**${b}円**稼いだ！`};}},
-  'プログラマー':{tier:'中級',cost:500000,desc:'収入のブレ大きめ。低確率で高額案件',work:()=>{if(Math.random()<0.08){const v=rand(5000,20000);return{earned:v,msg:`大型案件を受注！**${v}円**の大金！`};}const b=rand(500,1500);return{earned:b,msg:`コードを書いた。**${b}円**稼いだ！`};}},
-  '配信者':{tier:'中級',cost:700000,desc:'バズると超高収入。炎上イベントあり',work:()=>{const r=Math.random();if(r<0.05){const v=rand(20000,80000);return{earned:v,msg:`配信がバズった！**${v}円**！`};}if(r<0.12){const v=rand(500,2000);return{earned:-v,msg:`炎上した…**${v}円**損した…`};}const b=rand(600,2000);return{earned:b,msg:`配信した。スパチャ**${b}円**もらった！`};}},
-  '投資家':{tier:'上級',cost:1500000,desc:'運要素強め',work:()=>{const r=Math.random();if(r<0.3){const v=rand(5000,30000);return{earned:v,msg:`株急騰！**${v}円**の利益！`};}if(r<0.5){const v=rand(1000,8000);return{earned:-v,msg:`株暴落…**${v}円**の損失…`};}const b=rand(1000,5000);return{earned:b,msg:`ポートフォリオ順調。**${b}円**の利益！`};}},
-  '医者':{tier:'上級',cost:3000000,desc:'超安定高収入',work:()=>{const b=rand(3000,7000);return{earned:b,msg:`患者を診察した。**${b}円**の報酬！`};}},
-  '会社社長':{tier:'上級',cost:5000000,desc:'高収入だけど失敗時減額大きい',work:()=>{if(Math.random()<0.6){const v=rand(5000,15000);return{earned:v,msg:`事業好調！**${v}円**の収益！`};}const v=rand(2000,10000);return{earned:-v,msg:`事業失敗…**${v}円**の損失…`};}},
-  'ギャンブラー':{tier:'特殊',cost:1000000,desc:'収入がかなりランダム',work:()=>{const r=Math.random();if(r<0.05){const v=rand(50000,200000);return{earned:v,msg:`大当たり！**${v}円**！`};}if(r<0.45){const v=rand(100,2000);return{earned:-v,msg:`負けた…**${v}円**失った…`};}const v=rand(500,5000);return{earned:v,msg:`勝った！**${v}円**もらった！`};}},
-  'ニート':{tier:'特殊',cost:0,desc:'お金は稼げないけど特殊効果あり（月曜朝6時に生活保護1000円支給）',work:()=>({earned:0,msg:'ニートは働かない。ゴロゴロしていた。'})},
+  'コンビニアルバイト':{tier:'初級',cost:0,desc:'安定して少額稼げる',
+    work:(_eco)=>{const b=rand(1057,1300);return{earned:b,msg:`🏪 レジ打ちをした。**${b}円**稼いだ！`};}},
+  '新聞配達':{tier:'初級',cost:30000,desc:'朝限定ボーナスあり',
+    work:(_eco)=>{const b=rand(1200,1600);const h=parseInt(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo',hour:'numeric',hour12:false}));const bo=(h>=5&&h<=8)?rand(100,500):0;return{earned:b+bo,msg:`📰 新聞を配達した。**${b}円**${bo?` + 朝ボーナス**${bo}円**`:''}稼いだ！`};}},
+  '清掃員':{tier:'初級',cost:50000,desc:'安定収入',
+    work:(_eco)=>{const b=rand(1400,1800);return{earned:b,msg:`🧹 施設を清掃した。**${b}円**稼いだ！`};}},
+  'カフェ店員':{tier:'中級',cost:200000,desc:'接客成功で追加報酬。クレームリスクあり',
+    work:(_eco)=>{const b=rand(1600,2500);const r=Math.random();let bo=0,extra='';if(r<0.3){bo=rand(500,2000);extra=` + 接客成功ボーナス**${bo}円**`;}else if(r<0.4){bo=-500;extra=` + クレーム発生**500円**損した…`;}return{earned:b+bo,msg:`☕ カフェで接客した。**${b}円**${extra}稼いだ！`};}},
+  '工場作業員':{tier:'中級',cost:300000,desc:'安定寄り。生産目標達成ボーナスあり',
+    work:(_eco)=>{const b=rand(2000,3000);const bo=Math.random()<0.25?rand(1000,3000):0;return{earned:b+bo,msg:`🏭 工場ラインで作業した。**${b}円**${bo?` + 目標達成ボーナス**${bo}円**`:''}稼いだ！`};}},
+  'プログラマー':{tier:'中級',cost:500000,desc:'収入のブレ大きめ。大型案件で爆発的収入',
+    work:(_eco)=>{const r=Math.random();if(r<0.03){const v=rand(20000,100000);return{earned:v,msg:`💻 🚀 大型案件を受注！！**${v}円**の大金！`};}if(r<0.35){const v=rand(3000,8000);return{earned:v,msg:`💻 📦 開発案件をこなした。**${v}円**稼いだ！`};}const b=rand(500,2000);return{earned:b,msg:`💻 🐛 バグを修正した。**${b}円**稼いだ！`};}},
+  '配信者':{tier:'中級',cost:700000,desc:'バズると超高収入。炎上・隠しイベントあり',
+    work:(eco)=>{
+      const videos=parseInt(eco.video_count||0);
+      // 動画本数による隠しイベント倍率
+      let hiddenMult=1;
+      if(videos>=500)hiddenMult=2;
+      else if(videos>=100)hiddenMult=1.5;
+      else if(videos>=50)hiddenMult=1.25;
+      else if(videos>=10)hiddenMult=1.1;
+      const r=Math.random();
+      // 隠しイベント（動画1本以上が条件）
+      if(videos>=1){
+        const hr=Math.random();
+        if(hr<0.00005*hiddenMult){const v=rand(500000,5000000);return{earned:v,msg:`📹 🌟 過去の動画がミーム化した！！**${v}円**の超収入！！！`,videoAdd:0};}
+        if(hr<0.0002*hiddenMult){const v=rand(50000,500000);return{earned:v,msg:`📹 🎬 切り抜き動画が話題になった！**${v}円**の収入！！`,videoAdd:0};}
+        if(hr<0.0005*hiddenMult){const v=rand(10000,100000);return{earned:v,msg:`📹 📈 過去動画がおすすめに掲載された！**${v}円**の収入！`,videoAdd:0};}
+      }
+      // 通常イベント
+      if(r<0.05){const v=rand(10000,50000);return{earned:v,msg:`📹 🔥 動画がバズった！！**${v}円**の収入！`,videoAdd:1};}
+      if(r<0.1){const v=rand(5000,20000);return{earned:-v,msg:`📹 💥 炎上した…**${v}円**の損失…`,videoAdd:1};}
+      if(r<0.25){const v=rand(3000,8000);return{earned:v,msg:`📹 👀⭐ 動画が視聴されてチャンネル登録もされた！**${v}円**！`,videoAdd:1};}
+      if(r<0.45){const v=rand(2000,5000);return{earned:v,msg:`📹 ⭐ チャンネル登録された！**${v}円**！`,videoAdd:1};}
+      if(r<0.65){const v=rand(500,2000);return{earned:v,msg:`📹 👀 動画が視聴された。**${v}円**！`,videoAdd:1};}
+      return{earned:0,msg:`📹 🎥 動画を投稿した。(動画本数+1)`,videoAdd:1};
+    }},
+  '投資家':{tier:'上級',cost:1500000,desc:'運要素強め。大成功・暴落あり',
+    work:(_eco)=>{const r=Math.random();if(r<0.05){const v=rand(100000,500000);return{earned:v,msg:`🎲 📈 大成功！**${v}円**の利益！`};}if(r<0.15){const v=rand(20000,100000);return{earned:v,msg:`🎲 📈 株が急騰！**${v}円**の利益！`};}if(r<0.35){const v=rand(10000,50000);return{earned:-v,msg:`🎲 📉 暴落…**${v}円**の大損失…`};}if(r<0.5){const v=rand(1000,10000);return{earned:-v,msg:`🎲 📉 下落…**${v}円**の損失…`};}const b=rand(5000,20000);return{earned:b,msg:`🎲 📊 ポートフォリオ順調。**${b}円**の利益！`};}},
+  '医者':{tier:'上級',cost:3000000,desc:'超安定高収入。緊急手術成功ボーナスあり',
+    work:(_eco)=>{const b=rand(5000,8000);const bo=Math.random()<0.2?rand(5000,20000):0;return{earned:b+bo,msg:`🩺 患者を診察した。**${b}円**${bo?` + 緊急手術成功ボーナス**${bo}円**`:''}の報酬！`};}},
+  '会社社長':{tier:'上級',cost:5000000,desc:'高収入。大成功で爆発的利益、経営失敗で大損失',
+    work:(_eco)=>{const r=Math.random();if(r<0.15){const v=rand(20000,200000);return{earned:v,msg:`🏢 📈 事業大成功！**${v}円**の収益！`};}if(r<0.4){const v=rand(10000,100000);return{earned:-v,msg:`🏢 📉 経営失敗…**${v}円**の損失…`};}const b=rand(3000,15000);return{earned:b,msg:`🏢 事業が順調。**${b}円**の収益！`};}},
+  'ギャンブラー':{tier:'特殊',cost:1000000,desc:'完全ランダム。ジャックポットで100万円！',
+    work:(_eco)=>{const r=Math.random();if(r<0.001){return{earned:1000000,msg:`🎰 👑 ジャックポット！！！**1,000,000円**！！！！！！！！！`};}if(r<0.05){const v=rand(20000,50000);return{earned:v,msg:`🎰 😎 大勝ち！**${v}円**！！`};}if(r<0.2){const v=rand(2000,5000);return{earned:v,msg:`🎰 🙂 小勝ち。**${v}円**！`};}if(r<0.5){const v=rand(1000,5000);return{earned:-v,msg:`🎰 😐 小負け。**${v}円**失った…`};}const v=rand(10000,50000);return{earned:-v,msg:`🎰 💀 大敗！**${v}円**失った…`};}},
+  'ニート':{tier:'特殊',cost:0,desc:'お金は稼げないけど特殊効果あり（月曜朝6時に生活保護1000円支給）',
+    work:(_eco)=>({earned:0,msg:'ゴロゴロしていた。'})},
 };
 function workLimitForLevel(lv){if(lv>=1000)return 25;if(lv>=500)return 20;if(lv>=100)return 15;if(lv>=50)return 10;if(lv>=10)return 7;return 5;}
 async function getEconomy(guildId,userId){
@@ -267,7 +302,15 @@ async function initializeDatabase() {
 
     await dbQuery(`CREATE TABLE IF NOT EXISTS discord_levels (id SERIAL PRIMARY KEY,guild_id TEXT NOT NULL,user_id TEXT NOT NULL,xp BIGINT DEFAULT 0,level INT DEFAULT 0,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE(guild_id,user_id))`);
     await dbQuery(`CREATE INDEX IF NOT EXISTS idx_dl ON discord_levels(guild_id,xp DESC)`);
-    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_economy (id SERIAL PRIMARY KEY,guild_id TEXT NOT NULL,user_id TEXT NOT NULL,wallet BIGINT DEFAULT 0,bank BIGINT DEFAULT 0,job TEXT DEFAULT 'ニート',work_count INT DEFAULT 0,work_reset_date DATE DEFAULT CURRENT_DATE,last_work_at TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE(guild_id,user_id))`);
+    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_economy (id SERIAL PRIMARY KEY,guild_id TEXT NOT NULL,user_id TEXT NOT NULL,wallet BIGINT DEFAULT 0,bank BIGINT DEFAULT 0,job TEXT DEFAULT 'ニート',work_count INT DEFAULT 0,work_reset_date DATE DEFAULT CURRENT_DATE,last_work_at TIMESTAMP,video_count INT DEFAULT 0,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE(guild_id,user_id))`);
+    await dbQuery(`ALTER TABLE discord_economy ADD COLUMN IF NOT EXISTS video_count INT DEFAULT 0`);
+
+    await dbQuery(`CREATE TABLE IF NOT EXISTS events (
+      id SERIAL PRIMARY KEY,
+      event_date TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(event_date, content))`);
 
     console.log('[DB] テーブル初期化完了');
   } catch (e) { console.error('[DB] 初期化エラー:', e.message); }
@@ -328,18 +371,14 @@ const API_CACHE = new Map();
 function addToCache(k,v) { if(API_CACHE.size>=50) API_CACHE.delete(API_CACHE.keys().next().value); API_CACHE.set(k,v); }
 
 // ============================================================
-// day.json
+// イベント取得（DBベース、day.json廃止）
 // ============================================================
-async function loadDayEvents() {
-  try { return (await axios.get(DAY_JSON_URL)).data; } catch { return {}; }
-}
 async function getTodaysEvents() {
   try {
-    const data = await loadDayEvents();
-    const jst  = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));
-    const key  = `${String(jst.getMonth()+1).padStart(2,'0')}-${String(jst.getDate()).padStart(2,'0')}`;
-    const ev   = data[key] || [];
-    return Array.isArray(ev) ? ev : [ev];
+    const jst = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));
+    const key = `${String(jst.getMonth()+1).padStart(2,'0')}-${String(jst.getDate()).padStart(2,'0')}`;
+    const r = await dbQuery('SELECT content FROM events WHERE event_date=$1 ORDER BY created_at',[key]);
+    return r.rows.map(row=>row.content);
   } catch { return []; }
 }
 
@@ -1024,6 +1063,32 @@ async function processWebHook(data) {
         await CW.send(roomId,ns?`${label}がONになりました。(確率：${prob})`:`${label}がOFFになりました。`); return;
       }
     }
+    if(messageBody.startsWith('/event ')){
+      const parts=messageBody.substring(7).trim().split(/\s+/);
+      const sub=parts[0];
+      if(sub==='add'){
+        if(!await adminOnly()) return;
+        const date=parts[1],content=parts.slice(2).join(' ');
+        if(!date||!content||!/^\d{2}-\d{2}$/.test(date)){ await rp('使い方: /event add MM-DD 内容'); return; }
+        await dbQuery('INSERT INTO events (event_date,content) VALUES ($1,$2) ON CONFLICT DO NOTHING',[date,content]);
+        await rp(`**${date}** に「${content}」を登録したよ！`); return;
+      }
+      if(sub==='list'){
+        const date=parts[1]||(() => { const jst=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'})); return `${String(jst.getMonth()+1).padStart(2,'0')}-${String(jst.getDate()).padStart(2,'0')}`; })();
+        const r=await dbQuery('SELECT id,content FROM events WHERE event_date=$1 ORDER BY created_at',[date]);
+        if(!r.rows.length){ await rp(`${date} にイベントはないよ`); return; }
+        await rp(`[info][title]${date} のイベント[/title]\n${r.rows.map(row=>`ID:${row.id} ${row.content}`).join('\n')}[/info]`); return;
+      }
+      if(sub==='del'){
+        if(!await adminOnly()) return;
+        const id=parseInt(parts[1]);
+        if(isNaN(id)){ await rp('使い方: /event del {ID}'); return; }
+        const r=await dbQuery('DELETE FROM events WHERE id=$1 RETURNING event_date,content',[id]);
+        if(!r.rows.length){ await rp(`ID:${id} のイベントは見つからなかったよ`); return; }
+        await rp(`「${r.rows[0].content}」（${r.rows[0].event_date}）を削除したよ`); return;
+      }
+      await rp('使い方: /event add MM-DD 内容 / /event list [MM-DD] / /event del {ID}'); return;
+    }
     if(messageBody==='/help'){
       const common='[info][title]コマンド一覧だよっ！[/title]/help - このヘルプを表示\n[hr]/today - 今日の日付とイベント\n[hr]/test - あなたとこの部屋の情報\n[hr]/info - この部屋の情報\n[hr]/member - メンバー一覧\n[hr]/member-name - メンバー名一覧\n[hr]/romera - 今日のメッセージ数ランキング\n[hr]/message-total - 累計発言数ランキング\n[hr]/points - 自分のポイントを確認\n[hr]/points-all - 全員のポイントランキング\n[hr]/send {ID} {pt} - ポイントを送る\n[hr]/yes-or-no - yes/noをランダム回答\n[hr]/wiki 検索ワード - Wikipedia検索\n[hr]/lyric URL - 歌詞を取得\n[hr]/song-typing-info 曲ID - 歌詞タイピング情報\n[hr]/alarm YYYY-MM-DD HH:MM メッセージ - アラーム設定\n[hr]/scratch-user ユーザー名 - Scratchユーザー情報\n[hr]/scratch-project プロジェクトID - Scratch作品情報\n[hr]/komekasegi - 過疎対策コメ連打\n[hr]/disself - 自分の権限を下げる\n[hr]おみくじ / おみくじ10連 / /yes-or-no - 運試し[/info]';
       const admin=isSenderAdmin?'\n[info][title]管理者専用コマンドだよっ！[/title]/info {ルームID} - 別ルームの情報を取得\n[hr]/kick {ID}... - キック\n[hr]/mute {ID}... - 閲覧のみに変更\n[hr]/blacklist - ブラックリスト確認\n[hr]/blacklist-add {ID}... - ブラックリストに追加\n[hr]/blacklist-del {ID}... - ブラックリストから削除\n[hr]/fever {時間} - フィーバータイム（例: 5m, 1h）\n[hr]/ng {言葉} - NGワード登録\n[hr]/ok {言葉} - NGワード削除\n[hr]/ng-check - NGワード一覧\n[hr]/gakusei /nyanko_a /milk /admin /yuyuyu - 地雷確率トグル\n[hr]/jirai-test - 地雷確率デバッグ\n[hr]/jirai-force - 地雷強制発動テスト[/info]':'';
@@ -1156,6 +1221,13 @@ textarea{min-height:130px;resize:vertical;font-family:inherit;}
     <select id="dc-guild" onchange="onGuildChange()">
       <option value="">-- サーバーを選択 --</option>
     </select>
+    <label>またはサーバーIDを直接入力 <span class="badge">上のプルダウンより優先</span></label>
+    <input id="dc-guild-manual" type="text" placeholder="サーバーID（例: 1357745161907470336）" oninput="onManualGuildInput()">
+    <label>またはサーバーIDを直接入力</label>
+    <div class="row">
+      <input id="dc-guild-manual" type="text" placeholder="サーバーID（例: 1357745161907470336）">
+      <button style="flex:0;padding:10px 16px;background:#667eea;border:none;border-radius:8px;color:#fff;cursor:pointer;white-space:nowrap;" onclick="onManualGuild()">取得</button>
+    </div>
 
     <label>チャンネル</label>
     <select id="dc-channel">
@@ -1606,6 +1678,11 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('ng_add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('event').setDescription('イベントを登録・一覧・削除するよ')
+        .addSubcommand(s=>s.setName('add').setDescription('イベントを登録するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、例: 06-15）').setRequired(true)).addStringOption(o=>o.setName('content').setDescription('イベント内容').setRequired(true)))
+        .addSubcommand(s=>s.setName('list').setDescription('指定日のイベント一覧を表示するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、省略で今日）')))
+        .addSubcommand(s=>s.setName('delete').setDescription('イベントを削除するよ').addIntegerOption(o=>o.setName('id').setDescription('イベントID').setRequired(true)))
+        .setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
       new SlashCommandBuilder().setName('work').setDescription('働いてお金を稼ぐよ（クールダウン30分）'),
       new SlashCommandBuilder().setName('job').setDescription('職一覧を見る'),
@@ -1922,7 +1999,7 @@ if(DISCORD_BOT_TOKEN){
         await reply(r.rows.map(x=>`・${x.word}`).join('\n'), {title:'CW NGワード一覧'}); return;
       }
       if(cmd==='rank'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}const uid=interaction.user.id;const r=await dbQuery('SELECT xp,level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,uid]);const xp=r.rows.length?parseInt(r.rows[0].xp):0,lv=r.rows.length?parseInt(r.rows[0].level):0;const nextXp=totalXpForLevel(lv+1),role=getRoleForLevel(lv),ar=role?interaction.guild.roles.cache.get(role.roleId):null;await reply(null,{title:`${interaction.member.displayName} のランク`,fields:[{name:'レベル',value:`**${lv}**`,inline:true},{name:'XP',value:`${xp.toLocaleString()}`,inline:true},{name:'次のLvまで',value:`${(nextXp-xp).toLocaleString()} XP`,inline:true},{name:'現在のロール',value:ar?ar.name:'なし',inline:true}],color:role?0xf39c12:0x7289da,footer:`次のLv${lv+1}に必要な累計XP: ${nextXp.toLocaleString()}`});return;}
-      if(cmd==='work'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid),lvRow=await dbQuery('SELECT level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[gid,uid]),lv=lvRow.rows.length?parseInt(lvRow.rows[0].level):0,limit=workLimitForLevel(lv),today=new Date().toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}),resetDate=eco.work_reset_date?new Date(eco.work_reset_date).toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}):null;let count=resetDate!==today?0:(eco.work_count||0);if(count>=limit){await replyErr(`今日の仕事回数上限（${limit}回）に達したよ！明日また来てね`);return;}if(eco.last_work_at){const diff=(Date.now()-new Date(eco.last_work_at).getTime())/60000;if(diff<30){await replyErr(`クールダウン中！あと**${Math.ceil(30-diff)}分**待ってね`);return;}}const job=JOBS[eco.job]||JOBS['ニート'],result=job.work(),newWallet=Math.max(0,parseInt(eco.wallet)+result.earned);await dbQuery('UPDATE discord_economy SET wallet=$1,work_count=$2,work_reset_date=CURRENT_DATE,last_work_at=NOW(),updated_at=NOW() WHERE guild_id=$3 AND user_id=$4',[newWallet,count+1,gid,uid]);await reply(result.msg+`\n\n所持金: **${fmt(newWallet)}** | 今日: ${count+1}/${limit}回`,{title:`${interaction.member.displayName} が${eco.job}として働いた！`,color:result.earned>0?0x2ecc71:result.earned<0?0xe74c3c:0x95a5a6,footer:`残りwork回数: ${limit-(count+1)}回`});return;}
+      if(cmd==='work'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid),lvRow=await dbQuery('SELECT level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[gid,uid]),lv=lvRow.rows.length?parseInt(lvRow.rows[0].level):0,limit=workLimitForLevel(lv),today=new Date().toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}),resetDate=eco.work_reset_date?new Date(eco.work_reset_date).toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}):null;let count=resetDate!==today?0:(eco.work_count||0);if(count>=limit){await replyErr(`今日の仕事回数上限（${limit}回）に達したよ！明日また来てね`);return;}if(eco.last_work_at){const diff=(Date.now()-new Date(eco.last_work_at).getTime())/60000;if(diff<30){await replyErr(`クールダウン中！あと**${Math.ceil(30-diff)}分**待ってね`);return;}}const job=JOBS[eco.job]||JOBS['ニート'],result=job.work(eco),newWallet=Math.max(0,parseInt(eco.wallet)+result.earned);const newVideoCount=parseInt(eco.video_count||0)+(result.videoAdd||0);await dbQuery('UPDATE discord_economy SET wallet=$1,work_count=$2,work_reset_date=CURRENT_DATE,last_work_at=NOW(),video_count=$5,updated_at=NOW() WHERE guild_id=$3 AND user_id=$4',[newWallet,count+1,gid,uid,newVideoCount]);await reply(result.msg+`\n\n所持金: **${fmt(newWallet)}** | 今日: ${count+1}/${limit}回${eco.job==='配信者'?' | 動画本数: '+newVideoCount+'本':''}`,{title:`${interaction.member.displayName} が${eco.job}として働いた！`,color:result.earned>0?0x2ecc71:result.earned<0?0xe74c3c:0x95a5a6,footer:`残りwork回数: ${limit-(count+1)}回`});return;}
       if(cmd==='job'){const tiers=['初級','中級','上級','特殊'];const fields=tiers.map(tier=>{const jobs=Object.entries(JOBS).filter(([,v])=>v.tier===tier);return{name:`【${tier}職】`,value:jobs.map(([n,v])=>`**${n}**（${v.cost>0?fmt(v.cost):'無料'}）\n${v.desc}`).join('\n\n'),inline:false};});await reply(null,{title:'職一覧',fields,color:0x7289da,footer:'転職は /job_set で。転職コストは所持金＋銀行の合計から判定'});return;}
       if(cmd==='job_info'){const jobName=interaction.options.getString('job'),job=JOBS[jobName];if(!job){await replyErr(`「${jobName}」という職は存在しないよ`);return;}await reply(job.desc,{title:job.tier+'職：'+jobName,fields:[{name:'転職コスト',value:job.cost>0?fmt(job.cost):'無料',inline:true},{name:'カテゴリ',value:job.tier,inline:true}],color:0x7289da});return;}
       if(cmd==='job_set'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}const jobName=interaction.options.getString('job'),job=JOBS[jobName];if(!job){await replyErr(`「${jobName}」という職は存在しないよ\n/job で職一覧を確認してね`);return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid);if(eco.job===jobName){await replyErr(`すでに${jobName}だよ`);return;}const total=parseInt(eco.wallet)+parseInt(eco.bank);if(total<job.cost){await replyErr(`転職コストが足りないよ！\n必要: ${fmt(job.cost)} / 所持: ${fmt(total)}`);return;}await dbQuery('UPDATE discord_economy SET job=$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[jobName,gid,uid]);await reply(`**${jobName}**に転職したよ！\n${job.desc}`,{title:'転職完了',color:0x2ecc71});return;}
@@ -1933,6 +2010,30 @@ if(DISCORD_BOT_TOKEN){
       if(cmd==='bank_withdraw'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}const amount=interaction.options.getInteger('amount'),gid=interaction.guild.id,uid=interaction.user.id,eco=await getEconomy(gid,uid);if(parseInt(eco.bank)<amount){await replyErr(`銀行残高が足りないよ！銀行: ${fmt(eco.bank)}`);return;}await dbQuery('UPDATE discord_economy SET wallet=wallet+$1,bank=bank-$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[amount,gid,uid]);await reply(`**${fmt(amount)}** を銀行から引き出したよ！`,{title:'引き出し完了',color:0x3498db});return;}
       if(cmd==='role_panel'){if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}const title=interaction.options.getString('title');const options=[];for(let i=1;i<=24;i++){const role=interaction.options.getRole(`role${i}`);if(role)options.push({label:role.name,value:role.id});}if(!options.length){await replyErr('ロールを1つ以上指定してね');return;}const{ActionRowBuilder,StringSelectMenuBuilder}=require('discord.js');const menu=new StringSelectMenuBuilder().setCustomId('role_panel_select').setPlaceholder('ロールを選択してね（複数選択可）').setMinValues(0).setMaxValues(options.length).addOptions(options);await interaction.editReply({embeds:[{title,description:'メニューからロールを選択するとロールが付与・解除されるよ！',color:0x7289da}],components:[new ActionRowBuilder().addComponents(menu)],content:''});return;}
       if(cmd==='verify'){if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}const role=interaction.options.getRole('role'),title=interaction.options.getString('title')||'認証',desc=interaction.options.getString('description')||'ボタンを押すと認証されてロールが付与されるよ！';const{ActionRowBuilder,ButtonBuilder,ButtonStyle}=require('discord.js');const btn=new ButtonBuilder().setCustomId(`verify_btn:${role.id}`).setLabel('認証する').setStyle(ButtonStyle.Primary);await interaction.editReply({embeds:[{title,description:desc,color:0x2ecc71,footer:{text:`付与されるロール: ${role.name}`}}],components:[new ActionRowBuilder().addComponents(btn)],content:''});return;}
+      if(cmd==='event'){
+        const sub=interaction.options.getSubcommand();
+        if(sub==='add'){
+          if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+          const date=interaction.options.getString('date'),content=interaction.options.getString('content');
+          if(!/^\d{2}-\d{2}$/.test(date)){await replyErr('日付はMM-DD形式で入力してね（例: 06-15）');return;}
+          await dbQuery('INSERT INTO events (event_date,content) VALUES ($1,$2) ON CONFLICT DO NOTHING',[date,content]);
+          await reply(`**${date}** に「${content}」を登録したよ！`,{title:'イベント登録完了',color:0x2ecc71});return;
+        }
+        if(sub==='list'){
+          const date=interaction.options.getString('date')||new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'})).toLocaleDateString('ja-JP').replace(/\//g,'-').split('-').slice(1).map(s=>s.padStart(2,'0')).join('-');
+          const r=await dbQuery('SELECT id,content FROM events WHERE event_date=$1 ORDER BY created_at',[date]);
+          if(!r.rows.length){await reply(`**${date}** にイベントはないよ`,{title:'イベント一覧'});return;}
+          await reply(r.rows.map(row=>`ID:${row.id} ${row.content}`).join('\n'),{title:`${date} のイベント一覧`,color:0x7289da});return;
+        }
+        if(sub==='delete'){
+          if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+          const id=interaction.options.getInteger('id');
+          const r=await dbQuery('DELETE FROM events WHERE id=$1 RETURNING event_date,content',[id]);
+          if(!r.rows.length){await replyErr(`ID:${id} のイベントは見つからなかったよ`);return;}
+          await reply(`「${r.rows[0].content}」（${r.rows[0].event_date}）を削除したよ`,{title:'イベント削除完了',color:0xe74c3c});return;
+        }
+        return;
+      }
       await reply('不明なコマンドだよ', {color:0xe74c3c});
 
       await reply('不明なコマンドだよ', {color:0xe74c3c});
