@@ -6,6 +6,8 @@ const axios = require('axios');
 const cron = require('node-cron');
 const { Pool } = require('pg');
 const cheerio = require('cheerio');
+let voiceModule = null;
+try{ voiceModule = require('@discordjs/voice'); } catch(e){ console.error('[VOICEVOX] @discordjs/voice の読み込みに失敗:', e.message); }
 const {
   Client, GatewayIntentBits, Events, REST, Routes,
   SlashCommandBuilder, AttachmentBuilder, PermissionFlagsBits, Partials
@@ -40,6 +42,7 @@ const DISCORD_BRIDGE_CW_ROOM_ID       = '415060980';
 const DISCORD_BRIDGE_CHANNEL_ID       = '1371130293888745554';
 const DISCORD_DATE_CHANGE_CHANNEL_ID  = '1501947796742344704';
 const CW_ROOM_ID_FOR_DISCORD          = '415060980'; // Discordコマンドが対象とするCWルーム
+const ALLOWED_GUILD_ID                = '1357745161907470336'; // Botの全機能を許可する唯一のサーバーID
 
 const DISCORD_BBS_CHANNEL_ID          = '1512403977029816420';
 const DISCORD_WELCOME_CHANNEL_ID      = '1512793318805995670';
@@ -157,7 +160,8 @@ async function processQueue(guildId) {
   if (!session || !session.queue.length) return;
   const { text, settings } = session.queue[0];
   try {
-    const { createAudioResource, StreamType } = require('@discordjs/voice');
+    if(!voiceModule) throw new Error('@discordjs/voice未インストール');
+    const { createAudioResource, StreamType } = voiceModule;
     const audioBuf = await synthesizeVoice(text, settings);
     const stream = require('stream');
     const readable = new stream.PassThrough();
@@ -173,7 +177,8 @@ async function processQueue(guildId) {
 function setupPlayerListeners(guildId) {
   const session = voiceSessions.get(guildId);
   if (!session) return;
-  const { AudioPlayerStatus } = require('@discordjs/voice');
+  if(!voiceModule) return;
+  const { AudioPlayerStatus } = voiceModule;
   session.player.on(AudioPlayerStatus.Idle, () => {
     const s = voiceSessions.get(guildId);
     if (!s) return;
@@ -1738,6 +1743,8 @@ if(DISCORD_BOT_TOKEN){
   discordClient = new Client({intents:[
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.DirectMessageReactions,
@@ -1745,6 +1752,8 @@ if(DISCORD_BOT_TOKEN){
 
   discordClient.once(Events.ClientReady, async(c)=>{
     console.log(`[Discord] bot起動: ${c.user.tag}`);
+    // VOICEVOX話者一覧を起動時に1回だけ取得してキャッシュ（レート制限対策）
+    fetchVoicevoxSpeakers().then(s=>console.log(`[VOICEVOX] 話者キャッシュ完了: ${Object.keys(s).length}件`)).catch(()=>{});
     const ADMIN_PERM = PermissionFlagsBits.ManageMessages;
 
     const cmds = [
@@ -1843,6 +1852,12 @@ if(DISCORD_BOT_TOKEN){
 
     try{
       await interaction.deferReply();
+
+      // ━━ 許可サーバー以外では全コマンド無効 ━━
+      if(interaction.guild && interaction.guild.id !== ALLOWED_GUILD_ID){
+        await interaction.editReply({embeds:[{description:'このサーバーではコマンドを使用できないよ',color:0xe74c3c}],content:''});
+        return;
+      }
 
       // ── /help ──
       if(cmd==='help'){
@@ -2151,15 +2166,15 @@ if(DISCORD_BOT_TOKEN){
         const vc=interaction.member.voice.channel;
         if(!vc){await replyErr('ボイスチャンネルに参加してから実行してね');return;}
         try{
-          const {joinVoiceChannel}=require('@discordjs/voice');
-          const {createAudioPlayer}=require('@discordjs/voice');
+          if(!voiceModule) throw new Error('@discordjs/voice未インストール');
+          const {joinVoiceChannel,createAudioPlayer}=voiceModule;
           const connection=joinVoiceChannel({channelId:vc.id,guildId:interaction.guild.id,adapterCreator:interaction.guild.voiceAdapterCreator});
           const player=createAudioPlayer();
           connection.subscribe(player);
           voiceSessions.set(interaction.guild.id,{connection,player,channelId:vc.id,textChannelId:interaction.channelId,queue:[]});
           setupPlayerListeners(interaction.guild.id);
           await reply(`**${vc.name}** に参加したよ！このテキストチャンネルの発言を読み上げるね`,{title:'VC参加',color:0x2ecc71});
-        }catch(e){console.error('[VOICEVOX] join エラー:',e.message);await replyErr('ボイスチャンネルへの参加に失敗したよ…（@discordjs/voiceの依存関係を確認してね）');}
+        }catch(e){console.error('[VOICEVOX] join エラー:',e.message);await replyErr(`ボイスチャンネルへの参加に失敗したよ…\n${e.message}`);}
         return;
       }
       // ── leave ──
@@ -2256,6 +2271,9 @@ if(DISCORD_BOT_TOKEN){
       // 自分自身（このbot）のメッセージは全てスキップ
       if(message.author.id === DISCORD_BOT_USER_ID) return;
       if(message.author.id === discordClient.user?.id) return;
+
+      // ━━ 許可サーバー以外ではサーバー内機能を全て無効（DMは対象外なので素通り） ━━
+      if(message.guild && message.guild.id !== ALLOWED_GUILD_ID) return;
 
       // ━━ VOICEVOX読み上げ（VC接続中のテキストチャンネルのみ、bot以外） ━━
       if(message.guild && !message.author.bot){
@@ -2356,7 +2374,7 @@ if(DISCORD_BOT_TOKEN){
       }
     } catch(e){ console.error('[Discord] MessageCreate エラー:',e.message); }
   });
-  discordClient.on(Events.GuildMemberAdd,async(member)=>{try{const ch=await discordClient.channels.fetch(DISCORD_WELCOME_CHANNEL_ID).catch(()=>null);if(!ch)return;const cnt=member.guild.members.cache.filter(m=>!m.user.bot).size;await ch.send({embeds:[{title:`${member.displayName}さんこんにちは！`,description:`現在のサーバーメンバーは**${cnt}人**です！\n<#${DISCORD_RULES_CHANNEL_ID}> の確認と <#${DISCORD_INTRO_CHANNEL_ID}> をお願いします！`,color:0x7289da,thumbnail:{url:member.user.displayAvatarURL()}}]});}catch(e){console.error('[Discord]ようこそ:',e.message);}});
+  discordClient.on(Events.GuildMemberAdd,async(member)=>{if(member.guild.id!==ALLOWED_GUILD_ID)return;try{const ch=await discordClient.channels.fetch(DISCORD_WELCOME_CHANNEL_ID).catch(()=>null);if(!ch)return;const cnt=member.guild.members.cache.filter(m=>!m.user.bot).size;await ch.send({embeds:[{title:`${member.displayName}さんこんにちは！`,description:`現在のサーバーメンバーは**${cnt}人**です！\n<#${DISCORD_RULES_CHANNEL_ID}> の確認と <#${DISCORD_INTRO_CHANNEL_ID}> をお願いします！`,color:0x7289da,thumbnail:{url:member.user.displayAvatarURL()}}]});}catch(e){console.error('[Discord]ようこそ:',e.message);}});
   discordClient.on(Events.InteractionCreate,async(interaction)=>{if(!interaction.isStringSelectMenu()||interaction.customId!=='role_panel_select')return;try{await interaction.deferReply({ephemeral:true});const member=interaction.member,guild=interaction.guild,selected=new Set(interaction.values),allOpts=interaction.component.options.map(o=>o.value),added=[],removed=[];for(const roleId of allOpts){const role=guild.roles.cache.get(roleId);if(!role)continue;const has=member.roles.cache.has(roleId);if(selected.has(roleId)&&!has){await member.roles.add(role).catch(()=>{});added.push(role.name);}else if(!selected.has(roleId)&&has){await member.roles.remove(role).catch(()=>{});removed.push(role.name);}}const lines=[];if(added.length)lines.push(`付与：${added.join('、')}`);if(removed.length)lines.push(`解除：${removed.join('、')}`);await interaction.editReply({embeds:[{title:'ロール更新完了',description:lines.length?lines.join('\n'):'変更なし',color:0x2ecc71}]});}catch(e){console.error('[Discord]ロールパネル:',e.message);try{await interaction.editReply({embeds:[{title:'エラー',description:'ロールの更新に失敗したよ',color:0xe74c3c}]});}catch{}}});
   discordClient.on(Events.InteractionCreate,async(interaction)=>{if(!interaction.isButton()||!interaction.customId.startsWith('verify_btn:'))return;try{await interaction.deferReply({ephemeral:true});const roleId=interaction.customId.split(':')[1],member=interaction.member;if(member.roles.cache.has(roleId)){await interaction.editReply({embeds:[{description:'すでに認証済みだよ！',color:0x2ecc71}]});return;}const role=interaction.guild.roles.cache.get(roleId)||await interaction.guild.roles.fetch(roleId).catch(()=>null);if(!role){await interaction.editReply({embeds:[{description:'ロールが見つからなかったよ',color:0xe74c3c}]});return;}await member.roles.add(role);await interaction.editReply({embeds:[{description:`認証完了！**${role.name}**が付与されたよ！`,color:0x2ecc71}]});}catch(e){console.error('[Discord]認証ボタン:',e.message);try{await interaction.editReply({embeds:[{description:'認証に失敗したよ…',color:0xe74c3c}]});}catch{}}});
 
