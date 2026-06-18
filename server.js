@@ -71,54 +71,130 @@ async function addDiscordXp(member,guildId){
 }
 function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min;}
 function fmt(n){return Number(n).toLocaleString()+'円';}
-const JOBS={
-  'コンビニアルバイト':{tier:'初級',cost:0,desc:'安定して少額稼げる',
-    work:(_eco)=>{const b=rand(1057,1300);return{earned:b,msg:`🏪 レジ打ちをした。**${b}円**稼いだ！`};}},
-  '新聞配達':{tier:'初級',cost:30000,desc:'朝限定ボーナスあり',
-    work:(_eco)=>{const b=rand(1200,1600);const h=parseInt(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo',hour:'numeric',hour12:false}));const bo=(h>=5&&h<=8)?rand(100,500):0;return{earned:b+bo,msg:`📰 新聞を配達した。**${b}円**${bo?` + 朝ボーナス**${bo}円**`:''}稼いだ！`};}},
-  '清掃員':{tier:'初級',cost:50000,desc:'安定収入',
-    work:(_eco)=>{const b=rand(1400,1800);return{earned:b,msg:`🧹 施設を清掃した。**${b}円**稼いだ！`};}},
-  'カフェ店員':{tier:'中級',cost:200000,desc:'接客成功で追加報酬。クレームリスクあり',
-    work:(_eco)=>{const b=rand(1600,2500);const r=Math.random();let bo=0,extra='';if(r<0.3){bo=rand(500,2000);extra=` + 接客成功ボーナス**${bo}円**`;}else if(r<0.4){bo=-500;extra=` + クレーム発生**500円**損した…`;}return{earned:b+bo,msg:`☕ カフェで接客した。**${b}円**${extra}稼いだ！`};}},
-  '工場作業員':{tier:'中級',cost:300000,desc:'安定寄り。生産目標達成ボーナスあり',
-    work:(_eco)=>{const b=rand(2000,3000);const bo=Math.random()<0.25?rand(1000,3000):0;return{earned:b+bo,msg:`🏭 工場ラインで作業した。**${b}円**${bo?` + 目標達成ボーナス**${bo}円**`:''}稼いだ！`};}},
-  'プログラマー':{tier:'中級',cost:500000,desc:'収入のブレ大きめ。大型案件で爆発的収入',
-    work:(_eco)=>{const r=Math.random();if(r<0.03){const v=rand(20000,100000);return{earned:v,msg:`💻 🚀 大型案件を受注！！**${v}円**の大金！`};}if(r<0.35){const v=rand(3000,8000);return{earned:v,msg:`💻 📦 開発案件をこなした。**${v}円**稼いだ！`};}const b=rand(500,2000);return{earned:b,msg:`💻 🐛 バグを修正した。**${b}円**稼いだ！`};}},
-  '配信者':{tier:'中級',cost:700000,desc:'バズると超高収入。炎上・隠しイベントあり',
-    work:(eco)=>{
-      const videos=parseInt(eco.video_count||0);
-      // 動画本数による隠しイベント倍率
-      let hiddenMult=1;
-      if(videos>=500)hiddenMult=2;
-      else if(videos>=100)hiddenMult=1.5;
-      else if(videos>=50)hiddenMult=1.25;
-      else if(videos>=10)hiddenMult=1.1;
-      const r=Math.random();
-      // 隠しイベント（動画1本以上が条件）
-      if(videos>=1){
-        const hr=Math.random();
-        if(hr<0.00005*hiddenMult){const v=rand(500000,5000000);return{earned:v,msg:`📹 🌟 過去の動画がミーム化した！！**${v}円**の超収入！！！`,videoAdd:0};}
-        if(hr<0.0002*hiddenMult){const v=rand(50000,500000);return{earned:v,msg:`📹 🎬 切り抜き動画が話題になった！**${v}円**の収入！！`,videoAdd:0};}
-        if(hr<0.0005*hiddenMult){const v=rand(10000,100000);return{earned:v,msg:`📹 📈 過去動画がおすすめに掲載された！**${v}円**の収入！`,videoAdd:0};}
+// ============================================================
+// VOICEVOX読み上げシステム
+// ============================================================
+const VOICEVOX_API_KEY = process.env.VOICEVOX_API_KEY || '';
+const VOICEVOX_BASE = 'https://deprecatedapis.tts.quest/v2/voicevox';
+let voicevoxSpeakersCache = null;
+
+async function fetchVoicevoxSpeakers() {
+  if (voicevoxSpeakersCache) return voicevoxSpeakersCache;
+  try {
+    const res = await axios.get(`${VOICEVOX_BASE}/speakers/`, { timeout: 15000 });
+    const map = {};
+    for (const sp of res.data) {
+      for (const style of sp.styles) {
+        map[style.id] = { charName: sp.name, styleName: style.name };
       }
-      // 通常イベント
-      if(r<0.05){const v=rand(10000,50000);return{earned:v,msg:`📹 🔥 動画がバズった！！**${v}円**の収入！`,videoAdd:1};}
-      if(r<0.1){const v=rand(5000,20000);return{earned:-v,msg:`📹 💥 炎上した…**${v}円**の損失…`,videoAdd:1};}
-      if(r<0.25){const v=rand(3000,8000);return{earned:v,msg:`📹 👀⭐ 動画が視聴されてチャンネル登録もされた！**${v}円**！`,videoAdd:1};}
-      if(r<0.45){const v=rand(2000,5000);return{earned:v,msg:`📹 ⭐ チャンネル登録された！**${v}円**！`,videoAdd:1};}
-      if(r<0.65){const v=rand(500,2000);return{earned:v,msg:`📹 👀 動画が視聴された。**${v}円**！`,videoAdd:1};}
-      return{earned:0,msg:`📹 🎥 動画を投稿した。(動画本数+1)`,videoAdd:1};
-    }},
-  '投資家':{tier:'上級',cost:1500000,desc:'運要素強め。大成功・暴落あり',
-    work:(_eco)=>{const r=Math.random();if(r<0.05){const v=rand(100000,500000);return{earned:v,msg:`🎲 📈 大成功！**${v}円**の利益！`};}if(r<0.15){const v=rand(20000,100000);return{earned:v,msg:`🎲 📈 株が急騰！**${v}円**の利益！`};}if(r<0.35){const v=rand(10000,50000);return{earned:-v,msg:`🎲 📉 暴落…**${v}円**の大損失…`};}if(r<0.5){const v=rand(1000,10000);return{earned:-v,msg:`🎲 📉 下落…**${v}円**の損失…`};}const b=rand(5000,20000);return{earned:b,msg:`🎲 📊 ポートフォリオ順調。**${b}円**の利益！`};}},
-  '医者':{tier:'上級',cost:3000000,desc:'超安定高収入。緊急手術成功ボーナスあり',
-    work:(_eco)=>{const b=rand(5000,8000);const bo=Math.random()<0.2?rand(5000,20000):0;return{earned:b+bo,msg:`🩺 患者を診察した。**${b}円**${bo?` + 緊急手術成功ボーナス**${bo}円**`:''}の報酬！`};}},
-  '会社社長':{tier:'上級',cost:5000000,desc:'高収入。大成功で爆発的利益、経営失敗で大損失',
-    work:(_eco)=>{const r=Math.random();if(r<0.15){const v=rand(20000,200000);return{earned:v,msg:`🏢 📈 事業大成功！**${v}円**の収益！`};}if(r<0.4){const v=rand(10000,100000);return{earned:-v,msg:`🏢 📉 経営失敗…**${v}円**の損失…`};}const b=rand(3000,15000);return{earned:b,msg:`🏢 事業が順調。**${b}円**の収益！`};}},
-  'ギャンブラー':{tier:'特殊',cost:1000000,desc:'完全ランダム。ジャックポットで100万円！',
-    work:(_eco)=>{const r=Math.random();if(r<0.001){return{earned:1000000,msg:`🎰 👑 ジャックポット！！！**1,000,000円**！！！！！！！！！`};}if(r<0.05){const v=rand(20000,50000);return{earned:v,msg:`🎰 😎 大勝ち！**${v}円**！！`};}if(r<0.2){const v=rand(2000,5000);return{earned:v,msg:`🎰 🙂 小勝ち。**${v}円**！`};}if(r<0.5){const v=rand(1000,5000);return{earned:-v,msg:`🎰 😐 小負け。**${v}円**失った…`};}const v=rand(10000,50000);return{earned:-v,msg:`🎰 💀 大敗！**${v}円**失った…`};}},
-  'ニート':{tier:'特殊',cost:0,desc:'お金は稼げないけど特殊効果あり（月曜朝6時に生活保護1000円支給）',
-    work:(_eco)=>({earned:0,msg:'ゴロゴロしていた。'})},
+    }
+    voicevoxSpeakersCache = map;
+    return map;
+  } catch (e) { console.error('[VOICEVOX] 話者一覧取得エラー:', e.message); return {}; }
+}
+
+const voiceSessions = new Map();
+
+async function getVoiceSettings(guildId, userId) {
+  const DEFAULT = { speaker_id: 3, pitch: 0, speed: 1, intonation: 1 };
+  try {
+    const u = await dbQuery('SELECT * FROM voice_settings WHERE scope=$1 AND target_id=$2', ['user', userId]);
+    if (u.rows.length) return { ...DEFAULT, ...u.rows[0] };
+    const g = await dbQuery('SELECT * FROM voice_settings WHERE scope=$1 AND target_id=$2', ['guild', guildId]);
+    if (g.rows.length) return { ...DEFAULT, ...g.rows[0] };
+  } catch {}
+  return DEFAULT;
+}
+
+async function applyDictionary(guildId, text) {
+  try {
+    const r = await dbQuery('SELECT word, reading FROM voice_dictionary WHERE guild_id=$1 ORDER BY LENGTH(word) DESC', [guildId]);
+    for (const row of r.rows) {
+      text = text.split(row.word).join(row.reading);
+    }
+  } catch {}
+  return text;
+}
+
+function buildSpeechText(message) {
+  let content = message.content || '';
+  const hasAttachment = message.attachments && message.attachments.size > 0;
+  content = content.replace(/https?:\/\/\S+/g, 'リンク省略');
+  let text = content.trim();
+  if (hasAttachment) {
+    text = text ? `添付ファイル。${text}` : '添付ファイル。';
+  }
+  if (!text) return null;
+  if (text.length > 50) {
+    text = text.substring(0, 50) + '以下略';
+  }
+  return text;
+}
+
+async function synthesizeVoice(text, settings) {
+  const params = new URLSearchParams({
+    text,
+    speaker: settings.speaker_id,
+    pitch: settings.pitch,
+    speed: settings.speed,
+    intonationScale: settings.intonation,
+    key: VOICEVOX_API_KEY,
+  });
+  const res = await axios.get(`${VOICEVOX_BASE}/audio/?${params.toString()}`, {
+    responseType: 'arraybuffer', timeout: 20000,
+  });
+  return Buffer.from(res.data);
+}
+
+async function enqueueSpeech(guildId, text, settings) {
+  const session = voiceSessions.get(guildId);
+  if (!session) return;
+  session.queue.push({ text, settings });
+  if (session.queue.length === 1) processQueue(guildId);
+}
+async function processQueue(guildId) {
+  const session = voiceSessions.get(guildId);
+  if (!session || !session.queue.length) return;
+  const { text, settings } = session.queue[0];
+  try {
+    const { createAudioResource, StreamType } = require('@discordjs/voice');
+    const audioBuf = await synthesizeVoice(text, settings);
+    const stream = require('stream');
+    const readable = new stream.PassThrough();
+    readable.end(audioBuf);
+    const resource = createAudioResource(readable, { inputType: StreamType.Arbitrary });
+    session.player.play(resource);
+  } catch (e) {
+    console.error('[VOICEVOX] 再生エラー:', e.message);
+    session.queue.shift();
+    processQueue(guildId);
+  }
+}
+function setupPlayerListeners(guildId) {
+  const session = voiceSessions.get(guildId);
+  if (!session) return;
+  const { AudioPlayerStatus } = require('@discordjs/voice');
+  session.player.on(AudioPlayerStatus.Idle, () => {
+    const s = voiceSessions.get(guildId);
+    if (!s) return;
+    s.queue.shift();
+    if (s.queue.length) processQueue(guildId);
+  });
+}
+
+const JOBS={
+  'コンビニアルバイト':{tier:'初級',cost:0,desc:'安定して少額稼げる',work:()=>{const b=rand(80,200);return{earned:b,msg:`レジ打ちをした。**${b}円**稼いだ！`};}},
+  '新聞配達':{tier:'初級',cost:30000,desc:'朝限定ボーナス(+100円)あり',work:()=>{const b=rand(100,250);const h=parseInt(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo',hour:'numeric',hour12:false}));const bo=(h>=5&&h<=8)?100:0;return{earned:b+bo,msg:`新聞を配達した。**${b}円**${bo?` + 朝ボーナス**${bo}円**`:''}稼いだ！`};}},
+  '清掃員':{tier:'初級',cost:50000,desc:'安定収入',work:()=>{const b=rand(150,300);return{earned:b,msg:`施設を清掃した。**${b}円**稼いだ！`};}},
+  'カフェ店員':{tier:'中級',cost:200000,desc:'接客成功で追加報酬',work:()=>{const b=rand(300,600);const bo=Math.random()<0.4?rand(100,300):0;return{earned:b+bo,msg:`カフェで接客した。**${b}円**${bo?` + 接客ボーナス**${bo}円**`:''}稼いだ！`};}},
+  '工場作業員':{tier:'中級',cost:300000,desc:'そこそこ安定',work:()=>{const b=rand(400,800);return{earned:b,msg:`工場ラインで作業した。**${b}円**稼いだ！`};}},
+  'プログラマー':{tier:'中級',cost:500000,desc:'収入のブレ大きめ。低確率で高額案件',work:()=>{if(Math.random()<0.08){const v=rand(5000,20000);return{earned:v,msg:`大型案件を受注！**${v}円**の大金！`};}const b=rand(500,1500);return{earned:b,msg:`コードを書いた。**${b}円**稼いだ！`};}},
+  '配信者':{tier:'中級',cost:700000,desc:'バズると超高収入。炎上イベントあり',work:()=>{const r=Math.random();if(r<0.05){const v=rand(20000,80000);return{earned:v,msg:`配信がバズった！**${v}円**！`};}if(r<0.12){const v=rand(500,2000);return{earned:-v,msg:`炎上した…**${v}円**損した…`};}const b=rand(600,2000);return{earned:b,msg:`配信した。スパチャ**${b}円**もらった！`};}},
+  '投資家':{tier:'上級',cost:1500000,desc:'運要素強め',work:()=>{const r=Math.random();if(r<0.3){const v=rand(5000,30000);return{earned:v,msg:`株急騰！**${v}円**の利益！`};}if(r<0.5){const v=rand(1000,8000);return{earned:-v,msg:`株暴落…**${v}円**の損失…`};}const b=rand(1000,5000);return{earned:b,msg:`ポートフォリオ順調。**${b}円**の利益！`};}},
+  '医者':{tier:'上級',cost:3000000,desc:'超安定高収入',work:()=>{const b=rand(3000,7000);return{earned:b,msg:`患者を診察した。**${b}円**の報酬！`};}},
+  '会社社長':{tier:'上級',cost:5000000,desc:'高収入だけど失敗時減額大きい',work:()=>{if(Math.random()<0.6){const v=rand(5000,15000);return{earned:v,msg:`事業好調！**${v}円**の収益！`};}const v=rand(2000,10000);return{earned:-v,msg:`事業失敗…**${v}円**の損失…`};}},
+  'ギャンブラー':{tier:'特殊',cost:1000000,desc:'収入がかなりランダム',work:()=>{const r=Math.random();if(r<0.05){const v=rand(50000,200000);return{earned:v,msg:`大当たり！**${v}円**！`};}if(r<0.45){const v=rand(100,2000);return{earned:-v,msg:`負けた…**${v}円**失った…`};}const v=rand(500,5000);return{earned:v,msg:`勝った！**${v}円**もらった！`};}},
+  'ニート':{tier:'特殊',cost:0,desc:'お金は稼げないけど特殊効果あり（月曜朝6時に生活保護1000円支給）',work:()=>({earned:0,msg:'ニートは働かない。ゴロゴロしていた。'})},
 };
 function workLimitForLevel(lv){if(lv>=1000)return 25;if(lv>=500)return 20;if(lv>=100)return 15;if(lv>=50)return 10;if(lv>=10)return 7;return 5;}
 async function getEconomy(guildId,userId){
@@ -306,11 +382,27 @@ async function initializeDatabase() {
     await dbQuery(`ALTER TABLE discord_economy ADD COLUMN IF NOT EXISTS video_count INT DEFAULT 0`);
 
     await dbQuery(`CREATE TABLE IF NOT EXISTS events (
+      id SERIAL PRIMARY KEY, event_date TEXT NOT NULL, content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(event_date, content))`);
+
+    await dbQuery(`CREATE TABLE IF NOT EXISTS voice_settings (
       id SERIAL PRIMARY KEY,
-      event_date TEXT NOT NULL,
-      content TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      speaker_id INT DEFAULT 3,
+      pitch DOUBLE PRECISION DEFAULT 0,
+      speed DOUBLE PRECISION DEFAULT 1,
+      intonation DOUBLE PRECISION DEFAULT 1,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(scope, target_id))`);
+
+    await dbQuery(`CREATE TABLE IF NOT EXISTS voice_dictionary (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      word TEXT NOT NULL,
+      reading TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(event_date, content))`);
+      UNIQUE(guild_id, word))`);
 
     console.log('[DB] テーブル初期化完了');
   } catch (e) { console.error('[DB] 初期化エラー:', e.message); }
@@ -371,7 +463,7 @@ const API_CACHE = new Map();
 function addToCache(k,v) { if(API_CACHE.size>=50) API_CACHE.delete(API_CACHE.keys().next().value); API_CACHE.set(k,v); }
 
 // ============================================================
-// イベント取得（DBベース、day.json廃止）
+// day.json
 // ============================================================
 async function getTodaysEvents() {
   try {
@@ -1221,13 +1313,8 @@ textarea{min-height:130px;resize:vertical;font-family:inherit;}
     <select id="dc-guild" onchange="onGuildChange()">
       <option value="">-- サーバーを選択 --</option>
     </select>
-    <label>またはサーバーIDを直接入力 <span class="badge">上のプルダウンより優先</span></label>
+    <label>またはサーバーIDを直接入力 <span class="badge">入力するとこちらが優先</span></label>
     <input id="dc-guild-manual" type="text" placeholder="サーバーID（例: 1357745161907470336）" oninput="onManualGuildInput()">
-    <label>またはサーバーIDを直接入力</label>
-    <div class="row">
-      <input id="dc-guild-manual" type="text" placeholder="サーバーID（例: 1357745161907470336）">
-      <button style="flex:0;padding:10px 16px;background:#667eea;border:none;border-radius:8px;color:#fff;cursor:pointer;white-space:nowrap;" onclick="onManualGuild()">取得</button>
-    </div>
 
     <label>チャンネル</label>
     <select id="dc-channel">
@@ -1279,7 +1366,20 @@ async function loadGuilds(){
 }
 
 async function onGuildChange(){
-  const guildId = document.getElementById('dc-guild').value;
+  document.getElementById('dc-guild-manual').value = ''; // プルダウン選択時は手入力をクリア
+  await loadGuildDetails(document.getElementById('dc-guild').value);
+}
+
+let manualGuildTimer = null;
+function onManualGuildInput(){
+  clearTimeout(manualGuildTimer);
+  const val = document.getElementById('dc-guild-manual').value.trim();
+  manualGuildTimer = setTimeout(()=>{
+    if(val){ document.getElementById('dc-guild').value=''; loadGuildDetails(val); }
+  }, 500);
+}
+
+async function loadGuildDetails(guildId){
   const chSel = document.getElementById('dc-channel');
   const emojiBar = document.getElementById('emoji-bar');
   chSel.innerHTML = '<option value="">読み込み中...</option>';
@@ -1683,6 +1783,17 @@ if(DISCORD_BOT_TOKEN){
         .addSubcommand(s=>s.setName('list').setDescription('指定日のイベント一覧を表示するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、省略で今日）')))
         .addSubcommand(s=>s.setName('delete').setDescription('イベントを削除するよ').addIntegerOption(o=>o.setName('id').setDescription('イベントID').setRequired(true)))
         .setDefaultMemberPermissions(ADMIN_PERM),
+      // VOICEVOX読み上げ
+      new SlashCommandBuilder().setName('join').setDescription('あなたがいるボイスチャンネルに参加して読み上げを開始するよ'),
+      new SlashCommandBuilder().setName('leave').setDescription('ボイスチャンネルから退出するよ'),
+      new SlashCommandBuilder().setName('dictionary_add').setDescription('読み上げ辞書に単語を追加するよ').addStringOption(o=>o.setName('word').setDescription('単語').setRequired(true)).addStringOption(o=>o.setName('reading').setDescription('読み方').setRequired(true)),
+      new SlashCommandBuilder().setName('dictionary_list').setDescription('読み上げ辞書一覧を表示するよ').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
+      new SlashCommandBuilder().setName('dictionary_remove').setDescription('読み上げ辞書から単語を削除するよ').addStringOption(o=>o.setName('keyword').setDescription('単語または読みの一部').setRequired(true).setAutocomplete(true)),
+      new SlashCommandBuilder().setName('pitch').setDescription('読み上げのピッチを変更するよ（-0.15~0.15）').addNumberOption(o=>o.setName('value').setDescription('ピッチ').setRequired(true).setMinValue(-0.15).setMaxValue(0.15)),
+      new SlashCommandBuilder().setName('speed').setDescription('読み上げの話速を変更するよ（0.5~2）').addNumberOption(o=>o.setName('value').setDescription('話速').setRequired(true).setMinValue(0.5).setMaxValue(2)),
+      new SlashCommandBuilder().setName('intonation').setDescription('読み上げのイントネーションを変更するよ（0~2）').addNumberOption(o=>o.setName('value').setDescription('イントネーション').setRequired(true).setMinValue(0).setMaxValue(2)),
+      new SlashCommandBuilder().setName('speaker').setDescription('読み上げの話者を変更するよ').addIntegerOption(o=>o.setName('id').setDescription('話者ID（/speaker_listで確認）').setRequired(true)),
+      new SlashCommandBuilder().setName('speaker_list').setDescription('話者一覧を表示するよ（ページ制）').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
       new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
       new SlashCommandBuilder().setName('work').setDescription('働いてお金を稼ぐよ（クールダウン30分）'),
       new SlashCommandBuilder().setName('job').setDescription('職一覧を見る'),
@@ -1999,7 +2110,7 @@ if(DISCORD_BOT_TOKEN){
         await reply(r.rows.map(x=>`・${x.word}`).join('\n'), {title:'CW NGワード一覧'}); return;
       }
       if(cmd==='rank'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}const uid=interaction.user.id;const r=await dbQuery('SELECT xp,level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,uid]);const xp=r.rows.length?parseInt(r.rows[0].xp):0,lv=r.rows.length?parseInt(r.rows[0].level):0;const nextXp=totalXpForLevel(lv+1),role=getRoleForLevel(lv),ar=role?interaction.guild.roles.cache.get(role.roleId):null;await reply(null,{title:`${interaction.member.displayName} のランク`,fields:[{name:'レベル',value:`**${lv}**`,inline:true},{name:'XP',value:`${xp.toLocaleString()}`,inline:true},{name:'次のLvまで',value:`${(nextXp-xp).toLocaleString()} XP`,inline:true},{name:'現在のロール',value:ar?ar.name:'なし',inline:true}],color:role?0xf39c12:0x7289da,footer:`次のLv${lv+1}に必要な累計XP: ${nextXp.toLocaleString()}`});return;}
-      if(cmd==='work'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid),lvRow=await dbQuery('SELECT level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[gid,uid]),lv=lvRow.rows.length?parseInt(lvRow.rows[0].level):0,limit=workLimitForLevel(lv),today=new Date().toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}),resetDate=eco.work_reset_date?new Date(eco.work_reset_date).toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}):null;let count=resetDate!==today?0:(eco.work_count||0);if(count>=limit){await replyErr(`今日の仕事回数上限（${limit}回）に達したよ！明日また来てね`);return;}if(eco.last_work_at){const diff=(Date.now()-new Date(eco.last_work_at).getTime())/60000;if(diff<30){await replyErr(`クールダウン中！あと**${Math.ceil(30-diff)}分**待ってね`);return;}}const job=JOBS[eco.job]||JOBS['ニート'],result=job.work(eco),newWallet=Math.max(0,parseInt(eco.wallet)+result.earned);const newVideoCount=parseInt(eco.video_count||0)+(result.videoAdd||0);await dbQuery('UPDATE discord_economy SET wallet=$1,work_count=$2,work_reset_date=CURRENT_DATE,last_work_at=NOW(),video_count=$5,updated_at=NOW() WHERE guild_id=$3 AND user_id=$4',[newWallet,count+1,gid,uid,newVideoCount]);await reply(result.msg+`\n\n所持金: **${fmt(newWallet)}** | 今日: ${count+1}/${limit}回${eco.job==='配信者'?' | 動画本数: '+newVideoCount+'本':''}`,{title:`${interaction.member.displayName} が${eco.job}として働いた！`,color:result.earned>0?0x2ecc71:result.earned<0?0xe74c3c:0x95a5a6,footer:`残りwork回数: ${limit-(count+1)}回`});return;}
+      if(cmd==='work'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid),lvRow=await dbQuery('SELECT level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[gid,uid]),lv=lvRow.rows.length?parseInt(lvRow.rows[0].level):0,limit=workLimitForLevel(lv),today=new Date().toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}),resetDate=eco.work_reset_date?new Date(eco.work_reset_date).toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}):null;let count=resetDate!==today?0:(eco.work_count||0);if(count>=limit){await replyErr(`今日の仕事回数上限（${limit}回）に達したよ！明日また来てね`);return;}if(eco.last_work_at){const diff=(Date.now()-new Date(eco.last_work_at).getTime())/60000;if(diff<30){await replyErr(`クールダウン中！あと**${Math.ceil(30-diff)}分**待ってね`);return;}}const job=JOBS[eco.job]||JOBS['ニート'],result=job.work(),newWallet=Math.max(0,parseInt(eco.wallet)+result.earned);await dbQuery('UPDATE discord_economy SET wallet=$1,work_count=$2,work_reset_date=CURRENT_DATE,last_work_at=NOW(),updated_at=NOW() WHERE guild_id=$3 AND user_id=$4',[newWallet,count+1,gid,uid]);await reply(result.msg+`\n\n所持金: **${fmt(newWallet)}** | 今日: ${count+1}/${limit}回`,{title:`${interaction.member.displayName} が${eco.job}として働いた！`,color:result.earned>0?0x2ecc71:result.earned<0?0xe74c3c:0x95a5a6,footer:`残りwork回数: ${limit-(count+1)}回`});return;}
       if(cmd==='job'){const tiers=['初級','中級','上級','特殊'];const fields=tiers.map(tier=>{const jobs=Object.entries(JOBS).filter(([,v])=>v.tier===tier);return{name:`【${tier}職】`,value:jobs.map(([n,v])=>`**${n}**（${v.cost>0?fmt(v.cost):'無料'}）\n${v.desc}`).join('\n\n'),inline:false};});await reply(null,{title:'職一覧',fields,color:0x7289da,footer:'転職は /job_set で。転職コストは所持金＋銀行の合計から判定'});return;}
       if(cmd==='job_info'){const jobName=interaction.options.getString('job'),job=JOBS[jobName];if(!job){await replyErr(`「${jobName}」という職は存在しないよ`);return;}await reply(job.desc,{title:job.tier+'職：'+jobName,fields:[{name:'転職コスト',value:job.cost>0?fmt(job.cost):'無料',inline:true},{name:'カテゴリ',value:job.tier,inline:true}],color:0x7289da});return;}
       if(cmd==='job_set'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}const jobName=interaction.options.getString('job'),job=JOBS[jobName];if(!job){await replyErr(`「${jobName}」という職は存在しないよ\n/job で職一覧を確認してね`);return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid);if(eco.job===jobName){await replyErr(`すでに${jobName}だよ`);return;}const total=parseInt(eco.wallet)+parseInt(eco.bank);if(total<job.cost){await replyErr(`転職コストが足りないよ！\n必要: ${fmt(job.cost)} / 所持: ${fmt(total)}`);return;}await dbQuery('UPDATE discord_economy SET job=$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[jobName,gid,uid]);await reply(`**${jobName}**に転職したよ！\n${job.desc}`,{title:'転職完了',color:0x2ecc71});return;}
@@ -2020,7 +2131,7 @@ if(DISCORD_BOT_TOKEN){
           await reply(`**${date}** に「${content}」を登録したよ！`,{title:'イベント登録完了',color:0x2ecc71});return;
         }
         if(sub==='list'){
-          const date=interaction.options.getString('date')||new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'})).toLocaleDateString('ja-JP').replace(/\//g,'-').split('-').slice(1).map(s=>s.padStart(2,'0')).join('-');
+          const date=interaction.options.getString('date')||(()=>{const jst=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));return `${String(jst.getMonth()+1).padStart(2,'0')}-${String(jst.getDate()).padStart(2,'0')}`;})();
           const r=await dbQuery('SELECT id,content FROM events WHERE event_date=$1 ORDER BY created_at',[date]);
           if(!r.rows.length){await reply(`**${date}** にイベントはないよ`,{title:'イベント一覧'});return;}
           await reply(r.rows.map(row=>`ID:${row.id} ${row.content}`).join('\n'),{title:`${date} のイベント一覧`,color:0x7289da});return;
@@ -2034,8 +2145,104 @@ if(DISCORD_BOT_TOKEN){
         }
         return;
       }
-      await reply('不明なコマンドだよ', {color:0xe74c3c});
-
+      // ── join ──
+      if(cmd==='join'){
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const vc=interaction.member.voice.channel;
+        if(!vc){await replyErr('ボイスチャンネルに参加してから実行してね');return;}
+        try{
+          const {joinVoiceChannel}=require('@discordjs/voice');
+          const {createAudioPlayer}=require('@discordjs/voice');
+          const connection=joinVoiceChannel({channelId:vc.id,guildId:interaction.guild.id,adapterCreator:interaction.guild.voiceAdapterCreator});
+          const player=createAudioPlayer();
+          connection.subscribe(player);
+          voiceSessions.set(interaction.guild.id,{connection,player,channelId:vc.id,textChannelId:interaction.channelId,queue:[]});
+          setupPlayerListeners(interaction.guild.id);
+          await reply(`**${vc.name}** に参加したよ！このテキストチャンネルの発言を読み上げるね`,{title:'VC参加',color:0x2ecc71});
+        }catch(e){console.error('[VOICEVOX] join エラー:',e.message);await replyErr('ボイスチャンネルへの参加に失敗したよ…（@discordjs/voiceの依存関係を確認してね）');}
+        return;
+      }
+      // ── leave ──
+      if(cmd==='leave'){
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const session=voiceSessions.get(interaction.guild.id);
+        if(!session){await replyErr('ボイスチャンネルに参加してないよ');return;}
+        session.connection.destroy();
+        voiceSessions.delete(interaction.guild.id);
+        await reply('ボイスチャンネルから退出したよ',{title:'VC退出',color:0x95a5a6});
+        return;
+      }
+      // ── dictionary_add ──
+      if(cmd==='dictionary_add'){
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const word=interaction.options.getString('word'),reading=interaction.options.getString('reading');
+        await dbQuery('INSERT INTO voice_dictionary (guild_id,word,reading) VALUES ($1,$2,$3) ON CONFLICT (guild_id,word) DO UPDATE SET reading=$3',[interaction.guild.id,word,reading]);
+        await reply(`「${word}」→「${reading}」を辞書に追加したよ！`,{title:'辞書登録完了',color:0x2ecc71});
+        return;
+      }
+      // ── dictionary_list ──
+      if(cmd==='dictionary_list'){
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const page=Math.max(1,interaction.options.getInteger('page')||1);
+        const r=await dbQuery('SELECT word,reading FROM voice_dictionary WHERE guild_id=$1 ORDER BY created_at',[interaction.guild.id]);
+        if(!r.rows.length){await reply('辞書は空だよ',{title:'読み上げ辞書一覧'});return;}
+        const perPage=5,totalPages=Math.ceil(r.rows.length/perPage);
+        const items=r.rows.slice((page-1)*perPage,page*perPage);
+        await reply(items.map(i=>`**${i.word}** → ${i.reading}`).join('\n'),{title:`読み上げ辞書一覧（${page}/${totalPages}ページ）`,color:0x7289da});
+        return;
+      }
+      // ── dictionary_remove ──
+      if(cmd==='dictionary_remove'){
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const keyword=interaction.options.getString('keyword');
+        const r=await dbQuery('DELETE FROM voice_dictionary WHERE guild_id=$1 AND (word=$2 OR reading=$2) RETURNING word,reading',[interaction.guild.id,keyword]);
+        if(!r.rows.length){await replyErr(`「${keyword}」に一致する辞書エントリは見つからなかったよ`);return;}
+        await reply(`「${r.rows[0].word}」→「${r.rows[0].reading}」を辞書から削除したよ`,{title:'辞書削除完了',color:0xe74c3c});
+        return;
+      }
+      // ── pitch / speed / intonation ──
+      if(cmd==='pitch'||cmd==='speed'||cmd==='intonation'){
+        const value=interaction.options.getNumber('value');
+        const col=cmd;
+        const isDM=!interaction.guild;
+        const scope=isDM?'user':'user'; // DM/サーバー問わずユーザー設定を更新（仕様: ユーザー優先）
+        const targetId=interaction.user.id;
+        // ただしサーバー内で実行した場合は「個人設定が無ければサーバー設定」のため、明示的に両方使い分ける
+        if(isDM){
+          await dbQuery(`INSERT INTO voice_settings (scope,target_id,${col}) VALUES ('user',$1,$2) ON CONFLICT (scope,target_id) DO UPDATE SET ${col}=$2,updated_at=NOW()`,[targetId,value]);
+          await reply(`あなたの${col}を**${value}**に設定したよ（個人設定）`,{title:'設定変更',color:0x2ecc71});
+        } else {
+          await dbQuery(`INSERT INTO voice_settings (scope,target_id,${col}) VALUES ('guild',$1,$2) ON CONFLICT (scope,target_id) DO UPDATE SET ${col}=$2,updated_at=NOW()`,[interaction.guild.id,value]);
+          await reply(`このサーバーの${col}を**${value}**に設定したよ（個人設定がある人はそちらが優先されるよ）`,{title:'設定変更',color:0x2ecc71});
+        }
+        return;
+      }
+      // ── speaker ──
+      if(cmd==='speaker'){
+        const id=interaction.options.getInteger('id');
+        const speakers=await fetchVoicevoxSpeakers();
+        if(!speakers[id]){await replyErr('そのIDの話者は見つからなかったよ。/speaker_list で確認してね');return;}
+        const isDM=!interaction.guild;
+        if(isDM){
+          await dbQuery(`INSERT INTO voice_settings (scope,target_id,speaker_id) VALUES ('user',$1,$2) ON CONFLICT (scope,target_id) DO UPDATE SET speaker_id=$2,updated_at=NOW()`,[interaction.user.id,id]);
+          await reply(`あなたの話者を**${speakers[id].charName}（${speakers[id].styleName}）**に設定したよ`,{title:'話者変更',color:0x2ecc71});
+        } else {
+          await dbQuery(`INSERT INTO voice_settings (scope,target_id,speaker_id) VALUES ('guild',$1,$2) ON CONFLICT (scope,target_id) DO UPDATE SET speaker_id=$2,updated_at=NOW()`,[interaction.guild.id,id]);
+          await reply(`このサーバーの話者を**${speakers[id].charName}（${speakers[id].styleName}）**に設定したよ`,{title:'話者変更',color:0x2ecc71});
+        }
+        return;
+      }
+      // ── speaker_list ──
+      if(cmd==='speaker_list'){
+        const page=Math.max(1,interaction.options.getInteger('page')||1);
+        const speakers=await fetchVoicevoxSpeakers();
+        const entries=Object.entries(speakers);
+        if(!entries.length){await replyErr('話者一覧の取得に失敗したよ');return;}
+        const perPage=10,totalPages=Math.ceil(entries.length/perPage);
+        const items=entries.slice((page-1)*perPage,page*perPage);
+        await reply(items.map(([id,s])=>`**ID:${id}** ${s.charName}（${s.styleName}）`).join('\n'),{title:`話者一覧（${page}/${totalPages}ページ）`,color:0x7289da});
+        return;
+      }
       await reply('不明なコマンドだよ', {color:0xe74c3c});
     } catch(e){
       console.error('[Discord] コマンドエラー:',e.message);
@@ -2050,8 +2257,25 @@ if(DISCORD_BOT_TOKEN){
       if(message.author.id === DISCORD_BOT_USER_ID) return;
       if(message.author.id === discordClient.user?.id) return;
 
+      // ━━ VOICEVOX読み上げ（VC接続中のテキストチャンネルのみ、bot以外） ━━
+      if(message.guild && !message.author.bot){
+        const session = voiceSessions.get(message.guild.id);
+        if(session && session.textChannelId === message.channel.id){
+          const speechText = buildSpeechText(message);
+          if(speechText){
+            (async()=>{
+              try{
+                const dictApplied = await applyDictionary(message.guild.id, speechText);
+                const settings = await getVoiceSettings(message.guild.id, message.author.id);
+                await enqueueSpeech(message.guild.id, dictApplied, settings);
+              }catch(e){ console.error('[VOICEVOX] 読み上げエラー:', e.message); }
+            })();
+          }
+        }
+      }
+
       const content = message.content || '';
-      if(!content) return;
+      if(!content && !(message.attachments && message.attachments.size>0)) return;
 
       const isDM = !message.guild;
       const isAdmin = isDM ? false : (message.member?.permissions?.has(PermissionFlagsBits.ManageMessages)||false);
