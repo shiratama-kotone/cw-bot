@@ -164,13 +164,14 @@ async function processQueue(guildId) {
   console.log(`[VOICEVOX] 再生開始: "${text}"`);
   try {
     if(!voiceModule) throw new Error('@discordjs/voice未インストール');
-    const { createAudioResource } = voiceModule;
+    const { createAudioResource, StreamType } = voiceModule;
     const url = getSpeechUrl(text, settings);
     console.log(`[VOICEVOX] リクエストURL（key伏字）: ${url.replace(/key=[^&]+/,'key=***')}`);
     const res = await axios.get(url, { responseType: 'stream', timeout: 20000 });
     console.log(`[VOICEVOX] 音声取得成功 status=${res.status}`);
-    const resource = createAudioResource(res.data);
+    const resource = createAudioResource(res.data, { inputType: StreamType.Arbitrary, inlineVolume: false });
     session.player.play(resource);
+    console.log(`[VOICEVOX] player.play実行 playerState=${session.player.state.status}`);
   } catch (e) {
     console.error('[VOICEVOX] 再生エラー詳細:', e.response?.status, e.response?.statusText, e.message);
     session.queue.shift();
@@ -183,10 +184,25 @@ function setupPlayerListeners(guildId) {
   if(!voiceModule) return;
   const { AudioPlayerStatus } = voiceModule;
   session.player.on(AudioPlayerStatus.Idle, () => {
+    console.log('[VOICEVOX] player状態: Idle（再生終了）');
     const s = voiceSessions.get(guildId);
     if (!s) return;
     s.queue.shift();
     if (s.queue.length) processQueue(guildId);
+  });
+  session.player.on(AudioPlayerStatus.Playing, () => {
+    console.log('[VOICEVOX] player状態: Playing（再生中）');
+  });
+  session.player.on('error', (e) => {
+    console.error('[VOICEVOX] playerエラー:', e.message);
+    const s = voiceSessions.get(guildId);
+    if (s) { s.queue.shift(); if (s.queue.length) processQueue(guildId); }
+  });
+  session.connection.on('error', (e) => {
+    console.error('[VOICEVOX] connectionエラー:', e.message);
+  });
+  session.connection.on('stateChange', (oldS, newS) => {
+    console.log(`[VOICEVOX] connection状態変化: ${oldS.status} -> ${newS.status}`);
   });
 }
 
@@ -2202,12 +2218,14 @@ if(DISCORD_BOT_TOKEN){
         if(!vc){await replyErr('ボイスチャンネルに参加してから実行してね');return;}
         try{
           if(!voiceModule) throw new Error('@discordjs/voice未インストール');
-          const {joinVoiceChannel,createAudioPlayer}=voiceModule;
+          const {joinVoiceChannel,createAudioPlayer,entersState,VoiceConnectionStatus}=voiceModule;
           const connection=joinVoiceChannel({channelId:vc.id,guildId:interaction.guild.id,adapterCreator:interaction.guild.voiceAdapterCreator});
+          await entersState(connection, VoiceConnectionStatus.Ready, 15000);
           const player=createAudioPlayer();
           connection.subscribe(player);
           voiceSessions.set(interaction.guild.id,{connection,player,channelId:vc.id,textChannelId:interaction.channelId,queue:[]});
           setupPlayerListeners(interaction.guild.id);
+          console.log(`[VOICEVOX] VC接続完了 guild=${interaction.guild.id} channel=${vc.id}`);
           await reply(`**${vc.name}** に参加したよ！このテキストチャンネルの発言を読み上げるね`,{title:'VC参加',color:0x2ecc71});
         }catch(e){console.error('[VOICEVOX] join エラー:',e.message);await replyErr(`ボイスチャンネルへの参加に失敗したよ…\n${e.message}`);}
         return;
