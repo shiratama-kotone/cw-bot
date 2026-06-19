@@ -138,7 +138,7 @@ function buildSpeechText(message) {
   return text;
 }
 
-async function getSpeechUrl(text, settings) {
+function getSpeechUrl(text, settings) {
   const params = new URLSearchParams({
     text,
     speaker: settings.speaker_id,
@@ -150,20 +150,29 @@ async function getSpeechUrl(text, settings) {
   return `${VOICEVOX_BASE}/audio/?${params.toString()}`;
 }
 
+async function enqueueSpeech(guildId, text, settings) {
+  const session = voiceSessions.get(guildId);
+  if (!session) return;
+  session.queue.push({ text, settings });
+  if (session.queue.length === 1) processQueue(guildId);
+}
+
 async function processQueue(guildId) {
   const session = voiceSessions.get(guildId);
   if (!session || !session.queue.length) return;
   const { text, settings } = session.queue[0];
+  console.log(`[VOICEVOX] 再生開始: "${text}"`);
   try {
     if(!voiceModule) throw new Error('@discordjs/voice未インストール');
     const { createAudioResource } = voiceModule;
     const url = getSpeechUrl(text, settings);
-    // URLから直接ストリームを取得して再生
+    console.log(`[VOICEVOX] リクエストURL（key伏字）: ${url.replace(/key=[^&]+/,'key=***')}`);
     const res = await axios.get(url, { responseType: 'stream', timeout: 20000 });
+    console.log(`[VOICEVOX] 音声取得成功 status=${res.status}`);
     const resource = createAudioResource(res.data);
     session.player.play(resource);
   } catch (e) {
-    console.error('[VOICEVOX] 再生エラー:', e.message);
+    console.error('[VOICEVOX] 再生エラー詳細:', e.response?.status, e.response?.statusText, e.message);
     session.queue.shift();
     processQueue(guildId);
   }
@@ -2306,11 +2315,13 @@ if(DISCORD_BOT_TOKEN){
         const session = voiceSessions.get(message.guild.id);
         if(session && session.textChannelId === message.channel.id){
           const speechText = buildSpeechText(message);
+          console.log(`[VOICEVOX] メッセージ検知: text="${speechText}" channel=${message.channel.id}`);
           if(speechText){
             (async()=>{
               try{
                 const dictApplied = await applyDictionary(message.guild.id, speechText);
                 const settings = await getVoiceSettings(message.guild.id, message.author.id);
+                console.log(`[VOICEVOX] 読み上げキュー追加: "${dictApplied}" settings=${JSON.stringify(settings)}`);
                 await enqueueSpeech(message.guild.id, dictApplied, settings);
               }catch(e){ console.error('[VOICEVOX] 読み上げエラー:', e.message); }
             })();
