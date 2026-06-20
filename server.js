@@ -2219,15 +2219,17 @@ if(DISCORD_BOT_TOKEN){
         try{
           if(!voiceModule) throw new Error('@discordjs/voice未インストール');
           const {joinVoiceChannel,createAudioPlayer,entersState,VoiceConnectionStatus}=voiceModule;
-          const connection=joinVoiceChannel({channelId:vc.id,guildId:interaction.guild.id,adapterCreator:interaction.guild.voiceAdapterCreator});
-          await entersState(connection, VoiceConnectionStatus.Ready, 15000);
+          const connection=joinVoiceChannel({channelId:vc.id,guildId:interaction.guild.id,adapterCreator:interaction.guild.voiceAdapterCreator,selfDeaf:true});
+          connection.on('debug', (m) => console.log('[VOICEVOX] connection debug:', m));
+          connection.on('stateChange', (oldS,newS) => console.log(`[VOICEVOX] connection状態(join時): ${oldS.status} -> ${newS.status}`));
+          await entersState(connection, VoiceConnectionStatus.Ready, 30000);
           const player=createAudioPlayer();
           connection.subscribe(player);
           voiceSessions.set(interaction.guild.id,{connection,player,channelId:vc.id,textChannelId:interaction.channelId,queue:[]});
           setupPlayerListeners(interaction.guild.id);
           console.log(`[VOICEVOX] VC接続完了 guild=${interaction.guild.id} channel=${vc.id}`);
           await reply(`**${vc.name}** に参加したよ！このテキストチャンネルの発言を読み上げるね`,{title:'VC参加',color:0x2ecc71});
-        }catch(e){console.error('[VOICEVOX] join エラー:',e.message);await replyErr(`ボイスチャンネルへの参加に失敗したよ…\n${e.message}`);}
+        }catch(e){console.error('[VOICEVOX] join エラー:',e.message,e.stack);await replyErr(`ボイスチャンネルへの参加に失敗したよ…\n${e.message}`);}
         return;
       }
       // ── leave ──
