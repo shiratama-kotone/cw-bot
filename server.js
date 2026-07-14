@@ -1829,11 +1829,11 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('clear').setDescription('メッセージを指定数削除するよ').addIntegerOption(o=>o.setName('count').setDescription('削除数（1〜100）').setRequired(true).setMinValue(1).setMaxValue(100)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('prohibit').setDescription('このチャンネルで発言禁止にするよ').addStringOption(o=>o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('release').setDescription('このチャンネルの発言禁止を解除するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ban').setDescription('CWブラックリストに追加して閲覧のみにするよ').addStringOption(o=>o.setName('cw_account_id').setDescription('ChatworkアカウントID').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('unban').setDescription('CWブラックリストから削除するよ').addStringOption(o=>o.setName('cw_account_id').setDescription('ChatworkアカウントID').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('ban').setDescription('Discordサーバーからbanするよ').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('理由（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('unban').setDescription('Discordサーバーのbanを解除するよ').addStringOption(o=>o.setName('user_id').setDescription('DiscordユーザーID').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('blacklist').setDescription('CWブラックリストを確認するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('kick').setDescription('CWルームからキックするよ').addStringOption(o=>o.setName('cw_account_id').setDescription('ChatworkアカウントID').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('mute').setDescription('CWルームで閲覧のみにするよ').addStringOption(o=>o.setName('cw_account_id').setDescription('ChatworkアカウントID').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('kick').setDescription('Discordサーバーからキックするよ').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('理由（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('mute').setDescription('DiscordユーザーをタイムアウトするよDefault30分').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)).addIntegerOption(o=>o.setName('minutes').setDescription('タイムアウト時間（分、デフォルト30）').setMinValue(1).setMaxValue(40320)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('fever').setDescription('CWルームのフィーバータイムを開始するよ').addStringOption(o=>o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
@@ -2081,58 +2081,70 @@ if(DISCORD_BOT_TOKEN){
       // ── ban ──
       if(cmd==='ban'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const cwId=interaction.options.getString('cw_account_id');
-        await CW.addBlackList(CW_ROOM,cwId);
-        const ms=await CW.members(CW_ROOM);
-        const tgt=ms.find(m=>String(m.account_id)===cwId);
-        if(tgt){ await CW.forceReadOnly(CW_ROOM,cwId,ms); }
-        const name=await CW.nameById(cwId,[],CW_ROOM);
-        await reply(`${name}（${cwId}）をブラックリストに追加して閲覧のみにしたよ`, {title:'BAN完了', color:0xe74c3c}); return;
+        if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
+        const target=interaction.options.getUser('user');
+        const reason=interaction.options.getString('reason')||'理由なし';
+        try{
+          await interaction.guild.members.ban(target.id,{reason:`${interaction.user.tag}: ${reason}`});
+          await reply(`<@${target.id}>（${target.tag}）をBANしたよ\n理由: ${reason}`,{title:'BAN完了',color:0xe74c3c});
+        }catch(e){ await replyErr(`BANに失敗したよ: ${e.message}`); }
+        return;
       }
 
       // ── unban ──
       if(cmd==='unban'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const cwId=interaction.options.getString('cw_account_id');
-        await dbQuery('DELETE FROM black_list WHERE room_id=$1 AND account_id=$2',[CW_ROOM,cwId]);
-        const name=await CW.nameById(cwId,[],CW_ROOM);
-        await reply(`${name}（${cwId}）をブラックリストから削除したよ`, {title:'BAN解除', color:0x2ecc71}); return;
+        if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
+        const userId=interaction.options.getString('user_id');
+        try{
+          await interaction.guild.members.unban(userId);
+          await reply(`ID:${userId} のBANを解除したよ`,{title:'BAN解除',color:0x2ecc71});
+        }catch(e){ await replyErr(`BAN解除に失敗したよ: ${e.message}`); }
+        return;
       }
 
       // ── blacklist ──
       if(cmd==='blacklist'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const r=await dbQuery('SELECT account_id FROM black_list WHERE room_id=$1 ORDER BY account_id',[CW_ROOM]);
-        if(!r.rows.length){ await reply('ブラックリストは空だよ', {title:'CWブラックリスト'}); return; }
-        let msg='**CWブラックリスト**\n';
-        for(const row of r.rows){ const n=await CW.nameById(row.account_id,[],CW_ROOM); msg+=`・${n}（${row.account_id}）\n`; }
-        await reply(msg, {title:'CWブラックリスト'}); return;
+        if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
+        try{
+          const bans=await interaction.guild.bans.fetch();
+          if(!bans.size){ await reply('このサーバーのBANリストは空だよ',{title:'BANリスト'}); return; }
+          const list=bans.map(b=>`・${b.user.tag}（${b.user.id}）${b.reason?` - ${b.reason}`:''}`).slice(0,20).join('\n');
+          await reply(list+(bans.size>20?`\n…他${bans.size-20}件`:''),{title:`BANリスト（${bans.size}件）`});
+        }catch(e){ await replyErr(`BANリスト取得に失敗したよ: ${e.message}`); }
+        return;
       }
 
       // ── kick ──
       if(cmd==='kick'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const cwId=interaction.options.getString('cw_account_id');
-        const ms=await CW.members(CW_ROOM); const tgt=ms.find(m=>String(m.account_id)===cwId);
-        if(!tgt){ await reply('そのIDのメンバーはCWルームにいないみたい'); return; }
-        const ad=ms.filter(m=>m.role==='admin'&&String(m.account_id)!==cwId).map(m=>String(m.account_id));
-        if(!ad.length){ await reply('管理者が0人になるからキックできないよ'); return; }
-        const me=ms.filter(m=>m.role==='member'&&String(m.account_id)!==cwId).map(m=>String(m.account_id));
-        const ro=ms.filter(m=>m.role==='readonly'&&String(m.account_id)!==cwId).map(m=>String(m.account_id));
-        const p=new URLSearchParams(); if(ad.length) p.append('members_admin_ids',ad.join(',')); if(me.length) p.append('members_member_ids',me.join(',')); if(ro.length) p.append('members_readonly_ids',ro.join(','));
-        await apiCallLimiter(); await axios.put(`https://api.chatwork.com/v2/rooms/${CW_ROOM}/members`,p,{headers:{'X-ChatWorkToken':CHATWORK_API_TOKEN}});
-        await reply(`${tgt.name}（${cwId}）をCWルームからキックしたよ！`, {title:'キック完了', color:0xe74c3c}); return;
+        if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
+        const target=interaction.options.getUser('user');
+        const reason=interaction.options.getString('reason')||'理由なし';
+        try{
+          const member=await interaction.guild.members.fetch(target.id).catch(()=>null);
+          if(!member){ await replyErr('そのユーザーはこのサーバーにいないみたい'); return; }
+          await member.kick(`${interaction.user.tag}: ${reason}`);
+          await reply(`<@${target.id}>（${target.tag}）をキックしたよ\n理由: ${reason}`,{title:'キック完了',color:0xe74c3c});
+        }catch(e){ await replyErr(`キックに失敗したよ: ${e.message}`); }
+        return;
       }
 
       // ── mute ──
       if(cmd==='mute'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const cwId=interaction.options.getString('cw_account_id');
-        const ms=await CW.members(CW_ROOM); const tgt=ms.find(m=>String(m.account_id)===cwId);
-        if(!tgt){ await reply('そのIDのメンバーはCWルームにいないみたい'); return; }
-        if(tgt.role==='readonly'){ await reply(`${tgt.name}はもう閲覧のみだよ`, {title:'ミュート'}); return; }
-        await CW.addBlackList(CW_ROOM,cwId); await CW.forceReadOnly(CW_ROOM,cwId,ms);
-        await reply(`${tgt.name}（${cwId}）を閲覧のみにしたよ！`, {title:'ミュート完了', color:0xe74c3c}); return;
+        if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
+        const target=interaction.options.getUser('user');
+        const minutes=interaction.options.getInteger('minutes')||30;
+        try{
+          const member=await interaction.guild.members.fetch(target.id).catch(()=>null);
+          if(!member){ await replyErr('そのユーザーはこのサーバーにいないみたい'); return; }
+          await member.timeout(minutes*60*1000,`${interaction.user.tag}: タイムアウト`);
+          const until=new Date(Date.now()+minutes*60*1000).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
+          await reply(`<@${target.id}>（${target.tag}）を**${minutes}分**タイムアウトしたよ\n解除: ${until}`,{title:'タイムアウト完了',color:0xe74c3c});
+        }catch(e){ await replyErr(`タイムアウトに失敗したよ: ${e.message}`); }
+        return;
       }
 
       // ── fever ──
@@ -2352,26 +2364,34 @@ if(DISCORD_BOT_TOKEN){
       const isAdmin = isDM ? false : (message.member?.permissions?.has(PermissionFlagsBits.ManageMessages)||false);
       const trimmed = content.trim();
 
-      // ━━ 全チャンネル・DM共通のメッセージ反応（全ユーザー対象） ━━
-      if(trimmed === 'おみくじ'){
-        await message.reply(`おみくじの結果は…\n**${CW.drawOmikuji()}**\nだよっ！`).catch(()=>{});
-      }
-      {
-        const m = trimmed.match(/^おみくじ(\d+)連$/);
-        if(m){
-          const n = Math.min(parseInt(m[1]), 10000);
-          if(n >= 1){
-            const rs = Array.from({length:n}, ()=>CW.drawOmikuji());
-            await message.reply(`おみくじ${n}連（大凶99%版）の結果は…\n**${CW.summarizeOmikuji(rs)}**\nだよっ！`).catch(()=>{});
+      // ━━ メッセージ反応（ALLOWED_GUILDかつ公開チャンネルのみ、DMは除外） ━━
+      // プライベートチャンネル判定: @everyoneがViewChannelを持っていないチャンネルは非公開
+      const isPublicChannel = !isDM && message.guild && message.guild.id === ALLOWED_GUILD_ID && (() => {
+        const everyonePerms = message.channel.permissionsFor(message.guild.roles.everyone);
+        return everyonePerms?.has(PermissionFlagsBits.ViewChannel) ?? false;
+      })();
+
+      if(isPublicChannel){
+        if(trimmed === 'おみくじ'){
+          await message.reply(`おみくじの結果は…\n**${CW.drawOmikuji()}**\nだよっ！`).catch(()=>{});
+        }
+        {
+          const m = trimmed.match(/^おみくじ(\d+)連$/);
+          if(m){
+            const n = Math.min(parseInt(m[1]), 10000);
+            if(n >= 1){
+              const rs = Array.from({length:n}, ()=>CW.drawOmikuji());
+              await message.reply(`おみくじ${n}連（大凶99%版）の結果は…\n**${CW.summarizeOmikuji(rs)}**\nだよっ！`).catch(()=>{});
+            }
           }
         }
-      }
-      if(trimmed === 'おやすみ') await message.reply('おやすみ！').catch(()=>{});
-      if(trimmed === 'おはよう') await message.reply('おはよう！').catch(()=>{});
-      if(trimmed === 'ゆゆゆ'){
-        const yid = process.env.YUYUYU_DISCORD_ID || '';
-        const mention = yid ? `<@${yid}>` : '@shiratama_kotone';
-        await message.reply(`${mention} ゆゆゆ\n${message.author.username}に呼ばれてるよっ！`).catch(()=>{});
+        if(trimmed === 'おやすみ') await message.reply('おやすみ！').catch(()=>{});
+        if(trimmed === 'おはよう') await message.reply('おはよう！').catch(()=>{});
+        if(trimmed === 'ゆゆゆ'){
+          const yid = process.env.YUYUYU_DISCORD_ID || '';
+          const mention = yid ? `<@${yid}>` : '@shiratama_kotone';
+          await message.reply(`${mention} ゆゆゆ\n${message.author.username}に呼ばれてるよっ！`).catch(()=>{});
+        }
       }
 
       // ━━ サーバー内のみ: XP加算・投稿規制（許可サーバーのみ） ━━
