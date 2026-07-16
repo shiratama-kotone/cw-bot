@@ -253,6 +253,135 @@ const JOBS={
     work:(_eco)=>({earned:0,msg:'ゴロゴロしていた。'})},
 };
 function workLimitForLevel(lv){if(lv>=1000)return 25;if(lv>=500)return 20;if(lv>=100)return 15;if(lv>=50)return 10;if(lv>=10)return 7;return 5;}
+
+// ============================================================
+// Server Status チャンネル自動更新
+// ============================================================
+// 総メッセージ数の簡易カウント（全テキストチャンネルのメッセージ数合計は重すぎるので
+// DBに別途カウンタを持つ。初期値は0で、NGワード検知時にインクリメントする代わりに
+// guild.channels.cache のapproximateMessageCount等がないため、定期更新時に
+// 各チャンネルのfetchedMessages件数を計上する代わりに guild.approximateMemberCount を使う）
+// ※ 総メッセージ数はDiscord APIでは取得できないため、botが観測したメッセージ数をDBに蓄積する
+async function ensureServerStatusChannels(guild) {
+  const { PermissionsBitField, ChannelType } = require('discord.js');
+  const r = await dbQuery('SELECT * FROM server_status_channels WHERE guild_id=$1', [guild.id]);
+  let row = r.rows[0];
+  if (row && row.total_members_ch) return row; // 既存
+
+  // カテゴリ作成
+  const everyone = guild.roles.everyone;
+  const denyAll = [
+    PermissionsBitField.Flags.SendMessages,
+    PermissionsBitField.Flags.Connect,
+  ];
+  const category = await guild.channels.create({
+    name: 'サーバー概要',
+    type: ChannelType.GuildCategory,
+    permissionOverwrites: [{ id: everyone.id, deny: denyAll }],
+  });
+
+  const chNames = [
+    'total_members_ch', 'members_ch', 'bots_ch',
+    'channels_ch', 'roles_ch', 'total_messages_ch'
+  ];
+  const defaults = ['総メンバー数：---', 'メンバー数：---', 'bot数：---', 'チャンネル数：---', 'ロール数：---', '総メッセージ数：---'];
+  const chIds = {};
+  for (let i = 0; i < chNames.length; i++) {
+    const ch = await guild.channels.create({
+      name: defaults[i],
+      type: ChannelType.GuildVoice,
+      parent: category.id,
+      permissionOverwrites: [{ id: everyone.id, deny: denyAll, allow: [PermissionsBitField.Flags.ViewChannel] }],
+    });
+    chIds[chNames[i]] = ch.id;
+  }
+
+  await dbQuery(`INSERT INTO server_status_channels (guild_id,category_id,total_members_ch,members_ch,bots_ch,channels_ch,roles_ch,total_messages_ch)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (guild_id) DO UPDATE SET
+    category_id=$2,total_members_ch=$3,members_ch=$4,bots_ch=$5,channels_ch=$6,roles_ch=$7,total_messages_ch=$8,updated_at=NOW()`,
+    [guild.id, category.id, chIds.total_members_ch, chIds.members_ch, chIds.bots_ch, chIds.channels_ch, chIds.roles_ch, chIds.total_messages_ch]);
+
+  return (await dbQuery('SELECT * FROM server_status_channels WHERE guild_id=$1', [guild.id])).rows[0];
+}
+
+async function updateServerStatus(guild) {
+  try {
+    await guild.members.fetch();
+    const row = await dbQuery('SELECT * FROM server_status_channels WHERE guild_id=$1', [guild.id]);
+    if (!row.rows.length || !row.rows[0].total_members_ch) return;
+    const d = row.rows[0];
+    const allMembers = guild.members.cache;
+    const bots = allMembers.filter(m => m.user.bot).size;
+    const humans = allMembers.size - bots;
+    const totalMessages = (await dbQuery('SELECT COALESCE(SUM(message_count),0) AS total FROM total_message_counts WHERE guild_id=$1', [guild.id])).rows[0]?.total || 0;
+
+    const map = {
+      [d.total_members_ch]: `総メンバー数：${allMembers.size}人`,
+      [d.members_ch]:       `メンバー数：${humans}人`,
+      [d.bots_ch]:          `bot数：${bots}台`,
+      [d.channels_ch]:      `チャンネル数：${guild.channels.cache.size}個`,
+      [d.roles_ch]:         `ロール数：${guild.roles.cache.size}個`,
+      [d.total_messages_ch]:`総メッセージ数：${Number(totalMessages).toLocaleString()}件`,
+    };
+    for (const [chId, name] of Object.entries(map)) {
+      const ch = guild.channels.cache.get(chId);
+      if (ch && ch.name !== name) await ch.setName(name).catch(()=>{});
+    }
+  } catch(e) { console.error('[ServerStatus] 更新エラー:', e.message); }
+}
+
+// ============================================================
+// Discord NGワード処理
+// ============================================================
+async function checkDiscordNgWords(message) {
+  if (!message.guild) return;
+  // 除外チャンネルチェック
+  const excl = await dbQuery('SELECT 1 FROM discord_ng_exclude_channels WHERE guild_id=$1 AND channel_id=$2', [message.guild.id, message.channel.id]);
+  if (excl.rowCount > 0) return;
+
+  const ng = await dbQuery('SELECT pattern, is_regex FROM discord_ng_words WHERE guild_id=$1', [message.guild.id]);
+  if (!ng.rowCount) return;
+
+  const content = message.content || '';
+  let matched = false;
+  for (const row of ng.rows) {
+    if (row.is_regex) {
+      try { if (new RegExp(row.pattern, 'i').test(content)) { matched = true; break; } } catch {}
+    } else {
+      if (content.includes(row.pattern)) { matched = true; break; }
+    }
+  }
+  if (!matched) return;
+
+  // メッセージ削除
+  await message.delete().catch(() => {});
+
+  // 警告カウントをインクリメント
+  const res = await dbQuery(`INSERT INTO discord_warnings (guild_id,user_id,count) VALUES ($1,$2,1)
+    ON CONFLICT (guild_id,user_id) DO UPDATE SET count=discord_warnings.count+1,updated_at=NOW()
+    RETURNING count`, [message.guild.id, message.author.id]);
+  const count = res.rows[0]?.count || 1;
+
+  let actionMsg = `NGワードが含まれていたよ！（警告${count}回目）`;
+  try {
+    const member = await message.guild.members.fetch(message.author.id).catch(() => null);
+    if (member) {
+      if (count >= 21) {
+        await member.ban({ reason: `NGワード違反 ${count}回` });
+        actionMsg += '\n21回以上のため**BAN**しました。';
+      } else if (count >= 11) {
+        await member.timeout(27 * 24 * 60 * 60 * 1000, `NGワード違反 ${count}回`); // 27日（最大28日に近い値）
+        actionMsg += '\n11回以上のためタイムアウト（上限）しました。';
+      } else if (count >= 6) {
+        await member.timeout(24 * 60 * 60 * 1000, `NGワード違反 ${count}回`); // 1日
+        actionMsg += '\n6回以上のためタイムアウト（1日）しました。';
+      }
+    }
+  } catch(e) { console.error('[NG] アクションエラー:', e.message); }
+
+  const warn = await message.channel.send(`<@${message.author.id}> ${actionMsg}`).catch(() => null);
+  if (warn) setTimeout(() => warn.delete().catch(() => {}), 8000);
+}
 async function getEconomy(guildId,userId){
   const r=await dbQuery('SELECT * FROM discord_economy WHERE guild_id=$1 AND user_id=$2',[guildId,userId]);
   if(r.rows.length)return r.rows[0];
@@ -459,6 +588,40 @@ async function initializeDatabase() {
       reading TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(guild_id, word))`);
+
+    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_ng_words (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      pattern TEXT NOT NULL,
+      is_regex BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(guild_id, pattern))`);
+
+    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_ng_exclude_channels (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      UNIQUE(guild_id, channel_id))`);
+
+    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_warnings (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      count INT DEFAULT 0,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(guild_id, user_id))`);
+
+    await dbQuery(`CREATE TABLE IF NOT EXISTS server_status_channels (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL UNIQUE,
+      category_id TEXT,
+      total_members_ch TEXT,
+      members_ch TEXT,
+      bots_ch TEXT,
+      channels_ch TEXT,
+      roles_ch TEXT,
+      total_messages_ch TEXT,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
 
     console.log('[DB] テーブル初期化完了');
   } catch (e) { console.error('[DB] 初期化エラー:', e.message); }
@@ -1699,6 +1862,18 @@ cron.schedule('0 0 18 * * *', async()=>await sendTomorrowWeather(),             
 
 cron.schedule('0 0 6 * * 1',async()=>{try{const r=await dbQuery("SELECT guild_id,user_id FROM discord_economy WHERE job='ニート'");for(const row of r.rows){await dbQuery('UPDATE discord_economy SET wallet=wallet+1000,updated_at=NOW() WHERE guild_id=$1 AND user_id=$2',[row.guild_id,row.user_id]);if(discordClient){const ch=await discordClient.channels.fetch(DISCORD_LEVEL_UP_CHANNEL_ID).catch(()=>null);if(ch)await ch.send({embeds:[{description:`<@${row.user_id}> 生活保護が支給されたよ！（1,000円）`,color:0x95a5a6}]}).catch(()=>{});}}}catch(e){console.error('[Economy]生活保護:',e.message);}},{timezone:'Asia/Tokyo'});
 
+// 1分毎: サーバーステータス更新
+cron.schedule('* * * * *', async()=>{
+  if(!discordClient) return;
+  try{
+    const rows=(await dbQuery('SELECT guild_id FROM server_status_channels')).rows;
+    for(const row of rows){
+      const guild=discordClient.guilds.cache.get(row.guild_id)||await discordClient.guilds.fetch(row.guild_id).catch(()=>null);
+      if(guild) await updateServerStatus(guild);
+    }
+  }catch(e){console.error('[ServerStatus] cronエラー:',e.message);}
+});
+
 cron.schedule('*/1 * * * *',  async()=>{ await checkEQ(); await checkAlarms(); await checkNhkNews(); await checkWarnings(); },{timezone:'Asia/Tokyo'});
 cron.schedule('45 14 11 3 *', async()=>await send311(true),  {timezone:'Asia/Tokyo'});
 cron.schedule('46 14 11 3 *', async()=>await send311(false), {timezone:'Asia/Tokyo'});
@@ -1838,6 +2013,21 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('ng_add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng_check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      // Discord NGワード（サーバーごと）
+      new SlashCommandBuilder().setName('discord_ng_add').setDescription('DiscordのNGワードを追加するよ')
+        .addStringOption(o=>o.setName('pattern').setDescription('NG文字列または正規表現').setRequired(true))
+        .addBooleanOption(o=>o.setName('is_regex').setDescription('正規表現として扱う（デフォルト:false）'))
+        .setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('discord_ng_list').setDescription('DiscordのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('discord_ng_remove').setDescription('DiscordのNGワードを削除するよ')
+        .addIntegerOption(o=>o.setName('id').setDescription('NGワードのID（一覧で確認）').setRequired(true))
+        .setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('discord_ng_exclude').setDescription('NGワードチェックをこのチャンネルで除外・解除するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('discord_warning_reset').setDescription('ユーザーの警告回数をリセットするよ')
+        .addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true))
+        .setDefaultMemberPermissions(ADMIN_PERM),
+      // サーバーステータス
+      new SlashCommandBuilder().setName('server_status').setDescription('サーバー概要カテゴリを作成して1分毎に更新するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('event').setDescription('イベントを登録・一覧・削除するよ')
         .addSubcommand(s=>s.setName('add').setDescription('イベントを登録するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、例: 06-15）').setRequired(true)).addStringOption(o=>o.setName('content').setDescription('イベント内容').setRequired(true)))
         .addSubcommand(s=>s.setName('list').setDescription('指定日のイベント一覧を表示するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、省略で今日）')))
@@ -2319,6 +2509,70 @@ if(DISCORD_BOT_TOKEN){
         await reply(items.map(([id,s])=>`**ID:${id}** ${s.charName}（${s.styleName}）`).join('\n'),{title:`話者一覧（${page}/${totalPages}ページ）`,color:0x7289da});
         return;
       }
+      // ── discord_ng_add ──
+      if(cmd==='discord_ng_add'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const pattern=interaction.options.getString('pattern');
+        const isRegex=interaction.options.getBoolean('is_regex')||false;
+        if(isRegex){try{new RegExp(pattern);}catch{await replyErr('正規表現の書式が正しくないよ');return;}}
+        await dbQuery('INSERT INTO discord_ng_words (guild_id,pattern,is_regex) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',[interaction.guild.id,pattern,isRegex]);
+        await reply(`「${pattern}」をDiscord NGワードに登録したよ！${isRegex?' (正規表現)':''}`,{title:'Discord NGワード登録',color:0xe74c3c});return;
+      }
+      // ── discord_ng_list ──
+      if(cmd==='discord_ng_list'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const r=await dbQuery('SELECT id,pattern,is_regex FROM discord_ng_words WHERE guild_id=$1 ORDER BY id',[interaction.guild.id]);
+        const ex=await dbQuery('SELECT channel_id FROM discord_ng_exclude_channels WHERE guild_id=$1',[interaction.guild.id]);
+        if(!r.rowCount){await reply('NGワードはまだないよ',{title:'Discord NGワード一覧'});return;}
+        const list=r.rows.map(row=>`ID:${row.id} ${row.is_regex?'[正規表現]':''} \`${row.pattern}\``).join('\n');
+        const exList=ex.rows.map(row=>`<#${row.channel_id}>`).join(' ')||'なし';
+        await reply(`${list}\n\n**除外チャンネル：** ${exList}`,{title:'Discord NGワード一覧'});return;
+      }
+      // ── discord_ng_remove ──
+      if(cmd==='discord_ng_remove'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const id=interaction.options.getInteger('id');
+        const r=await dbQuery('DELETE FROM discord_ng_words WHERE id=$1 AND guild_id=$2 RETURNING pattern',[id,interaction.guild.id]);
+        if(!r.rowCount){await replyErr(`ID:${id} のNGワードは見つからなかったよ`);return;}
+        await reply(`「${r.rows[0].pattern}」を削除したよ`,{title:'Discord NGワード削除',color:0x2ecc71});return;
+      }
+      // ── discord_ng_exclude ──
+      if(cmd==='discord_ng_exclude'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const chId=interaction.channelId;
+        const ex=await dbQuery('SELECT 1 FROM discord_ng_exclude_channels WHERE guild_id=$1 AND channel_id=$2',[interaction.guild.id,chId]);
+        if(ex.rowCount>0){
+          await dbQuery('DELETE FROM discord_ng_exclude_channels WHERE guild_id=$1 AND channel_id=$2',[interaction.guild.id,chId]);
+          await reply('このチャンネルの除外設定を解除したよ',{title:'除外解除',color:0x2ecc71});
+        }else{
+          await dbQuery('INSERT INTO discord_ng_exclude_channels (guild_id,channel_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[interaction.guild.id,chId]);
+          await reply('このチャンネルをNGワードチェックから除外したよ',{title:'除外設定',color:0xf39c12});
+        }
+        return;
+      }
+      // ── discord_warning_reset ──
+      if(cmd==='discord_warning_reset'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const target=interaction.options.getUser('user');
+        await dbQuery('UPDATE discord_warnings SET count=0,updated_at=NOW() WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,target.id]);
+        await reply(`<@${target.id}> の警告回数をリセットしたよ`,{title:'警告リセット',color:0x2ecc71});return;
+      }
+      // ── server_status ──
+      if(cmd==='server_status'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        await reply('サーバー概要カテゴリを作成中…少し待ってね',{title:'Server Status',color:0x7289da});
+        await ensureServerStatusChannels(interaction.guild);
+        await updateServerStatus(interaction.guild);
+        await interaction.editReply({embeds:[{title:'Server Status',description:'サーバー概要カテゴリを作成して1分毎に更新するよ！',color:0x2ecc71}],content:''});
+        return;
+      }
+
       await reply('不明なコマンドだよ', {color:0xe74c3c});
     } catch(e){
       console.error('[Discord] コマンドエラー:',e.message);
@@ -2394,8 +2648,13 @@ if(DISCORD_BOT_TOKEN){
         }
       }
 
-      // ━━ サーバー内のみ: XP加算・投稿規制（許可サーバーのみ） ━━
+      // ━━ サーバー内のみ: XP加算・NGワードチェック・投稿規制（許可サーバーのみ） ━━
       if(!isDM && !message.author.bot && isAllowedGuild){
+        // Discord NGワードチェック（全サーバー対象）
+        await checkDiscordNgWords(message).catch(()=>{});
+        // メッセージが削除されていたら後続処理をスキップ
+        if(!message.channel) return;
+
         addDiscordXp(message.member, message.guild.id).catch(()=>{});
         if(!isAdmin){
           const pr=await dbQuery('SELECT ends_at FROM discord_prohibit WHERE channel_id=$1 AND ends_at>NOW()',[message.channel.id]);
