@@ -282,9 +282,9 @@ async function ensureServerStatusChannels(guild) {
 
   const chNames = [
     'total_members_ch', 'members_ch', 'bots_ch',
-    'channels_ch', 'roles_ch', 'total_messages_ch'
+    'channels_ch', 'roles_ch', 'total_messages_ch', 'private_ch'
   ];
-  const defaults = ['総メンバー数：---', 'メンバー数：---', 'bot数：---', 'チャンネル数：---', 'ロール数：---', '総メッセージ数：---'];
+  const defaults = ['総メンバー数：---', 'メンバー数：---', 'bot数：---', 'チャンネル数：---', 'ロール数：---', '総メッセージ数：---', 'プライベートCH数：---'];
   const chIds = {};
   for (let i = 0; i < chNames.length; i++) {
     const ch = await guild.channels.create({
@@ -296,34 +296,48 @@ async function ensureServerStatusChannels(guild) {
     chIds[chNames[i]] = ch.id;
   }
 
-  await dbQuery(`INSERT INTO server_status_channels (guild_id,category_id,total_members_ch,members_ch,bots_ch,channels_ch,roles_ch,total_messages_ch)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (guild_id) DO UPDATE SET
-    category_id=$2,total_members_ch=$3,members_ch=$4,bots_ch=$5,channels_ch=$6,roles_ch=$7,total_messages_ch=$8,updated_at=NOW()`,
-    [guild.id, category.id, chIds.total_members_ch, chIds.members_ch, chIds.bots_ch, chIds.channels_ch, chIds.roles_ch, chIds.total_messages_ch]);
+  await dbQuery(`INSERT INTO server_status_channels (guild_id,category_id,total_members_ch,members_ch,bots_ch,channels_ch,roles_ch,total_messages_ch,private_ch)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (guild_id) DO UPDATE SET
+    category_id=$2,total_members_ch=$3,members_ch=$4,bots_ch=$5,channels_ch=$6,roles_ch=$7,total_messages_ch=$8,private_ch=$9,updated_at=NOW()`,
+    [guild.id, category.id, chIds.total_members_ch, chIds.members_ch, chIds.bots_ch, chIds.channels_ch, chIds.roles_ch, chIds.total_messages_ch, chIds.private_ch]);
 
   return (await dbQuery('SELECT * FROM server_status_channels WHERE guild_id=$1', [guild.id])).rows[0];
 }
 
 async function updateServerStatus(guild) {
   try {
+    const { PermissionsBitField, ChannelType } = require('discord.js');
     await guild.members.fetch();
+    await guild.channels.fetch();
     const row = await dbQuery('SELECT * FROM server_status_channels WHERE guild_id=$1', [guild.id]);
     if (!row.rows.length || !row.rows[0].total_members_ch) return;
     const d = row.rows[0];
     const allMembers = guild.members.cache;
     const bots = allMembers.filter(m => m.user.bot).size;
     const humans = allMembers.size - bots;
-    const totalMessages = (await dbQuery('SELECT COALESCE(SUM(message_count),0) AS total FROM total_message_counts WHERE guild_id=$1', [guild.id])).rows[0]?.total || 0;
+    const everyone = guild.roles.everyone;
+    // プライベートチャンネル = @everyoneがViewChannelを持っていないチャンネル
+    const privateChCount = guild.channels.cache.filter(ch => {
+      if(ch.type === ChannelType.GuildCategory) return false;
+      const perms = ch.permissionsFor(everyone);
+      return perms && !perms.has(PermissionsBitField.Flags.ViewChannel);
+    }).size;
+    // 総メッセージ数はDBカウンタから取得
+    const msgRow = await dbQuery('SELECT count FROM discord_message_counts WHERE guild_id=$1', [guild.id]);
+    const totalMessages = msgRow.rows.length ? Number(msgRow.rows[0].count) : 0;
 
     const map = {
       [d.total_members_ch]: `総メンバー数：${allMembers.size}人`,
-      [d.members_ch]:       `メンバー数：${humans}人`,
-      [d.bots_ch]:          `bot数：${bots}台`,
-      [d.channels_ch]:      `チャンネル数：${guild.channels.cache.size}個`,
-      [d.roles_ch]:         `ロール数：${guild.roles.cache.size}個`,
-      [d.total_messages_ch]:`総メッセージ数：${Number(totalMessages).toLocaleString()}件`,
+      [d.members_ch]:        `メンバー数：${humans}人`,
+      [d.bots_ch]:           `bot数：${bots}台`,
+      [d.channels_ch]:       `チャンネル数：${guild.channels.cache.size}個`,
+      [d.roles_ch]:          `ロール数：${guild.roles.cache.size}個`,
+      [d.total_messages_ch]: `総メッセージ数：${totalMessages.toLocaleString()}件`,
     };
+    if(d.private_ch) map[d.private_ch] = `プライベートCH数：${privateChCount}個`;
+
     for (const [chId, name] of Object.entries(map)) {
+      if(!chId) continue;
       const ch = guild.channels.cache.get(chId);
       if (ch && ch.name !== name) await ch.setName(name).catch(()=>{});
     }
@@ -621,7 +635,14 @@ async function initializeDatabase() {
       channels_ch TEXT,
       roles_ch TEXT,
       total_messages_ch TEXT,
+      private_ch TEXT,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
+    await dbQuery(`ALTER TABLE server_status_channels ADD COLUMN IF NOT EXISTS private_ch TEXT`);
+
+    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_message_counts (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL UNIQUE,
+      count BIGINT DEFAULT 0)`);
 
     console.log('[DB] テーブル初期化完了');
   } catch (e) { console.error('[DB] 初期化エラー:', e.message); }
@@ -2650,6 +2671,11 @@ if(DISCORD_BOT_TOKEN){
 
       // ━━ サーバー内のみ: XP加算・NGワードチェック・投稿規制（許可サーバーのみ） ━━
       if(!isDM && !message.author.bot && isAllowedGuild){
+        // 総メッセージ数カウントアップ
+        dbQuery(`INSERT INTO discord_message_counts (guild_id,count) VALUES ($1,1)
+          ON CONFLICT (guild_id) DO UPDATE SET count=discord_message_counts.count+1`,
+          [message.guild.id]).catch(()=>{});
+
         // Discord NGワードチェック（全サーバー対象）
         await checkDiscordNgWords(message).catch(()=>{});
         // メッセージが削除されていたら後続処理をスキップ
