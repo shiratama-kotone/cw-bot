@@ -255,6 +255,18 @@ const JOBS={
 function workLimitForLevel(lv){if(lv>=1000)return 25;if(lv>=500)return 20;if(lv>=100)return 15;if(lv>=50)return 10;if(lv>=10)return 7;return 5;}
 
 // ============================================================
+// チャンネル設定ヘルパー
+// ============================================================
+async function getGuildChannel(guildId, type) {
+  const r = await dbQuery('SELECT channel_id FROM guild_channels WHERE guild_id=$1 AND channel_type=$2', [guildId, type]);
+  return r.rows[0]?.channel_id || null;
+}
+async function setGuildChannel(guildId, type, channelId) {
+  await dbQuery(`INSERT INTO guild_channels (guild_id,channel_type,channel_id) VALUES ($1,$2,$3)
+    ON CONFLICT (guild_id,channel_type) DO UPDATE SET channel_id=$3,updated_at=NOW()`, [guildId, type, channelId]);
+}
+
+// ============================================================
 // Server Status チャンネル自動更新
 // ============================================================
 // 総メッセージ数の簡易カウント（全テキストチャンネルのメッセージ数合計は重すぎるので
@@ -264,36 +276,46 @@ function workLimitForLevel(lv){if(lv>=1000)return 25;if(lv>=500)return 20;if(lv>
 // ※ 総メッセージ数はDiscord APIでは取得できないため、botが観測したメッセージ数をDBに蓄積する
 async function ensureServerStatusChannels(guild) {
   const { PermissionsBitField, ChannelType } = require('discord.js');
+  const everyone = guild.roles.everyone;
+  const denyAll = [PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.Connect];
+  const allowView = [PermissionsBitField.Flags.ViewChannel];
+
   const r = await dbQuery('SELECT * FROM server_status_channels WHERE guild_id=$1', [guild.id]);
   let row = r.rows[0];
-  if (row && row.total_members_ch) return row; // 既存
 
-  // カテゴリ作成
-  const everyone = guild.roles.everyone;
-  const denyAll = [
-    PermissionsBitField.Flags.SendMessages,
-    PermissionsBitField.Flags.Connect,
-  ];
-  const category = await guild.channels.create({
-    name: 'サーバー概要',
-    type: ChannelType.GuildCategory,
-    permissionOverwrites: [{ id: everyone.id, deny: denyAll }],
-  });
-
-  const chNames = [
-    'total_members_ch', 'members_ch', 'bots_ch',
-    'channels_ch', 'roles_ch', 'total_messages_ch', 'private_ch'
-  ];
-  const defaults = ['総メンバー数：---', 'メンバー数：---', 'bot数：---', 'チャンネル数：---', 'ロール数：---', '総メッセージ数：---', 'プライベートCH数：---'];
-  const chIds = {};
-  for (let i = 0; i < chNames.length; i++) {
-    const ch = await guild.channels.create({
-      name: defaults[i],
-      type: ChannelType.GuildVoice,
-      parent: category.id,
-      permissionOverwrites: [{ id: everyone.id, deny: denyAll, allow: [PermissionsBitField.Flags.ViewChannel] }],
+  // カテゴリが存在するか確認、なければ作成
+  let category = row?.category_id ? guild.channels.cache.get(row.category_id) : null;
+  if (!category) {
+    category = await guild.channels.create({
+      name: 'サーバー概要', type: ChannelType.GuildCategory,
+      permissionOverwrites: [{ id: everyone.id, deny: denyAll }],
     });
-    chIds[chNames[i]] = ch.id;
+  }
+
+  const chDefs = [
+    { key: 'total_members_ch', label: '総メンバー数：---' },
+    { key: 'members_ch',       label: 'メンバー数：---' },
+    { key: 'bots_ch',          label: 'bot数：---' },
+    { key: 'channels_ch',      label: 'チャンネル数：---' },
+    { key: 'roles_ch',         label: 'ロール数：---' },
+    { key: 'total_messages_ch',label: '総メッセージ数：---' },
+    { key: 'private_ch',       label: 'プライベートCH数：---' },
+  ];
+
+  const chIds = {};
+  for (const def of chDefs) {
+    // 既存チャンネルが生きているか確認
+    const existing = row?.[def.key] ? guild.channels.cache.get(row[def.key]) : null;
+    if (existing) {
+      chIds[def.key] = existing.id;
+    } else {
+      // なければ作成
+      const ch = await guild.channels.create({
+        name: def.label, type: ChannelType.GuildVoice, parent: category.id,
+        permissionOverwrites: [{ id: everyone.id, deny: denyAll, allow: allowView }],
+      });
+      chIds[def.key] = ch.id;
+    }
   }
 
   await dbQuery(`INSERT INTO server_status_channels (guild_id,category_id,total_members_ch,members_ch,bots_ch,channels_ch,roles_ch,total_messages_ch,private_ch)
@@ -393,8 +415,24 @@ async function checkDiscordNgWords(message) {
     }
   } catch(e) { console.error('[NG] アクションエラー:', e.message); }
 
-  const warn = await message.channel.send(`<@${message.author.id}> ${actionMsg}`).catch(() => null);
-  if (warn) setTimeout(() => warn.delete().catch(() => {}), 8000);
+  // DMに通知
+  message.author.send(`**NGワード警告**\n${actionMsg}`).catch(()=>{});
+
+  // 管理者チャンネルに通知
+  const adminChId = await getGuildChannel(message.guild.id, 'admin');
+  if(adminChId){
+    const adminCh = message.guild.channels.cache.get(adminChId);
+    if(adminCh) adminCh.send({embeds:[{
+      title:'NGワード検知',
+      description:`<@${message.author.id}>（${message.author.tag}）\nチャンネル: <#${message.channel.id}>\n${actionMsg}`,
+      color:0xe74c3c,
+      footer:{text:new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}
+    }]}).catch(()=>{});
+  } else {
+    // 管理者チャンネルが未設定なら元のチャンネルに送信
+    const warn = await message.channel.send(`<@${message.author.id}> ${actionMsg}`).catch(() => null);
+    if (warn) setTimeout(() => warn.delete().catch(() => {}), 8000);
+  }
 }
 async function getEconomy(guildId,userId){
   const r=await dbQuery('SELECT * FROM discord_economy WHERE guild_id=$1 AND user_id=$2',[guildId,userId]);
@@ -643,6 +681,15 @@ async function initializeDatabase() {
       id SERIAL PRIMARY KEY,
       guild_id TEXT NOT NULL UNIQUE,
       count BIGINT DEFAULT 0)`);
+
+    // チャンネル設定テーブル（/eew, /join-notice, /leveling, /chatwork, /bbs, /admin）
+    await dbQuery(`CREATE TABLE IF NOT EXISTS guild_channels (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      channel_type TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(guild_id, channel_type))`);
 
     console.log('[DB] テーブル初期化完了');
   } catch (e) { console.error('[DB] 初期化エラー:', e.message); }
@@ -2006,49 +2053,57 @@ if(DISCORD_BOT_TOKEN){
     const cmds = [
       // ━━ 誰でも使えるコマンド ━━
       new SlashCommandBuilder().setName('help').setDescription('コマンド一覧を表示するよ'),
-      new SlashCommandBuilder().setName('normal_omikuji').setDescription('普通のおみくじを引くよっ！（大凶が極端に多くないよ）'),
-      new SlashCommandBuilder().setName('normal_omikuji_n').setDescription('普通のおみくじをN回引くよ（大凶が極端に多くないよ）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
-      new SlashCommandBuilder().setName('omikuji_n').setDescription('おみくじをN回引くよ（大凶99%版）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
-      new SlashCommandBuilder().setName('yes_or_no').setDescription('yes/noをランダム回答するよ'),
+      new SlashCommandBuilder().setName('normal omikuji').setDescription('普通のおみくじを引くよっ！（大凶が極端に多くないよ）'),
+      new SlashCommandBuilder().setName('normal omikuji n').setDescription('普通のおみくじをN回引くよ（大凶が極端に多くないよ）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
+      new SlashCommandBuilder().setName('omikuji n').setDescription('おみくじをN回引くよ（大凶99%版）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
+      new SlashCommandBuilder().setName('yes or no').setDescription('yes/noをランダム回答するよ'),
       new SlashCommandBuilder().setName('wiki').setDescription('Wikipediaを検索するよ').addStringOption(o=>o.setName('word').setDescription('検索ワード').setRequired(true)),
       new SlashCommandBuilder().setName('today').setDescription('今日の日付とイベントを表示するよ'),
       new SlashCommandBuilder().setName('lyric').setDescription('歌詞を取得するよ').addStringOption(o=>o.setName('url').setDescription('utaten.com/uta-net.com/atwiki.jpのURL').setRequired(true)),
-      new SlashCommandBuilder().setName('scratch_user').setDescription('Scratchユーザー情報を表示するよ').addStringOption(o=>o.setName('username').setDescription('ユーザー名').setRequired(true)),
-      new SlashCommandBuilder().setName('scratch_project').setDescription('Scratchプロジェクト情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('プロジェクトID').setRequired(true)),
-      new SlashCommandBuilder().setName('song_typing_info').setDescription('歌詞タイピング情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('曲ID').setRequired(true)),
+      new SlashCommandBuilder().setName('scratch user').setDescription('Scratchユーザー情報を表示するよ').addStringOption(o=>o.setName('username').setDescription('ユーザー名').setRequired(true)),
+      new SlashCommandBuilder().setName('scratch project').setDescription('Scratchプロジェクト情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('プロジェクトID').setRequired(true)),
+      new SlashCommandBuilder().setName('song typing info').setDescription('歌詞タイピング情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('曲ID').setRequired(true)),
       new SlashCommandBuilder().setName('romera').setDescription('今日のメッセージ数ランキングを表示するよ（CWルーム415060980対象）'),
-      new SlashCommandBuilder().setName('message_total').setDescription('累計発言数ランキングを表示するよ（CWルーム415060980対象）'),
+      new SlashCommandBuilder().setName('message total').setDescription('累計発言数ランキングを表示するよ（CWルーム415060980対象）'),
       new SlashCommandBuilder().setName('alarm').setDescription('このチャンネルにアラームを設定するよ').addStringOption(o=>o.setName('datetime').setDescription('日時（YYYY-MM-DD HH:MM）').setRequired(true)).addStringOption(o=>o.setName('message').setDescription('メッセージ').setRequired(true)),
-      new SlashCommandBuilder().setName('miaq').setDescription('メッセージをMake it a Quoteにするよ').addStringOption(o=>o.setName('message_id').setDescription('対象のメッセージID').setRequired(true)),
-      new SlashCommandBuilder().setName('room_info').setDescription('CWルームの情報を表示するよ（要INFO_API_TOKEN）').addStringOption(o=>o.setName('room_id').setDescription('CWルームID').setRequired(true)),
+      new SlashCommandBuilder().setName('miaq').setDescription('メッセージをMake it a Quoteにするよ').addStringOption(o=>o.setName('message id').setDescription('対象のメッセージID').setRequired(true)),
+      new SlashCommandBuilder().setName('room info').setDescription('CWルームの情報を表示するよ（要INFO_API_TOKEN）').addStringOption(o=>o.setName('room id').setDescription('CWルームID').setRequired(true)),
       // ━━ 管理者専用コマンド ━━
       new SlashCommandBuilder().setName('clear').setDescription('メッセージを指定数削除するよ').addIntegerOption(o=>o.setName('count').setDescription('削除数（1〜100）').setRequired(true).setMinValue(1).setMaxValue(100)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('prohibit').setDescription('このチャンネルで発言禁止にするよ').addStringOption(o=>o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('release').setDescription('このチャンネルの発言禁止を解除するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ban').setDescription('Discordサーバーからbanするよ').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('理由（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('unban').setDescription('Discordサーバーのbanを解除するよ').addStringOption(o=>o.setName('user_id').setDescription('DiscordユーザーID').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('unban').setDescription('Discordサーバーのbanを解除するよ').addStringOption(o=>o.setName('user-id').setDescription('DiscordユーザーID').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('blacklist').setDescription('CWブラックリストを確認するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('kick').setDescription('Discordサーバーからキックするよ').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('理由（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('mute').setDescription('DiscordユーザーをタイムアウトするよDefault30分').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)).addIntegerOption(o=>o.setName('minutes').setDescription('タイムアウト時間（分、デフォルト30）').setMinValue(1).setMaxValue(40320)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('fever').setDescription('CWルームのフィーバータイムを開始するよ').addStringOption(o=>o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng_add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng_del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng_check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('ng add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('ng del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('ng check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      // チャンネル設定コマンド
+      new SlashCommandBuilder().setName('eew').setDescription('このチャンネルを地震情報チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('join notice').setDescription('このチャンネルを入室通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('leveling').setDescription('このチャンネルをレベルアップ通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('chatwork').setDescription('このチャンネルをChatwork連携チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('bbs').setDescription('このチャンネルを掲示板連携チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('admin').setDescription('このチャンネルを管理者チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('log').setDescription('このチャンネルでログを受け取るように設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       // Discord NGワード（サーバーごと）
-      new SlashCommandBuilder().setName('discord_ng_add').setDescription('DiscordのNGワードを追加するよ')
+      new SlashCommandBuilder().setName('discord ng add').setDescription('DiscordのNGワードを追加するよ')
         .addStringOption(o=>o.setName('pattern').setDescription('NG文字列または正規表現').setRequired(true))
-        .addBooleanOption(o=>o.setName('is_regex').setDescription('正規表現として扱う（デフォルト:false）'))
+        .addBooleanOption(o=>o.setName('is regex').setDescription('正規表現として扱う（デフォルト:false）'))
         .setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord_ng_list').setDescription('DiscordのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord_ng_remove').setDescription('DiscordのNGワードを削除するよ')
+      new SlashCommandBuilder().setName('discord ng list').setDescription('DiscordのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('discord ng remove').setDescription('DiscordのNGワードを削除するよ')
         .addIntegerOption(o=>o.setName('id').setDescription('NGワードのID（一覧で確認）').setRequired(true))
         .setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord_ng_exclude').setDescription('NGワードチェックをこのチャンネルで除外・解除するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord_warning_reset').setDescription('ユーザーの警告回数をリセットするよ')
+      new SlashCommandBuilder().setName('discord ng exclude').setDescription('NGワードチェックをこのチャンネルで除外・解除するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('discord warning reset').setDescription('ユーザーの警告回数をリセットするよ')
         .addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true))
         .setDefaultMemberPermissions(ADMIN_PERM),
       // サーバーステータス
-      new SlashCommandBuilder().setName('server_status').setDescription('サーバー概要カテゴリを作成して1分毎に更新するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('server status').setDescription('サーバー概要カテゴリを作成して1分毎に更新するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('event').setDescription('イベントを登録・一覧・削除するよ')
         .addSubcommand(s=>s.setName('add').setDescription('イベントを登録するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、例: 06-15）').setRequired(true)).addStringOption(o=>o.setName('content').setDescription('イベント内容').setRequired(true)))
         .addSubcommand(s=>s.setName('list').setDescription('指定日のイベント一覧を表示するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、省略で今日）')))
@@ -2057,25 +2112,25 @@ if(DISCORD_BOT_TOKEN){
       // VOICEVOX読み上げ
       new SlashCommandBuilder().setName('join').setDescription('あなたがいるボイスチャンネルに参加して読み上げを開始するよ'),
       new SlashCommandBuilder().setName('leave').setDescription('ボイスチャンネルから退出するよ'),
-      new SlashCommandBuilder().setName('dictionary_add').setDescription('読み上げ辞書に単語を追加するよ').addStringOption(o=>o.setName('word').setDescription('単語').setRequired(true)).addStringOption(o=>o.setName('reading').setDescription('読み方').setRequired(true)),
-      new SlashCommandBuilder().setName('dictionary_list').setDescription('読み上げ辞書一覧を表示するよ').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
-      new SlashCommandBuilder().setName('dictionary_remove').setDescription('読み上げ辞書から単語を削除するよ').addStringOption(o=>o.setName('keyword').setDescription('単語または読みの一部').setRequired(true).setAutocomplete(true)),
+      new SlashCommandBuilder().setName('dictionary add').setDescription('読み上げ辞書に単語を追加するよ').addStringOption(o=>o.setName('word').setDescription('単語').setRequired(true)).addStringOption(o=>o.setName('reading').setDescription('読み方').setRequired(true)),
+      new SlashCommandBuilder().setName('dictionary list').setDescription('読み上げ辞書一覧を表示するよ').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
+      new SlashCommandBuilder().setName('dictionary remove').setDescription('読み上げ辞書から単語を削除するよ').addStringOption(o=>o.setName('keyword').setDescription('単語または読みの一部').setRequired(true).setAutocomplete(true)),
       new SlashCommandBuilder().setName('pitch').setDescription('読み上げのピッチを変更するよ（-0.15~0.15）').addNumberOption(o=>o.setName('value').setDescription('ピッチ').setRequired(true).setMinValue(-0.15).setMaxValue(0.15)),
       new SlashCommandBuilder().setName('speed').setDescription('読み上げの話速を変更するよ（0.5~2）').addNumberOption(o=>o.setName('value').setDescription('話速').setRequired(true).setMinValue(0.5).setMaxValue(2)),
       new SlashCommandBuilder().setName('intonation').setDescription('読み上げのイントネーションを変更するよ（0~2）').addNumberOption(o=>o.setName('value').setDescription('イントネーション').setRequired(true).setMinValue(0).setMaxValue(2)),
       new SlashCommandBuilder().setName('speaker').setDescription('読み上げの話者を変更するよ').addIntegerOption(o=>o.setName('id').setDescription('話者ID（/speaker_listで確認）').setRequired(true)),
-      new SlashCommandBuilder().setName('speaker_list').setDescription('話者一覧を表示するよ（ページ制）').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
+      new SlashCommandBuilder().setName('speaker list').setDescription('話者一覧を表示するよ（ページ制）').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
       new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
       new SlashCommandBuilder().setName('work').setDescription('働いてお金を稼ぐよ（クールダウン30分）'),
       new SlashCommandBuilder().setName('job').setDescription('職一覧を見る'),
-      new SlashCommandBuilder().setName('job_set').setDescription('職につく・転職する').addStringOption(o=>o.setName('job').setDescription('職名').setRequired(true)),
-      new SlashCommandBuilder().setName('job_info').setDescription('職の詳細を見る').addStringOption(o=>o.setName('job').setDescription('職名').setRequired(true)),
+      new SlashCommandBuilder().setName('job set').setDescription('職につく・転職する').addStringOption(o=>o.setName('job').setDescription('職名').setRequired(true)),
+      new SlashCommandBuilder().setName('job info').setDescription('職の詳細を見る').addStringOption(o=>o.setName('job').setDescription('職名').setRequired(true)),
       new SlashCommandBuilder().setName('money').setDescription('所持金を見る'),
-      new SlashCommandBuilder().setName('money_send').setDescription('お金を送る').addUserOption(o=>o.setName('user').setDescription('送り先').setRequired(true)).addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
+      new SlashCommandBuilder().setName('money send').setDescription('お金を送る').addUserOption(o=>o.setName('user').setDescription('送り先').setRequired(true)).addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
       new SlashCommandBuilder().setName('bank').setDescription('銀行残高を見る'),
-      new SlashCommandBuilder().setName('bank_deposit').setDescription('銀行に預ける').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
-      new SlashCommandBuilder().setName('bank_withdraw').setDescription('銀行から引き出す').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
-      (()=>{const cmd=new SlashCommandBuilder().setName('role_panel').setDescription('ロールパネルを作成するよ（最大24ロール）').addStringOption(o=>o.setName('title').setDescription('タイトル').setRequired(true));for(let i=1;i<=24;i++)cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));return cmd.setDefaultMemberPermissions(ADMIN_PERM);})(),
+      new SlashCommandBuilder().setName('bank deposit').setDescription('銀行に預ける').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
+      new SlashCommandBuilder().setName('bank withdraw').setDescription('銀行から引き出す').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
+      (()=>{const cmd=new SlashCommandBuilder().setName('role panel').setDescription('ロールパネルを作成するよ（最大24ロール）').addStringOption(o=>o.setName('title').setDescription('タイトル').setRequired(true));for(let i=1;i<=24;i++)cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));return cmd.setDefaultMemberPermissions(ADMIN_PERM);})(),
       new SlashCommandBuilder().setName('verify').setDescription('認証パネルを作成するよ').addRoleOption(o=>o.setName('role').setDescription('認証時に付与するロール').setRequired(true)).addStringOption(o=>o.setName('title').setDescription('タイトル（省略可）')).addStringOption(o=>o.setName('description').setDescription('説明文（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
     ].map(c=>c.toJSON());
 
@@ -2298,6 +2353,11 @@ if(DISCORD_BOT_TOKEN){
         try{
           await interaction.guild.members.ban(target.id,{reason:`${interaction.user.tag}: ${reason}`});
           await reply(`<@${target.id}>（${target.tag}）をBANしたよ\n理由: ${reason}`,{title:'BAN完了',color:0xe74c3c});
+          // DMに通知
+          target.send(`**${interaction.guild.name}** からBANされたよ\n理由: ${reason}`).catch(()=>{});
+          // 管理者チャンネルにログ
+          const adminChId=await getGuildChannel(interaction.guild.id,'admin');
+          if(adminChId){const ch=interaction.guild.channels.cache.get(adminChId);if(ch)ch.send({embeds:[{title:'BAN実行',description:`対象: <@${target.id}>（${target.tag}）\n理由: ${reason}\n実行者: ${interaction.user.tag}`,color:0xe74c3c,footer:{text:new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}}]}).catch(()=>{});}
         }catch(e){ await replyErr(`BANに失敗したよ: ${e.message}`); }
         return;
       }
@@ -2306,10 +2366,12 @@ if(DISCORD_BOT_TOKEN){
       if(cmd==='unban'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
         if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
-        const userId=interaction.options.getString('user_id');
+        const userId=interaction.options.getString('user-id');
         try{
           await interaction.guild.members.unban(userId);
           await reply(`ID:${userId} のBANを解除したよ`,{title:'BAN解除',color:0x2ecc71});
+          const adminChId=await getGuildChannel(interaction.guild.id,'admin');
+          if(adminChId){const ch=interaction.guild.channels.cache.get(adminChId);if(ch)ch.send({embeds:[{title:'BAN解除',description:`対象ID: ${userId}\n実行者: ${interaction.user.tag}`,color:0x2ecc71,footer:{text:new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}}]}).catch(()=>{});}
         }catch(e){ await replyErr(`BAN解除に失敗したよ: ${e.message}`); }
         return;
       }
@@ -2338,6 +2400,11 @@ if(DISCORD_BOT_TOKEN){
           if(!member){ await replyErr('そのユーザーはこのサーバーにいないみたい'); return; }
           await member.kick(`${interaction.user.tag}: ${reason}`);
           await reply(`<@${target.id}>（${target.tag}）をキックしたよ\n理由: ${reason}`,{title:'キック完了',color:0xe74c3c});
+          // DMに通知
+          target.send(`**${interaction.guild.name}** からキックされたよ\n理由: ${reason}`).catch(()=>{});
+          // 管理者チャンネルにログ
+          const adminChId=await getGuildChannel(interaction.guild.id,'admin');
+          if(adminChId){const ch=interaction.guild.channels.cache.get(adminChId);if(ch)ch.send({embeds:[{title:'キック実行',description:`対象: <@${target.id}>（${target.tag}）\n理由: ${reason}\n実行者: ${interaction.user.tag}`,color:0xe74c3c,footer:{text:new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}}]}).catch(()=>{});}
         }catch(e){ await replyErr(`キックに失敗したよ: ${e.message}`); }
         return;
       }
@@ -2354,6 +2421,11 @@ if(DISCORD_BOT_TOKEN){
           await member.timeout(minutes*60*1000,`${interaction.user.tag}: タイムアウト`);
           const until=new Date(Date.now()+minutes*60*1000).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
           await reply(`<@${target.id}>（${target.tag}）を**${minutes}分**タイムアウトしたよ\n解除: ${until}`,{title:'タイムアウト完了',color:0xe74c3c});
+          // DMに通知
+          target.send(`**${interaction.guild.name}** でタイムアウトされたよ（${minutes}分）\n解除: ${until}`).catch(()=>{});
+          // 管理者チャンネルにログ
+          const adminChId=await getGuildChannel(interaction.guild.id,'admin');
+          if(adminChId){const ch=interaction.guild.channels.cache.get(adminChId);if(ch)ch.send({embeds:[{title:'タイムアウト実行',description:`対象: <@${target.id}>（${target.tag}）\n時間: ${minutes}分\n実行者: ${interaction.user.tag}`,color:0xe74c3c,footer:{text:new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}}]}).catch(()=>{});}
         }catch(e){ await replyErr(`タイムアウトに失敗したよ: ${e.message}`); }
         return;
       }
@@ -2594,6 +2666,25 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
 
+      // ── チャンネル設定コマンド ──
+      const CH_CMD_MAP = {
+        'eew': {label:'地震情報', type:'eew'},
+        'join notice': {label:'入室通知', type:'join_notice'},
+        'leveling': {label:'レベルアップ通知', type:'leveling'},
+        'chatwork': {label:'Chatwork連携', type:'chatwork'},
+        'bbs': {label:'掲示板連携', type:'bbs'},
+        'admin': {label:'管理者', type:'admin'},
+        'log': {label:'ログ', type:'log'},
+      };
+      if(CH_CMD_MAP[cmd]){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const def = CH_CMD_MAP[cmd];
+        await setGuildChannel(interaction.guild.id, def.type, interaction.channelId);
+        await reply(`このチャンネルを**${def.label}チャンネル**に設定したよ！`,{title:'チャンネル設定',color:0x2ecc71});
+        return;
+      }
+
       await reply('不明なコマンドだよ', {color:0xe74c3c});
     } catch(e){
       console.error('[Discord] コマンドエラー:',e.message);
@@ -2722,12 +2813,148 @@ if(DISCORD_BOT_TOKEN){
       }
     } catch(e){ console.error('[Discord] MessageCreate エラー:',e.message); }
   });
-  discordClient.on(Events.GuildMemberAdd,async(member)=>{if(member.guild.id!==ALLOWED_GUILD_ID)return;try{const ch=await discordClient.channels.fetch(DISCORD_WELCOME_CHANNEL_ID).catch(()=>null);if(!ch)return;await member.guild.members.fetch();const cnt=member.guild.members.cache.filter(m=>!m.user.bot).size;await ch.send({embeds:[{title:`${member.displayName}さんこんにちは！`,description:`現在のサーバーメンバーは**${cnt}人**です！\n<#${DISCORD_RULES_CHANNEL_ID}> の確認と <#${DISCORD_INTRO_CHANNEL_ID}> をお願いします！`,color:0x7289da,thumbnail:{url:member.user.displayAvatarURL()}}]});}catch(e){console.error('[Discord]ようこそ:',e.message);}});
+  discordClient.on(Events.GuildMemberAdd,async(member)=>{
+    if(member.guild.id!==ALLOWED_GUILD_ID)return;
+    try{
+      // /join-noticeで設定したチャンネル優先、なければ固定チャンネル
+      const chId = await getGuildChannel(member.guild.id,'join_notice') || DISCORD_WELCOME_CHANNEL_ID;
+      const ch=await discordClient.channels.fetch(chId).catch(()=>null);
+      if(!ch)return;
+      await member.guild.members.fetch();
+      const cnt=member.guild.members.cache.filter(m=>!m.user.bot).size;
+      await ch.send({embeds:[{
+        title:`${member.displayName}さんこんにちは！`,
+        description:`現在のサーバーメンバーは**${cnt}人**です！\n<#${DISCORD_RULES_CHANNEL_ID}> の確認と <#${DISCORD_INTRO_CHANNEL_ID}> をお願いします！`,
+        color:0x7289da,thumbnail:{url:member.user.displayAvatarURL()}
+      }]});
+    }catch(e){console.error('[Discord]ようこそ:',e.message);}
+  });
+
+  // 全チャンネルのログをlogチャンネルに送信
+  discordClient.on(Events.MessageCreate, async(msg)=>{
+    if(msg.author.bot||!msg.guild||msg.author.id===DISCORD_BOT_USER_ID) return;
+    try{
+      const logChId = await getGuildChannel(msg.guild.id,'log');
+      if(!logChId||logChId===msg.channel.id) return;
+      const logCh = msg.guild.channels.cache.get(logChId);
+      if(!logCh) return;
+      await logCh.send({embeds:[{
+        description: msg.content||'(添付ファイル)',
+        color:0x2d2d2d,
+        author:{name:`${msg.author.tag}`,icon_url:msg.author.displayAvatarURL()},
+        footer:{text:`#${msg.channel.name} | ${msg.createdAt.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}`}
+      }]});
+    }catch{}
+  });
   discordClient.on(Events.InteractionCreate,async(interaction)=>{if(!interaction.isStringSelectMenu()||interaction.customId!=='role_panel_select')return;try{await interaction.deferReply({ephemeral:true});const member=interaction.member,guild=interaction.guild,selected=new Set(interaction.values),allOpts=interaction.component.options.map(o=>o.value),added=[],removed=[];for(const roleId of allOpts){const role=guild.roles.cache.get(roleId);if(!role)continue;const has=member.roles.cache.has(roleId);if(selected.has(roleId)&&!has){await member.roles.add(role).catch(()=>{});added.push(role.name);}else if(!selected.has(roleId)&&has){await member.roles.remove(role).catch(()=>{});removed.push(role.name);}}const lines=[];if(added.length)lines.push(`付与：${added.join('、')}`);if(removed.length)lines.push(`解除：${removed.join('、')}`);await interaction.editReply({embeds:[{title:'ロール更新完了',description:lines.length?lines.join('\n'):'変更なし',color:0x2ecc71}]});}catch(e){console.error('[Discord]ロールパネル:',e.message);try{await interaction.editReply({embeds:[{title:'エラー',description:'ロールの更新に失敗したよ',color:0xe74c3c}]});}catch{}}});
   discordClient.on(Events.InteractionCreate,async(interaction)=>{if(!interaction.isButton()||!interaction.customId.startsWith('verify_btn:'))return;try{await interaction.deferReply({ephemeral:true});const roleId=interaction.customId.split(':')[1],member=interaction.member;if(member.roles.cache.has(roleId)){await interaction.editReply({embeds:[{description:'すでに認証済みだよ！',color:0x2ecc71}]});return;}const role=interaction.guild.roles.cache.get(roleId)||await interaction.guild.roles.fetch(roleId).catch(()=>null);if(!role){await interaction.editReply({embeds:[{description:'ロールが見つからなかったよ',color:0xe74c3c}]});return;}await member.roles.add(role);await interaction.editReply({embeds:[{description:`認証完了！**${role.name}**が付与されたよ！`,color:0x2ecc71}]});}catch(e){console.error('[Discord]認証ボタン:',e.message);try{await interaction.editReply({embeds:[{description:'認証に失敗したよ…',color:0xe74c3c}]});}catch{}}});
 
 
   discordClient.login(DISCORD_BOT_TOKEN).catch(e=>console.error('[Discord] ログインエラー:',e.message));
+}
+
+// ============================================================
+// 地震bot（p2pquake WebSocket）
+// ============================================================
+const EEW_INTENSITY_COLORS = {
+  '1':'#00cfff','2':'#0080ff','3':'#00d000','4':'#ffd700',
+  '5弱':'#ff8c00','5強':'#ff4500','6弱':'#cc0000','6強':'#990000','7':'#8b00ff'
+};
+
+function intensityColor(intensity) {
+  return EEW_INTENSITY_COLORS[intensity] || '#aaaaaa';
+}
+
+// Leaflet地図のHTMLを生成
+function generateQuakeMapHtml(quake) {
+  const points = (quake.points||[]).filter(p=>p.isObserved);
+  const epicenter = quake.earthquake?.hypocenter;
+  const markers = points.map(p=>{
+    const color = intensityColor(p.scale_label||String(p.scale));
+    return `L.circleMarker([${p.lat},${p.lng}],{radius:8,color:'${color}',fillColor:'${color}',fillOpacity:0.85,weight:2})
+      .bindPopup('<b>${p.addr}</b><br>震度${p.scale_label||p.scale}').addTo(map);`;
+  }).join('\n');
+
+  const epicenterJs = epicenter?.latitude ? `
+    L.marker([${epicenter.latitude},${epicenter.longitude}],{
+      icon:L.divIcon({html:'<div style="font-size:24px;color:red;">✕</div>',iconAnchor:[12,12]})
+    }).bindPopup('<b>震源</b><br>${epicenter.name||''}').addTo(map);
+  ` : '';
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>body{margin:0}#map{width:600px;height:450px}</style></head>
+<body><div id="map"></div><script>
+const map=L.map('map',{zoomControl:false}).setView([36,137],5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'OSM'}).addTo(map);
+${markers}
+${epicenterJs}
+</script></body></html>`;
+}
+
+// p2pquake WebSocket接続
+let eewWs = null;
+function connectEewWebSocket() {
+  try {
+    const WebSocket = require('ws');
+    eewWs = new WebSocket('wss://ws-api.p2pquake.net/v2/ws');
+    eewWs.on('open', ()=>console.log('[EEW] WebSocket接続完了'));
+    eewWs.on('message', async(data)=>{
+      try {
+        const msg = JSON.parse(data.toString());
+        // code 551: 地震情報 / code 556: 緊急地震速報（警報）
+        if(msg.code!==551 && msg.code!==556) return;
+        if(!discordClient) return;
+
+        // EEWチャンネルが設定されているサーバーに送信
+        const rows = (await dbQuery("SELECT guild_id,channel_id FROM guild_channels WHERE channel_type='eew'")).rows;
+        if(!rows.length) return;
+
+        const isEEW = msg.code===556;
+        const eq = msg.earthquake||{};
+        const hypo = eq.hypocenter||{};
+        const maxInt = msg.points ? msg.points.reduce((m,p)=>Math.max(m,p.scale||0),0) : 0;
+        const intLabel = Object.keys(EEW_INTENSITY_COLORS)[Math.max(0,maxInt-1)] || String(maxInt);
+        const color = isEEW ? 0xFFD700 : parseInt((intensityColor(intLabel)||'#7289da').replace('#',''),16);
+
+        const embed = {
+          title: isEEW ? '緊急地震速報（警報）' : '地震情報',
+          color,
+          fields: [
+            {name:'震源',value:hypo.name||'不明',inline:true},
+            {name:'マグニチュード',value:String(hypo.magnitude||'不明'),inline:true},
+            {name:'深さ',value:hypo.depth!=null?`${hypo.depth}km`:'不明',inline:true},
+            {name:'最大震度',value:intLabel||'不明',inline:true},
+            {name:'発生時刻',value:msg.time||new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'}),inline:true},
+          ],
+          footer:{text: isEEW?'⚠️ 緊急地震速報（警報）':'地震情報 | p2pquake'}
+        };
+
+        // 緊急地震速報は全文黄色背景のためembedのcolorを黄色に
+        for(const row of rows) {
+          try {
+            const ch = await discordClient.channels.fetch(row.channel_id).catch(()=>null);
+            if(!ch) continue;
+
+            // 地図HTMLを生成してBufferで添付
+            const mapHtml = generateQuakeMapHtml(msg);
+            const { AttachmentBuilder:AB } = require('discord.js');
+            const attachment = new AB(Buffer.from(mapHtml,'utf-8'),{name:'quake_map.html'});
+            await ch.send({content: isEEW?'🚨 **緊急地震速報（警報）**':null, embeds:[embed], files:[attachment]});
+          } catch(e){console.error('[EEW] 送信エラー:',e.message);}
+        }
+      } catch(e){console.error('[EEW] メッセージ処理エラー:',e.message);}
+    });
+    eewWs.on('close', ()=>{
+      console.log('[EEW] WebSocket切断。10秒後に再接続...');
+      setTimeout(connectEewWebSocket, 10000);
+    });
+    eewWs.on('error', (e)=>console.error('[EEW] WebSocketエラー:',e.message));
+  } catch(e) {
+    console.error('[EEW] WebSocket初期化失敗:',e.message);
+    setTimeout(connectEewWebSocket, 30000);
+  }
 }
 
 // ============================================================
@@ -2774,6 +3001,9 @@ app.listen(port, async()=>{
 
   // 起動通知
   for(const r of DIRECT_CHAT_WITH_DATE_CHANGE) await CW.send(r,'湊音が起動したよっ！').catch(()=>{});
+
+  // 地震bot WebSocket接続開始（wsパッケージが必要）
+  try { require('ws'); connectEewWebSocket(); } catch(e){ console.error('[EEW] wsパッケージ未インストール:', e.message); }
 
   console.log('=== 起動完了！ ===\n');
 });
