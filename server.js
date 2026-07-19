@@ -2053,21 +2053,21 @@ if(DISCORD_BOT_TOKEN){
     const cmds = [
       // ━━ 誰でも使えるコマンド ━━
       new SlashCommandBuilder().setName('help').setDescription('コマンド一覧を表示するよ'),
-      new SlashCommandBuilder().setName('normal omikuji').setDescription('普通のおみくじを引くよっ！（大凶が極端に多くないよ）'),
-      new SlashCommandBuilder().setName('normal omikuji n').setDescription('普通のおみくじをN回引くよ（大凶が極端に多くないよ）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
-      new SlashCommandBuilder().setName('omikuji n').setDescription('おみくじをN回引くよ（大凶99%版）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
-      new SlashCommandBuilder().setName('yes or no').setDescription('yes/noをランダム回答するよ'),
+      new SlashCommandBuilder().setName('normal-omikuji').setDescription('普通のおみくじを引くよっ！（大凶が極端に多くないよ）'),
+      new SlashCommandBuilder().setName('normal-omikuji-n').setDescription('普通のおみくじをN回引くよ（大凶が極端に多くないよ）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
+      new SlashCommandBuilder().setName('omikuji-n').setDescription('おみくじをN回引くよ（大凶99%版）').addIntegerOption(o=>o.setName('count').setDescription('回数（1〜10000）').setRequired(true).setMinValue(1).setMaxValue(10000)),
+      new SlashCommandBuilder().setName('yes-or-no').setDescription('yes/noをランダム回答するよ'),
       new SlashCommandBuilder().setName('wiki').setDescription('Wikipediaを検索するよ').addStringOption(o=>o.setName('word').setDescription('検索ワード').setRequired(true)),
       new SlashCommandBuilder().setName('today').setDescription('今日の日付とイベントを表示するよ'),
       new SlashCommandBuilder().setName('lyric').setDescription('歌詞を取得するよ').addStringOption(o=>o.setName('url').setDescription('utaten.com/uta-net.com/atwiki.jpのURL').setRequired(true)),
-      new SlashCommandBuilder().setName('scratch user').setDescription('Scratchユーザー情報を表示するよ').addStringOption(o=>o.setName('username').setDescription('ユーザー名').setRequired(true)),
-      new SlashCommandBuilder().setName('scratch project').setDescription('Scratchプロジェクト情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('プロジェクトID').setRequired(true)),
-      new SlashCommandBuilder().setName('song typing info').setDescription('歌詞タイピング情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('曲ID').setRequired(true)),
+      new SlashCommandBuilder().setName('scratch-user').setDescription('Scratchユーザー情報を表示するよ').addStringOption(o=>o.setName('username').setDescription('ユーザー名').setRequired(true)),
+      new SlashCommandBuilder().setName('scratch-project').setDescription('Scratchプロジェクト情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('プロジェクトID').setRequired(true)),
+      new SlashCommandBuilder().setName('song-typing-info').setDescription('歌詞タイピング情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('曲ID').setRequired(true)),
       new SlashCommandBuilder().setName('romera').setDescription('今日のメッセージ数ランキングを表示するよ（CWルーム415060980対象）'),
-      new SlashCommandBuilder().setName('message total').setDescription('累計発言数ランキングを表示するよ（CWルーム415060980対象）'),
+      new SlashCommandBuilder().setName('message-total').setDescription('累計発言数ランキングを表示するよ（CWルーム415060980対象）'),
       new SlashCommandBuilder().setName('alarm').setDescription('このチャンネルにアラームを設定するよ').addStringOption(o=>o.setName('datetime').setDescription('日時（YYYY-MM-DD HH:MM）').setRequired(true)).addStringOption(o=>o.setName('message').setDescription('メッセージ').setRequired(true)),
-      new SlashCommandBuilder().setName('miaq').setDescription('メッセージをMake it a Quoteにするよ').addStringOption(o=>o.setName('message id').setDescription('対象のメッセージID').setRequired(true)),
-      new SlashCommandBuilder().setName('room info').setDescription('CWルームの情報を表示するよ（要INFO_API_TOKEN）').addStringOption(o=>o.setName('room id').setDescription('CWルームID').setRequired(true)),
+      new SlashCommandBuilder().setName('miaq').setDescription('メッセージをMake it a Quoteにするよ').addStringOption(o=>o.setName('message-id').setDescription('対象のメッセージID').setRequired(true)),
+      new SlashCommandBuilder().setName('room-info').setDescription('CWルームの情報を表示するよ（要INFO_API_TOKEN）').addStringOption(o=>o.setName('room-id').setDescription('CWルームID').setRequired(true)),
       // ━━ 管理者専用コマンド ━━
       new SlashCommandBuilder().setName('clear').setDescription('メッセージを指定数削除するよ').addIntegerOption(o=>o.setName('count').setDescription('削除数（1〜100）').setRequired(true).setMinValue(1).setMaxValue(100)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('prohibit').setDescription('このチャンネルで発言禁止にするよ').addStringOption(o=>o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
@@ -2078,32 +2078,32 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('kick').setDescription('Discordサーバーからキックするよ').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('理由（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('mute').setDescription('DiscordユーザーをタイムアウトするよDefault30分').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)).addIntegerOption(o=>o.setName('minutes').setDescription('タイムアウト時間（分、デフォルト30）').setMinValue(1).setMaxValue(40320)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('fever').setDescription('CWルームのフィーバータイムを開始するよ').addStringOption(o=>o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('ng-add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('ng-del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('ng-check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
       // チャンネル設定コマンド
       new SlashCommandBuilder().setName('eew').setDescription('このチャンネルを地震情報チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('join notice').setDescription('このチャンネルを入室通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('join-notice').setDescription('このチャンネルを入室通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('leveling').setDescription('このチャンネルをレベルアップ通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('chatwork').setDescription('このチャンネルをChatwork連携チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('bbs').setDescription('このチャンネルを掲示板連携チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('admin').setDescription('このチャンネルを管理者チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('log').setDescription('このチャンネルでログを受け取るように設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       // Discord NGワード（サーバーごと）
-      new SlashCommandBuilder().setName('discord ng add').setDescription('DiscordのNGワードを追加するよ')
+      new SlashCommandBuilder().setName('discord-ng-add').setDescription('DiscordのNGワードを追加するよ')
         .addStringOption(o=>o.setName('pattern').setDescription('NG文字列または正規表現').setRequired(true))
-        .addBooleanOption(o=>o.setName('is regex').setDescription('正規表現として扱う（デフォルト:false）'))
+        .addBooleanOption(o=>o.setName('is-regex').setDescription('正規表現として扱う（デフォルト:false）'))
         .setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord ng list').setDescription('DiscordのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord ng remove').setDescription('DiscordのNGワードを削除するよ')
+      new SlashCommandBuilder().setName('discord-ng-list').setDescription('DiscordのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('discord-ng-remove').setDescription('DiscordのNGワードを削除するよ')
         .addIntegerOption(o=>o.setName('id').setDescription('NGワードのID（一覧で確認）').setRequired(true))
         .setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord ng exclude').setDescription('NGワードチェックをこのチャンネルで除外・解除するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord warning reset').setDescription('ユーザーの警告回数をリセットするよ')
+      new SlashCommandBuilder().setName('discord-ng-exclude').setDescription('NGワードチェックをこのチャンネルで除外・解除するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('discord-warning-reset').setDescription('ユーザーの警告回数をリセットするよ')
         .addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true))
         .setDefaultMemberPermissions(ADMIN_PERM),
       // サーバーステータス
-      new SlashCommandBuilder().setName('server status').setDescription('サーバー概要カテゴリを作成して1分毎に更新するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('server-status').setDescription('サーバー概要カテゴリを作成して1分毎に更新するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('event').setDescription('イベントを登録・一覧・削除するよ')
         .addSubcommand(s=>s.setName('add').setDescription('イベントを登録するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、例: 06-15）').setRequired(true)).addStringOption(o=>o.setName('content').setDescription('イベント内容').setRequired(true)))
         .addSubcommand(s=>s.setName('list').setDescription('指定日のイベント一覧を表示するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、省略で今日）')))
@@ -2112,25 +2112,25 @@ if(DISCORD_BOT_TOKEN){
       // VOICEVOX読み上げ
       new SlashCommandBuilder().setName('join').setDescription('あなたがいるボイスチャンネルに参加して読み上げを開始するよ'),
       new SlashCommandBuilder().setName('leave').setDescription('ボイスチャンネルから退出するよ'),
-      new SlashCommandBuilder().setName('dictionary add').setDescription('読み上げ辞書に単語を追加するよ').addStringOption(o=>o.setName('word').setDescription('単語').setRequired(true)).addStringOption(o=>o.setName('reading').setDescription('読み方').setRequired(true)),
-      new SlashCommandBuilder().setName('dictionary list').setDescription('読み上げ辞書一覧を表示するよ').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
-      new SlashCommandBuilder().setName('dictionary remove').setDescription('読み上げ辞書から単語を削除するよ').addStringOption(o=>o.setName('keyword').setDescription('単語または読みの一部').setRequired(true).setAutocomplete(true)),
+      new SlashCommandBuilder().setName('dictionary-add').setDescription('読み上げ辞書に単語を追加するよ').addStringOption(o=>o.setName('word').setDescription('単語').setRequired(true)).addStringOption(o=>o.setName('reading').setDescription('読み方').setRequired(true)),
+      new SlashCommandBuilder().setName('dictionary-list').setDescription('読み上げ辞書一覧を表示するよ').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
+      new SlashCommandBuilder().setName('dictionary-remove').setDescription('読み上げ辞書から単語を削除するよ').addStringOption(o=>o.setName('keyword').setDescription('単語または読みの一部').setRequired(true).setAutocomplete(true)),
       new SlashCommandBuilder().setName('pitch').setDescription('読み上げのピッチを変更するよ（-0.15~0.15）').addNumberOption(o=>o.setName('value').setDescription('ピッチ').setRequired(true).setMinValue(-0.15).setMaxValue(0.15)),
       new SlashCommandBuilder().setName('speed').setDescription('読み上げの話速を変更するよ（0.5~2）').addNumberOption(o=>o.setName('value').setDescription('話速').setRequired(true).setMinValue(0.5).setMaxValue(2)),
       new SlashCommandBuilder().setName('intonation').setDescription('読み上げのイントネーションを変更するよ（0~2）').addNumberOption(o=>o.setName('value').setDescription('イントネーション').setRequired(true).setMinValue(0).setMaxValue(2)),
       new SlashCommandBuilder().setName('speaker').setDescription('読み上げの話者を変更するよ').addIntegerOption(o=>o.setName('id').setDescription('話者ID（/speaker_listで確認）').setRequired(true)),
-      new SlashCommandBuilder().setName('speaker list').setDescription('話者一覧を表示するよ（ページ制）').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
+      new SlashCommandBuilder().setName('speaker-list').setDescription('話者一覧を表示するよ（ページ制）').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
       new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
       new SlashCommandBuilder().setName('work').setDescription('働いてお金を稼ぐよ（クールダウン30分）'),
       new SlashCommandBuilder().setName('job').setDescription('職一覧を見る'),
-      new SlashCommandBuilder().setName('job set').setDescription('職につく・転職する').addStringOption(o=>o.setName('job').setDescription('職名').setRequired(true)),
-      new SlashCommandBuilder().setName('job info').setDescription('職の詳細を見る').addStringOption(o=>o.setName('job').setDescription('職名').setRequired(true)),
+      new SlashCommandBuilder().setName('job-set').setDescription('職につく・転職する').addStringOption(o=>o.setName('job').setDescription('職名').setRequired(true)),
+      new SlashCommandBuilder().setName('job-info').setDescription('職の詳細を見る').addStringOption(o=>o.setName('job').setDescription('職名').setRequired(true)),
       new SlashCommandBuilder().setName('money').setDescription('所持金を見る'),
-      new SlashCommandBuilder().setName('money send').setDescription('お金を送る').addUserOption(o=>o.setName('user').setDescription('送り先').setRequired(true)).addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
+      new SlashCommandBuilder().setName('money-send').setDescription('お金を送る').addUserOption(o=>o.setName('user').setDescription('送り先').setRequired(true)).addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
       new SlashCommandBuilder().setName('bank').setDescription('銀行残高を見る'),
-      new SlashCommandBuilder().setName('bank deposit').setDescription('銀行に預ける').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
-      new SlashCommandBuilder().setName('bank withdraw').setDescription('銀行から引き出す').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
-      (()=>{const cmd=new SlashCommandBuilder().setName('role panel').setDescription('ロールパネルを作成するよ（最大24ロール）').addStringOption(o=>o.setName('title').setDescription('タイトル').setRequired(true));for(let i=1;i<=24;i++)cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));return cmd.setDefaultMemberPermissions(ADMIN_PERM);})(),
+      new SlashCommandBuilder().setName('bank-deposit').setDescription('銀行に預ける').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
+      new SlashCommandBuilder().setName('bank-withdraw').setDescription('銀行から引き出す').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
+      (()=>{const cmd=new SlashCommandBuilder().setName('role-panel').setDescription('ロールパネルを作成するよ（最大24ロール）').addStringOption(o=>o.setName('title').setDescription('タイトル').setRequired(true));for(let i=1;i<=24;i++)cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));return cmd.setDefaultMemberPermissions(ADMIN_PERM);})(),
       new SlashCommandBuilder().setName('verify').setDescription('認証パネルを作成するよ').addRoleOption(o=>o.setName('role').setDescription('認証時に付与するロール').setRequired(true)).addStringOption(o=>o.setName('title').setDescription('タイトル（省略可）')).addStringOption(o=>o.setName('description').setDescription('説明文（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
     ].map(c=>c.toJSON());
 
