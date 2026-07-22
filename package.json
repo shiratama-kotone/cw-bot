@@ -1,6 +1,6 @@
 {
   "name": "shiratama-kotone-bot",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "private": true,
   "main": "server.js",
   "engines": {
@@ -20,6 +20,7 @@
     "opusscript": "^0.0.8",
     "ffmpeg-static": "^5.2.0",
     "libsodium-wrappers": "^0.7.13",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "canvas": "^2.11.2"
   }
 }

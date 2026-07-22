@@ -2669,7 +2669,7 @@ if(DISCORD_BOT_TOKEN){
       // ── チャンネル設定コマンド ──
       const CH_CMD_MAP = {
         'eew': {label:'地震情報', type:'eew'},
-        'join notice': {label:'入室通知', type:'join_notice'},
+        'join-notice': {label:'入室通知', type:'join_notice'},
         'leveling': {label:'レベルアップ通知', type:'leveling'},
         'chatwork': {label:'Chatwork連携', type:'chatwork'},
         'bbs': {label:'掲示板連携', type:'bbs'},
@@ -2866,31 +2866,126 @@ function intensityColor(intensity) {
 }
 
 // Leaflet地図のHTMLを生成
-function generateQuakeMapHtml(quake) {
-  const points = (quake.points||[]).filter(p=>p.isObserved);
-  const epicenter = quake.earthquake?.hypocenter;
-  const markers = points.map(p=>{
-    const color = intensityColor(p.scale_label||String(p.scale));
-    return `L.circleMarker([${p.lat},${p.lng}],{radius:8,color:'${color}',fillColor:'${color}',fillOpacity:0.85,weight:2})
-      .bindPopup('<b>${p.addr}</b><br>震度${p.scale_label||p.scale}').addTo(map);`;
-  }).join('\n');
+// 市区町村GeoJSONキャッシュ（起動時にダウンロード）
+let municipalityGeoJson = null;
+async function loadMunicipalityGeoJson() {
+  if(municipalityGeoJson) return municipalityGeoJson;
+  try{
+    // 国土数値情報 行政区域データ（簡略化済み軽量版）
+    const res = await axios.get('https://raw.githubusercontent.com/dataofjapan/land/master/japan.geojson', {timeout:30000});
+    municipalityGeoJson = res.data;
+    console.log('[EEW] GeoJSON読み込み完了:', municipalityGeoJson.features?.length, '件');
+  }catch(e){
+    console.error('[EEW] GeoJSON読み込みエラー:', e.message);
+  }
+  return municipalityGeoJson;
+}
 
-  const epicenterJs = epicenter?.latitude ? `
-    L.marker([${epicenter.latitude},${epicenter.longitude}],{
-      icon:L.divIcon({html:'<div style="font-size:24px;color:red;">✕</div>',iconAnchor:[12,12]})
-    }).bindPopup('<b>震源</b><br>${epicenter.name||''}').addTo(map);
-  ` : '';
+// canvas で市区町村塗り分け地震地図PNG画像を生成
+async function generateQuakeMapPng(quake) {
+  try {
+    const { createCanvas } = require('canvas');
+    const W = 700, H = 550;
+    const canvas = createCanvas(W, H);
+    const ctx = canvas.getContext('2d');
 
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<style>body{margin:0}#map{width:600px;height:450px}</style></head>
-<body><div id="map"></div><script>
-const map=L.map('map',{zoomControl:false}).setView([36,137],5);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'OSM'}).addTo(map);
-${markers}
-${epicenterJs}
-</script></body></html>`;
+    // 描画範囲（日本全体）
+    const latMin=24, latMax=46, lngMin=122, lngMax=150;
+    const PADL=60, PADR=20, PADT=20, PADB=40;
+    const toX = lng => PADL + (lng-lngMin)/(lngMax-lngMin)*(W-PADL-PADR);
+    const toY = lat => PADT + (latMax-lat)/(latMax-latMin)*(H-PADT-PADB);
+
+    // 背景（海）
+    ctx.fillStyle = '#1e3a5f';
+    ctx.fillRect(0, 0, W, H);
+
+    // 震度データを市区町村名→色のマップに変換
+    const points = quake.points||[];
+    const scaleMap = {}; // addr -> color
+    for(const p of points){
+      if(!p.isObserved) continue;
+      const label = p.scale_label || (p.scale!=null ? (
+        p.scale<=10?'1': p.scale<=20?'2': p.scale<=30?'3': p.scale<=40?'4':
+        p.scale<=45?'5弱': p.scale<=50?'5強': p.scale<=55?'6弱': p.scale<=60?'6強':'7'
+      ) : null);
+      if(label && p.addr) scaleMap[p.addr] = intensityColor(label);
+    }
+
+    // GeoJSONポリゴン描画
+    const geo = await loadMunicipalityGeoJson();
+    if(geo?.features) {
+      for(const feat of geo.features){
+        const name = feat.properties?.N03_004 || feat.properties?.name || '';
+        const color = scaleMap[name] || '#2d4a2d'; // 震度観測なし→暗緑
+        ctx.fillStyle = color;
+        ctx.strokeStyle = '#111111';
+        ctx.lineWidth = 0.3;
+
+        const drawPoly = (coords) => {
+          ctx.beginPath();
+          for(let i=0; i<coords.length; i++){
+            const x = toX(coords[i][0]), y = toY(coords[i][1]);
+            i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        };
+
+        const geom = feat.geometry;
+        if(!geom) continue;
+        if(geom.type==='Polygon') {
+          geom.coordinates.forEach(ring => drawPoly(ring));
+        } else if(geom.type==='MultiPolygon') {
+          geom.coordinates.forEach(poly => poly.forEach(ring => drawPoly(ring)));
+        }
+      }
+    }
+
+    // 震源を×印で表示
+    const hypo = quake.earthquake?.hypocenter;
+    if(hypo?.latitude && hypo?.longitude) {
+      const ex = toX(hypo.longitude), ey = toY(hypo.latitude);
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(ex-12,ey-12); ctx.lineTo(ex+12,ey+12); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(ex+12,ey-12); ctx.lineTo(ex-12,ey+12); ctx.stroke();
+      if(hypo.name){
+        ctx.fillStyle='#ffffff'; ctx.font='bold 13px sans-serif';
+        ctx.fillText(hypo.name, ex+14, ey+5);
+      }
+    }
+
+    // 凡例
+    const legend = [
+      ['震度1','#00cfff'],['震度2','#0080ff'],['震度3','#00d000'],['震度4','#ffd700'],
+      ['震度5弱','#ff8c00'],['震度5強','#ff4500'],['震度6弱','#cc0000'],['震度6強','#990000'],['震度7','#8b00ff']
+    ];
+    ctx.font = 'bold 12px sans-serif';
+    legend.forEach(([label, color], i) => {
+      const x=5, y=30+i*24;
+      ctx.fillStyle=color;
+      ctx.fillRect(x, y, 16, 16);
+      ctx.strokeStyle='#ffffff'; ctx.lineWidth=0.5;
+      ctx.strokeRect(x, y, 16, 16);
+      ctx.fillStyle='#ffffff';
+      ctx.fillText(label, x+20, y+12);
+    });
+
+    // タイトル
+    const eq = quake.earthquake||{};
+    const title = `M${eq.hypocenter?.magnitude||'?'} 最大震度${points.filter(p=>p.isObserved).length?
+      Object.keys(EEW_INTENSITY_COLORS).reverse().find(k=>points.some(p=>(p.scale_label||'')===k))||'?':'?'}`;
+    ctx.fillStyle='rgba(0,0,0,0.6)';
+    ctx.fillRect(PADL, 0, W-PADL-PADR, 28);
+    ctx.fillStyle='#ffffff'; ctx.font='bold 14px sans-serif';
+    ctx.fillText(title, PADL+8, 18);
+
+    return canvas.toBuffer('image/png');
+  } catch(e) {
+    console.error('[EEW] 地図生成エラー:', e.message);
+    return null;
+  }
 }
 
 // p2pquake WebSocket接続
@@ -2937,11 +3032,12 @@ function connectEewWebSocket() {
             const ch = await discordClient.channels.fetch(row.channel_id).catch(()=>null);
             if(!ch) continue;
 
-            // 地図HTMLを生成してBufferで添付
-            const mapHtml = generateQuakeMapHtml(msg);
+            // 地図PNG画像を生成して添付
+            const mapPng = await generateQuakeMapPng(msg);
             const { AttachmentBuilder:AB } = require('discord.js');
-            const attachment = new AB(Buffer.from(mapHtml,'utf-8'),{name:'quake_map.html'});
-            await ch.send({content: isEEW?'🚨 **緊急地震速報（警報）**':null, embeds:[embed], files:[attachment]});
+            const files = mapPng ? [new AB(mapPng, {name:'quake_map.png'})] : [];
+            const embedWithImg = mapPng ? {...embed, image:{url:'attachment://quake_map.png'}} : embed;
+            await ch.send({content: isEEW?'🚨 **緊急地震速報（警報）**':null, embeds:[embedWithImg], files});
           } catch(e){console.error('[EEW] 送信エラー:',e.message);}
         }
       } catch(e){console.error('[EEW] メッセージ処理エラー:',e.message);}
@@ -3003,7 +3099,12 @@ app.listen(port, async()=>{
   for(const r of DIRECT_CHAT_WITH_DATE_CHANGE) await CW.send(r,'湊音が起動したよっ！').catch(()=>{});
 
   // 地震bot WebSocket接続開始（wsパッケージが必要）
-  try { require('ws'); connectEewWebSocket(); } catch(e){ console.error('[EEW] wsパッケージ未インストール:', e.message); }
+  try {
+    require('ws');
+    // GeoJSONを起動時に事前ダウンロード（初回EEW時の遅延を防ぐ）
+    loadMunicipalityGeoJson().catch(()=>{});
+    connectEewWebSocket();
+  } catch(e){ console.error('[EEW] wsパッケージ未インストール:', e.message); }
 
   console.log('=== 起動完了！ ===\n');
 });
