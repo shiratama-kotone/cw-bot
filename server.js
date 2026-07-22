@@ -2993,7 +2993,7 @@ let eewWs = null;
 function connectEewWebSocket() {
   try {
     const WebSocket = require('ws');
-    eewWs = new WebSocket('wss://ws-api.p2pquake.net/v2/ws');
+    eewWs = new WebSocket('wss://api.p2pquake.net/v2/ws');
     eewWs.on('open', ()=>console.log('[EEW] WebSocket接続完了'));
     eewWs.on('message', async(data)=>{
       try {
