@@ -2884,14 +2884,19 @@ async function loadMunicipalityGeoJson() {
 // canvas で市区町村塗り分け地震地図PNG画像を生成
 async function generateQuakeMapPng(quake) {
   try {
-    const { createCanvas } = require('canvas');
-    const W = 700, H = 550;
+    const { createCanvas, registerFont } = require('canvas');
+    // 日本語フォント登録
+    try { registerFont(__dirname+'/HiraKakuProN-W4-AlphaNum-01.otf', {family:'HiraKaku'}); } catch{}
+    const FONT = '14px HiraKaku, sans-serif';
+    const FONT_BOLD = 'bold 14px HiraKaku, sans-serif';
+    const FONT_SM = '12px HiraKaku, sans-serif';
+    const W = 1000, H = 800;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext('2d');
 
-    // 描画範囲（日本全体）
-    const latMin=24, latMax=46, lngMin=122, lngMax=150;
-    const PADL=60, PADR=20, PADT=20, PADB=40;
+    // 描画範囲（日本本土に絞って拡大）
+    const latMin=30, latMax=46, lngMin=128, lngMax=146;
+    const PADL=75, PADR=20, PADT=35, PADB=30;
     const toX = lng => PADL + (lng-lngMin)/(lngMax-lngMin)*(W-PADL-PADR);
     const toY = lat => PADT + (latMax-lat)/(latMax-latMin)*(H-PADT-PADB);
 
@@ -2951,7 +2956,7 @@ async function generateQuakeMapPng(quake) {
       ctx.beginPath(); ctx.moveTo(ex-12,ey-12); ctx.lineTo(ex+12,ey+12); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(ex+12,ey-12); ctx.lineTo(ex-12,ey+12); ctx.stroke();
       if(hypo.name){
-        ctx.fillStyle='#ffffff'; ctx.font='bold 13px sans-serif';
+        ctx.fillStyle='#ffffff'; ctx.font=FONT_BOLD;
         ctx.fillText(hypo.name, ex+14, ey+5);
       }
     }
@@ -2961,15 +2966,15 @@ async function generateQuakeMapPng(quake) {
       ['震度1','#00cfff'],['震度2','#0080ff'],['震度3','#00d000'],['震度4','#ffd700'],
       ['震度5弱','#ff8c00'],['震度5強','#ff4500'],['震度6弱','#cc0000'],['震度6強','#990000'],['震度7','#8b00ff']
     ];
-    ctx.font = 'bold 12px sans-serif';
+    ctx.font = FONT_SM;
     legend.forEach(([label, color], i) => {
-      const x=5, y=30+i*24;
+      const x=5, y=35+i*26;
       ctx.fillStyle=color;
       ctx.fillRect(x, y, 16, 16);
       ctx.strokeStyle='#ffffff'; ctx.lineWidth=0.5;
       ctx.strokeRect(x, y, 16, 16);
       ctx.fillStyle='#ffffff';
-      ctx.fillText(label, x+20, y+12);
+      ctx.fillText(label, x+20, y+13);
     });
 
     // タイトル
@@ -2977,9 +2982,9 @@ async function generateQuakeMapPng(quake) {
     const title = `M${eq.hypocenter?.magnitude||'?'} 最大震度${points.filter(p=>p.isObserved).length?
       Object.keys(EEW_INTENSITY_COLORS).reverse().find(k=>points.some(p=>(p.scale_label||'')===k))||'?':'?'}`;
     ctx.fillStyle='rgba(0,0,0,0.6)';
-    ctx.fillRect(PADL, 0, W-PADL-PADR, 28);
-    ctx.fillStyle='#ffffff'; ctx.font='bold 14px sans-serif';
-    ctx.fillText(title, PADL+8, 18);
+    ctx.fillRect(PADL, 0, W-PADL-PADR, 30);
+    ctx.fillStyle='#ffffff'; ctx.font=FONT_BOLD;
+    ctx.fillText(title, PADL+8, 20);
 
     return canvas.toBuffer('image/png');
   } catch(e) {
