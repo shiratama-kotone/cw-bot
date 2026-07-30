@@ -2871,126 +2871,135 @@ let municipalityGeoJson = null;
 async function loadMunicipalityGeoJson() {
   if(municipalityGeoJson) return municipalityGeoJson;
   try{
-    // 国土数値情報 行政区域データ（簡略化済み軽量版）
     const res = await axios.get('https://raw.githubusercontent.com/dataofjapan/land/master/japan.geojson', {timeout:30000});
     municipalityGeoJson = res.data;
     console.log('[EEW] GeoJSON読み込み完了:', municipalityGeoJson.features?.length, '件');
-  }catch(e){
-    console.error('[EEW] GeoJSON読み込みエラー:', e.message);
-  }
+  }catch(e){ console.error('[EEW] GeoJSON読み込みエラー:', e.message); }
   return municipalityGeoJson;
 }
 
-// canvas で市区町村塗り分け地震地図PNG画像を生成
+function scaleToLabel(scale) {
+  if(scale<=10) return '1'; if(scale<=20) return '2'; if(scale<=30) return '3';
+  if(scale<=40) return '4'; if(scale<=45) return '5弱'; if(scale<=50) return '5強';
+  if(scale<=55) return '6弱'; if(scale<=60) return '6強'; return '7';
+}
+
 async function generateQuakeMapPng(quake) {
   try {
     const { createCanvas, registerFont } = require('canvas');
-    // 日本語フォント登録
     try { registerFont(__dirname+'/HiraKakuProN-W4-AlphaNum-01.otf', {family:'HiraKaku'}); } catch{}
-    const FONT = '14px HiraKaku, sans-serif';
-    const FONT_BOLD = 'bold 14px HiraKaku, sans-serif';
-    const FONT_SM = '12px HiraKaku, sans-serif';
+    const FONT_BOLD = 'bold 16px "HiraKaku", sans-serif';
+    const FONT_NUM  = 'bold 20px "HiraKaku", sans-serif';
     const W = 1000, H = 800;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext('2d');
 
-    // 描画範囲（日本本土に絞って拡大）
-    const latMin=30, latMax=46, lngMin=128, lngMax=146;
-    const PADL=75, PADR=20, PADT=35, PADB=30;
-    const toX = lng => PADL + (lng-lngMin)/(lngMax-lngMin)*(W-PADL-PADR);
-    const toY = lat => PADT + (latMax-lat)/(latMax-latMin)*(H-PADT-PADB);
-
-    // 背景（海）
-    ctx.fillStyle = '#1e3a5f';
-    ctx.fillRect(0, 0, W, H);
-
-    // 震度データを市区町村名→色のマップに変換
+    // 都道府県ごとの最大震度を集計
     const points = quake.points||[];
-    const scaleMap = {}; // addr -> color
+    const prefMaxScale = {};
     for(const p of points){
-      if(!p.isObserved) continue;
-      const label = p.scale_label || (p.scale!=null ? (
-        p.scale<=10?'1': p.scale<=20?'2': p.scale<=30?'3': p.scale<=40?'4':
-        p.scale<=45?'5弱': p.scale<=50?'5強': p.scale<=55?'6弱': p.scale<=60?'6強':'7'
-      ) : null);
-      if(label && p.addr) scaleMap[p.addr] = intensityColor(label);
+      if(!p.isObserved || p.scale==null) continue;
+      const pref = p.pref || (p.addr||'').match(/^.{2,4}?[都道府県]/)?.[0];
+      if(!pref) continue;
+      if(prefMaxScale[pref]==null || p.scale>prefMaxScale[pref]) prefMaxScale[pref]=p.scale;
     }
+    const prefLabel = {};
+    for(const [k,v] of Object.entries(prefMaxScale)) prefLabel[k]=scaleToLabel(v);
 
-    // GeoJSONポリゴン描画
-    const geo = await loadMunicipalityGeoJson();
-    if(geo?.features) {
+    const hypo = quake.earthquake?.hypocenter||{};
+    const epicLat=hypo.latitude, epicLng=hypo.longitude;
+
+    // 自動ズーム
+    const obsPts=points.filter(p=>p.isObserved&&p.lat&&p.lng);
+    let latMin,latMax,lngMin,lngMax;
+    if(obsPts.length>0){
+      latMin=Math.min(...obsPts.map(p=>p.lat))-1.5; latMax=Math.max(...obsPts.map(p=>p.lat))+1.5;
+      lngMin=Math.min(...obsPts.map(p=>p.lng))-1.5; lngMax=Math.max(...obsPts.map(p=>p.lng))+1.5;
+      if(epicLat){latMin=Math.min(latMin,epicLat-1);latMax=Math.max(latMax,epicLat+1);}
+      if(epicLng){lngMin=Math.min(lngMin,epicLng-1);lngMax=Math.max(lngMax,epicLng+1);}
+    } else if(epicLat&&epicLng){
+      latMin=epicLat-4;latMax=epicLat+4;lngMin=epicLng-4;lngMax=epicLng+4;
+    } else { latMin=30;latMax=46;lngMin=128;lngMax=146; }
+    const aspect=W/H;
+    const latR=latMax-latMin, lngR=lngMax-lngMin;
+    if(lngR/latR>aspect){const d=(lngR/aspect-latR)/2;latMin-=d;latMax+=d;}
+    else{const d=(latR*aspect-lngR)/2;lngMin-=d;lngMax+=d;}
+
+    const PAD=40;
+    const toX=lng=>PAD+(lng-lngMin)/(lngMax-lngMin)*(W-PAD*2);
+    const toY=lat=>PAD+(latMax-lat)/(latMax-latMin)*(H-PAD*2);
+
+    ctx.fillStyle='#111111'; ctx.fillRect(0,0,W,H);
+
+    const geo=await loadMunicipalityGeoJson();
+    if(geo?.features){
       for(const feat of geo.features){
-        const name = feat.properties?.N03_004 || feat.properties?.name || '';
-        const color = scaleMap[name] || '#2d4a2d'; // 震度観測なし→暗緑
-        ctx.fillStyle = color;
-        ctx.strokeStyle = '#111111';
-        ctx.lineWidth = 0.3;
-
-        const drawPoly = (coords) => {
-          ctx.beginPath();
-          for(let i=0; i<coords.length; i++){
-            const x = toX(coords[i][0]), y = toY(coords[i][1]);
-            i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
-          }
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
+        const pn=feat.properties?.N03_001||feat.properties?.name||'';
+        ctx.fillStyle=prefMaxScale[pn]!=null?intensityColor(prefLabel[pn]):'#3a3a3a';
+        ctx.strokeStyle='#222222'; ctx.lineWidth=0.8;
+        const drawRing=coords=>{
+          if(!coords.length)return;
+          ctx.beginPath(); ctx.moveTo(toX(coords[0][0]),toY(coords[0][1]));
+          for(let i=1;i<coords.length;i++)ctx.lineTo(toX(coords[i][0]),toY(coords[i][1]));
+          ctx.closePath(); ctx.fill(); ctx.stroke();
         };
-
-        const geom = feat.geometry;
-        if(!geom) continue;
-        if(geom.type==='Polygon') {
-          geom.coordinates.forEach(ring => drawPoly(ring));
-        } else if(geom.type==='MultiPolygon') {
-          geom.coordinates.forEach(poly => poly.forEach(ring => drawPoly(ring)));
+        const g=feat.geometry; if(!g)continue;
+        if(g.type==='Polygon')g.coordinates.forEach(r=>drawRing(r));
+        else if(g.type==='MultiPolygon')g.coordinates.forEach(p=>p.forEach(r=>drawRing(r)));
+      }
+      // 都道府県境界
+      ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1;
+      for(const feat of geo.features){
+        const g=feat.geometry; if(!g)continue;
+        const drawB=coords=>{
+          if(!coords.length)return;
+          ctx.beginPath(); ctx.moveTo(toX(coords[0][0]),toY(coords[0][1]));
+          for(let i=1;i<coords.length;i++)ctx.lineTo(toX(coords[i][0]),toY(coords[i][1]));
+          ctx.closePath(); ctx.stroke();
+        };
+        if(g.type==='Polygon')g.coordinates.forEach(r=>drawB(r));
+        else if(g.type==='MultiPolygon')g.coordinates.forEach(p=>p.forEach(r=>drawB(r)));
+      }
+      // 震度数字
+      for(const feat of geo.features){
+        const pn=feat.properties?.N03_001||feat.properties?.name||'';
+        if(!prefMaxScale[pn])continue;
+        const label=prefLabel[pn];
+        const g=feat.geometry; if(!g)continue;
+        let coords=[];
+        if(g.type==='Polygon')coords=g.coordinates[0]||[];
+        else if(g.type==='MultiPolygon'){
+          let mx=0;
+          for(const p of g.coordinates){if((p[0]||[]).length>mx){mx=(p[0]||[]).length;coords=p[0]||[];}}
         }
+        if(!coords.length)continue;
+        const cx=coords.reduce((s,c)=>s+c[0],0)/coords.length;
+        const cy=coords.reduce((s,c)=>s+c[1],0)/coords.length;
+        const px=toX(cx),py=toY(cy);
+        if(px<PAD||px>W-PAD||py<PAD||py>H-PAD)continue;
+        const bw=28,bh=28;
+        ctx.fillStyle=intensityColor(label);
+        ctx.strokeStyle='#ffffff'; ctx.lineWidth=2;
+        ctx.fillRect(px-bw/2,py-bh/2,bw,bh);
+        ctx.strokeRect(px-bw/2,py-bh/2,bw,bh);
+        ctx.fillStyle='#ffffff'; ctx.font=FONT_NUM;
+        ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(label,px,py);
+        ctx.textAlign='left'; ctx.textBaseline='alphabetic';
       }
     }
-
-    // 震源を×印で表示
-    const hypo = quake.earthquake?.hypocenter;
-    if(hypo?.latitude && hypo?.longitude) {
-      const ex = toX(hypo.longitude), ey = toY(hypo.latitude);
-      ctx.strokeStyle = '#ff0000';
-      ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(ex-12,ey-12); ctx.lineTo(ex+12,ey+12); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(ex+12,ey-12); ctx.lineTo(ex-12,ey+12); ctx.stroke();
-      if(hypo.name){
-        ctx.fillStyle='#ffffff'; ctx.font=FONT_BOLD;
-        ctx.fillText(hypo.name, ex+14, ey+5);
-      }
+    // 震源×
+    if(epicLat&&epicLng){
+      const ex=toX(epicLng),ey=toY(epicLat),S=16;
+      ctx.strokeStyle='#ffffff'; ctx.lineWidth=6;
+      ctx.beginPath();ctx.moveTo(ex-S,ey-S);ctx.lineTo(ex+S,ey+S);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(ex+S,ey-S);ctx.lineTo(ex-S,ey+S);ctx.stroke();
+      ctx.strokeStyle='#dd2222'; ctx.lineWidth=4;
+      ctx.beginPath();ctx.moveTo(ex-S,ey-S);ctx.lineTo(ex+S,ey+S);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(ex+S,ey-S);ctx.lineTo(ex-S,ey+S);ctx.stroke();
     }
-
-    // 凡例
-    const legend = [
-      ['震度1','#00cfff'],['震度2','#0080ff'],['震度3','#00d000'],['震度4','#ffd700'],
-      ['震度5弱','#ff8c00'],['震度5強','#ff4500'],['震度6弱','#cc0000'],['震度6強','#990000'],['震度7','#8b00ff']
-    ];
-    ctx.font = FONT_SM;
-    legend.forEach(([label, color], i) => {
-      const x=5, y=35+i*26;
-      ctx.fillStyle=color;
-      ctx.fillRect(x, y, 16, 16);
-      ctx.strokeStyle='#ffffff'; ctx.lineWidth=0.5;
-      ctx.strokeRect(x, y, 16, 16);
-      ctx.fillStyle='#ffffff';
-      ctx.fillText(label, x+20, y+13);
-    });
-
-    // タイトル
-    const eq = quake.earthquake||{};
-    const title = `M${eq.hypocenter?.magnitude||'?'} 最大震度${points.filter(p=>p.isObserved).length?
-      Object.keys(EEW_INTENSITY_COLORS).reverse().find(k=>points.some(p=>(p.scale_label||'')===k))||'?':'?'}`;
-    ctx.fillStyle='rgba(0,0,0,0.6)';
-    ctx.fillRect(PADL, 0, W-PADL-PADR, 30);
-    ctx.fillStyle='#ffffff'; ctx.font=FONT_BOLD;
-    ctx.fillText(title, PADL+8, 20);
-
     return canvas.toBuffer('image/png');
-  } catch(e) {
-    console.error('[EEW] 地図生成エラー:', e.message);
-    return null;
-  }
+  }catch(e){ console.error('[EEW] 地図生成エラー:',e.message); return null; }
 }
 
 // p2pquake WebSocket接続
@@ -3015,20 +3024,34 @@ function connectEewWebSocket() {
         const eq = msg.earthquake||{};
         const hypo = eq.hypocenter||{};
         const maxInt = msg.points ? msg.points.reduce((m,p)=>Math.max(m,p.scale||0),0) : 0;
-        const intLabel = Object.keys(EEW_INTENSITY_COLORS)[Math.max(0,maxInt-1)] || String(maxInt);
+        const intLabel = scaleToLabel(maxInt);
         const color = isEEW ? 0xFFD700 : parseInt((intensityColor(intLabel)||'#7289da').replace('#',''),16);
 
+        // 発生時刻をUNIX時間に変換
+        let unixTime = Math.floor(Date.now()/1000);
+        if(eq.time){ try{ unixTime=Math.floor(new Date(eq.time.replace(/\//g,'-')).getTime()/1000); }catch{} }
+        const jstDate = new Date(unixTime*1000);
+        const month = jstDate.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',month:'numeric'});
+        const day   = jstDate.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',day:'numeric'});
+        const hhmm  = jstDate.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hour12:false});
+        const timeLabel = `${month}月${day}日 ${hhmm}ごろ`;
+
+        const tsunami = eq.domesticTsunami==='None'?'ありません':
+          eq.domesticTsunami==='Unknown'||eq.domesticTsunami==='Checking'?'現在調査中です':
+          eq.domesticTsunami==='NonEffective'?'若干の海面変動があるかもしれませんが、被害の心配はありません':
+          eq.domesticTsunami==='Watch'?'津波注意報が発表されています':
+          eq.domesticTsunami==='Warning'?'津波警報・大津波警報が発表されています':'不明';
+
+        const description = isEEW
+          ? `**緊急地震速報（警報）が発表されました。**\n強い揺れに警戒してください。`
+          : `${timeLabel}、\n最大震度**${intLabel}**の地震がありました。\nこの地震による津波の心配は${tsunami}。\n- 震源：${hypo.name||'不明'}\n- 規模：M${hypo.magnitude??'不明'}\n- 深さ：${hypo.depth!=null?`${hypo.depth}km`:'不明'}\n-# 気象庁 各地の震度に関する情報｜<t:${unixTime}:s>`;
+
         const embed = {
-          title: isEEW ? '緊急地震速報（警報）' : '地震情報',
+          title: isEEW ? '緊急地震速報（警報）' : '## 地震情報',
+          description,
           color,
-          fields: [
-            {name:'震源',value:hypo.name||'不明',inline:true},
-            {name:'マグニチュード',value:String(hypo.magnitude||'不明'),inline:true},
-            {name:'深さ',value:hypo.depth!=null?`${hypo.depth}km`:'不明',inline:true},
-            {name:'最大震度',value:intLabel||'不明',inline:true},
-            {name:'発生時刻',value:msg.time||new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'}),inline:true},
-          ],
-          footer:{text: isEEW?'⚠️ 緊急地震速報（警報）':'地震情報 | p2pquake'}
+          footer: {text: isEEW ? '気象庁 緊急地震速報' : '気象庁 各地の震度に関する情報'},
+          timestamp: new Date(unixTime*1000).toISOString(),
         };
 
         // 緊急地震速報は全文黄色背景のためembedのcolorを黄色に
