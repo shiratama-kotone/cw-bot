@@ -2209,18 +2209,18 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── おみくじ系スラッシュコマンド ──
-      if(cmd==='normal_omikuji'){ await reply(`普通のおみくじの結果は…\n**${CW.drawNormalOmikuji()}**\nだよっ！`, {title:'普通のおみくじ'}); return; }
-      if(cmd==='normal_omikuji_n'){
+      if(cmd==='normal-omikuji'){ await reply(`普通のおみくじの結果は…\n**${CW.drawNormalOmikuji()}**\nだよっ！`, {title:'普通のおみくじ'}); return; }
+      if(cmd==='normal-omikuji-n'){
         const n=Math.min(interaction.options.getInteger('count'),10000);
         const rs=Array.from({length:n},()=>CW.drawNormalOmikuji());
         await reply(`普通のおみくじ${n}連の結果は…\n**${CW.summarizeOmikuji(rs)}**\nだよっ！`, {title:`普通のおみくじ${n}連`}); return;
       }
-      if(cmd==='omikuji_n'){
+      if(cmd==='omikuji-n'){
         const n=Math.min(interaction.options.getInteger('count'),10000);
         const rs=Array.from({length:n},()=>CW.drawOmikuji());
         await reply(`おみくじ${n}連の結果は…\n**${CW.summarizeOmikuji(rs)}**\nだよっ！`, {title:`おみくじ${n}連（大凶99%版）`}); return;
       }
-      if(cmd==='yes_or_no'){ await reply(`答えは「**${await CW.yesOrNo()}**」だよっ！`, {title:'yes or no'}); return; }
+      if(cmd==='yes-or-no'){ await reply(`答えは「**${await CW.yesOrNo()}**」だよっ！`, {title:'yes or no'}); return; }
 
       // ── wiki ──
       if(cmd==='wiki'){ await reply(await CW.wikipedia(interaction.options.getString('word')), {title:'Wikipedia'}); return; }
@@ -2244,11 +2244,11 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── scratch ──
-      if(cmd==='scratch_user'){ const r=await CW.scratchUser(interaction.options.getString('username')); await reply(r.replace(/\[.*?\]/g,'').substring(0,1900)); return; }
-      if(cmd==='scratch_project'){ const r=await CW.scratchProject(interaction.options.getString('id')); await reply(r.replace(/\[.*?\]/g,'').substring(0,1900)); return; }
+      if(cmd==='scratch-user'){ const r=await CW.scratchUser(interaction.options.getString('username')); await reply(r.replace(/\[.*?\]/g,'').substring(0,1900)); return; }
+      if(cmd==='scratch-project'){ const r=await CW.scratchProject(interaction.options.getString('id')); await reply(r.replace(/\[.*?\]/g,'').substring(0,1900)); return; }
 
       // ── song_typing_info ──
-      if(cmd==='song_typing_info'){ const r=await getSongTypingInfo(interaction.options.getString('id')); await reply(r.replace(/\[.*?\]/g,'').substring(0,1900)); return; }
+      if(cmd==='song-typing-info'){ const r=await getSongTypingInfo(interaction.options.getString('id')); await reply(r.replace(/\[.*?\]/g,'').substring(0,1900)); return; }
 
       // ── romera ──
       if(cmd==='romera'){
@@ -2261,7 +2261,7 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── message_total ──
-      if(cmd==='message_total'){
+      if(cmd==='message-total'){
         const r=await dbQuery('SELECT account_id,message_count FROM total_message_counts WHERE room_id=$1 ORDER BY message_count DESC',[CW_ROOM]);
         if(!r.rows.length){ await reply('累計発言数はまだないみたい', {title:'累計発言数ランキング'}); return; }
         let msg='**累計発言数ランキング**\n';
@@ -2291,7 +2291,7 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── room_info ──
-      if(cmd==='room_info'){
+      if(cmd==='room-info'){
         if(!INFO_API_TOKEN){ await reply('INFO_API_TOKENが設定されていないよ'); return; }
         const rid=interaction.options.getString('room_id');
         const ri=await CW.roomInfoWithToken(rid,INFO_API_TOKEN);
@@ -2442,7 +2442,7 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── ng_add ──
-      if(cmd==='ng_add'){
+      if(cmd==='ng-add'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
         const w=interaction.options.getString('word');
         await dbQuery('INSERT INTO ng_words (room_id,word) VALUES ($1,$2) ON CONFLICT DO NOTHING',[CW_ROOM,w]);
@@ -2450,7 +2450,7 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── ng_del ──
-      if(cmd==='ng_del'){
+      if(cmd==='ng-del'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
         const w=interaction.options.getString('word');
         await dbQuery('DELETE FROM ng_words WHERE room_id=$1 AND word=$2',[CW_ROOM,w]);
@@ -2458,7 +2458,7 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── ng_check ──
-      if(cmd==='ng_check'){
+      if(cmd==='ng-check'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
         const r=await dbQuery('SELECT word FROM ng_words WHERE room_id=$1 ORDER BY created_at',[CW_ROOM]);
         if(!r.rows.length){ await reply('NGワードはまだ登録されてないよ', {title:'CW NGワード一覧'}); return; }
@@ -2467,14 +2467,14 @@ if(DISCORD_BOT_TOKEN){
       if(cmd==='rank'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const uid=interaction.user.id;const r=await dbQuery('SELECT xp,level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,uid]);const xp=r.rows.length?parseInt(r.rows[0].xp):0,lv=r.rows.length?parseInt(r.rows[0].level):0;const nextXp=totalXpForLevel(lv+1),role=getRoleForLevel(lv),ar=role?interaction.guild.roles.cache.get(role.roleId):null;await reply(null,{title:`${interaction.member.displayName} のランク`,fields:[{name:'レベル',value:`**${lv}**`,inline:true},{name:'XP',value:`${xp.toLocaleString()}`,inline:true},{name:'次のLvまで',value:`${(nextXp-xp).toLocaleString()} XP`,inline:true},{name:'現在のロール',value:ar?ar.name:'なし',inline:true}],color:role?0xf39c12:0x7289da,footer:`次のLv${lv+1}に必要な累計XP: ${nextXp.toLocaleString()}`});return;}
       if(cmd==='work'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid),lvRow=await dbQuery('SELECT level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[gid,uid]),lv=lvRow.rows.length?parseInt(lvRow.rows[0].level):0,limit=workLimitForLevel(lv),today=new Date().toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}),resetDate=eco.work_reset_date?new Date(eco.work_reset_date).toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}):null;let count=resetDate!==today?0:(eco.work_count||0);if(count>=limit){await replyErr(`今日の仕事回数上限（${limit}回）に達したよ！明日また来てね`);return;}if(eco.last_work_at){const diff=(Date.now()-new Date(eco.last_work_at).getTime())/60000;if(diff<30){await replyErr(`クールダウン中！あと**${Math.ceil(30-diff)}分**待ってね`);return;}}const job=JOBS[eco.job]||JOBS['ニート'],result=job.work(),newWallet=Math.max(0,parseInt(eco.wallet)+result.earned);await dbQuery('UPDATE discord_economy SET wallet=$1,work_count=$2,work_reset_date=CURRENT_DATE,last_work_at=NOW(),updated_at=NOW() WHERE guild_id=$3 AND user_id=$4',[newWallet,count+1,gid,uid]);await reply(result.msg+`\n\n所持金: **${fmt(newWallet)}** | 今日: ${count+1}/${limit}回`,{title:`${interaction.member.displayName} が${eco.job}として働いた！`,color:result.earned>0?0x2ecc71:result.earned<0?0xe74c3c:0x95a5a6,footer:`残りwork回数: ${limit-(count+1)}回`});return;}
       if(cmd==='job'){if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const tiers=['初級','中級','上級','特殊'];const fields=tiers.map(tier=>{const jobs=Object.entries(JOBS).filter(([,v])=>v.tier===tier);return{name:`【${tier}職】`,value:jobs.map(([n,v])=>`**${n}**（${v.cost>0?fmt(v.cost):'無料'}）\n${v.desc}`).join('\n\n'),inline:false};});await reply(null,{title:'職一覧',fields,color:0x7289da,footer:'転職は /job_set で。転職コストは所持金＋銀行の合計から判定'});return;}
-      if(cmd==='job_info'){if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const jobName=interaction.options.getString('job'),job=JOBS[jobName];if(!job){await replyErr(`「${jobName}」という職は存在しないよ`);return;}await reply(job.desc,{title:job.tier+'職：'+jobName,fields:[{name:'転職コスト',value:job.cost>0?fmt(job.cost):'無料',inline:true},{name:'カテゴリ',value:job.tier,inline:true}],color:0x7289da});return;}
-      if(cmd==='job_set'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const jobName=interaction.options.getString('job'),job=JOBS[jobName];if(!job){await replyErr(`「${jobName}」という職は存在しないよ\n/job で職一覧を確認してね`);return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid);if(eco.job===jobName){await replyErr(`すでに${jobName}だよ`);return;}const total=parseInt(eco.wallet)+parseInt(eco.bank);if(total<job.cost){await replyErr(`転職コストが足りないよ！\n必要: ${fmt(job.cost)} / 所持: ${fmt(total)}`);return;}await dbQuery('UPDATE discord_economy SET job=$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[jobName,gid,uid]);await reply(`**${jobName}**に転職したよ！\n${job.desc}`,{title:'転職完了',color:0x2ecc71});return;}
+      if(cmd==='job-info'){if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const jobName=interaction.options.getString('job'),job=JOBS[jobName];if(!job){await replyErr(`「${jobName}」という職は存在しないよ`);return;}await reply(job.desc,{title:job.tier+'職：'+jobName,fields:[{name:'転職コスト',value:job.cost>0?fmt(job.cost):'無料',inline:true},{name:'カテゴリ',value:job.tier,inline:true}],color:0x7289da});return;}
+      if(cmd==='job-set'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const jobName=interaction.options.getString('job'),job=JOBS[jobName];if(!job){await replyErr(`「${jobName}」という職は存在しないよ\n/job で職一覧を確認してね`);return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid);if(eco.job===jobName){await replyErr(`すでに${jobName}だよ`);return;}const total=parseInt(eco.wallet)+parseInt(eco.bank);if(total<job.cost){await replyErr(`転職コストが足りないよ！\n必要: ${fmt(job.cost)} / 所持: ${fmt(total)}`);return;}await dbQuery('UPDATE discord_economy SET job=$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[jobName,gid,uid]);await reply(`**${jobName}**に転職したよ！\n${job.desc}`,{title:'転職完了',color:0x2ecc71});return;}
       if(cmd==='money'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const eco=await getEconomy(interaction.guild.id,interaction.user.id);await reply(null,{title:`${interaction.member.displayName} の所持金`,fields:[{name:'財布',value:`**${fmt(eco.wallet)}**`,inline:true},{name:'銀行',value:`**${fmt(eco.bank)}**`,inline:true},{name:'合計',value:`**${fmt(parseInt(eco.wallet)+parseInt(eco.bank))}**`,inline:true},{name:'職業',value:eco.job,inline:true}],color:0xf39c12});return;}
-      if(cmd==='money_send'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const target=interaction.options.getUser('user'),amount=interaction.options.getInteger('amount'),gid=interaction.guild.id;if(target.id===interaction.user.id){await replyErr('自分には送れないよ');return;}if(target.bot){await replyErr('botには送れないよ');return;}const myEco=await getEconomy(gid,interaction.user.id);if(parseInt(myEco.wallet)<amount){await replyErr(`財布の残高が足りないよ！財布: ${fmt(myEco.wallet)}`);return;}await dbQuery('UPDATE discord_economy SET wallet=wallet-$1 WHERE guild_id=$2 AND user_id=$3',[amount,gid,interaction.user.id]);await getEconomy(gid,target.id);await dbQuery('UPDATE discord_economy SET wallet=wallet+$1 WHERE guild_id=$2 AND user_id=$3',[amount,gid,target.id]);await reply(`<@${target.id}> に **${fmt(amount)}** 送ったよ！`,{title:'送金完了',color:0x2ecc71});return;}
+      if(cmd==='money-send'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const target=interaction.options.getUser('user'),amount=interaction.options.getInteger('amount'),gid=interaction.guild.id;if(target.id===interaction.user.id){await replyErr('自分には送れないよ');return;}if(target.bot){await replyErr('botには送れないよ');return;}const myEco=await getEconomy(gid,interaction.user.id);if(parseInt(myEco.wallet)<amount){await replyErr(`財布の残高が足りないよ！財布: ${fmt(myEco.wallet)}`);return;}await dbQuery('UPDATE discord_economy SET wallet=wallet-$1 WHERE guild_id=$2 AND user_id=$3',[amount,gid,interaction.user.id]);await getEconomy(gid,target.id);await dbQuery('UPDATE discord_economy SET wallet=wallet+$1 WHERE guild_id=$2 AND user_id=$3',[amount,gid,target.id]);await reply(`<@${target.id}> に **${fmt(amount)}** 送ったよ！`,{title:'送金完了',color:0x2ecc71});return;}
       if(cmd==='bank'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const eco=await getEconomy(interaction.guild.id,interaction.user.id);await reply(null,{title:`${interaction.member.displayName} の銀行`,fields:[{name:'銀行残高',value:`**${fmt(eco.bank)}**`,inline:true},{name:'財布',value:`**${fmt(eco.wallet)}**`,inline:true}],color:0x3498db});return;}
-      if(cmd==='bank_deposit'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const amount=interaction.options.getInteger('amount'),gid=interaction.guild.id,uid=interaction.user.id,eco=await getEconomy(gid,uid);if(parseInt(eco.wallet)<amount){await replyErr(`財布の残高が足りないよ！財布: ${fmt(eco.wallet)}`);return;}await dbQuery('UPDATE discord_economy SET wallet=wallet-$1,bank=bank+$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[amount,gid,uid]);await reply(`**${fmt(amount)}** を銀行に預けたよ！`,{title:'預け入れ完了',color:0x3498db});return;}
-      if(cmd==='bank_withdraw'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const amount=interaction.options.getInteger('amount'),gid=interaction.guild.id,uid=interaction.user.id,eco=await getEconomy(gid,uid);if(parseInt(eco.bank)<amount){await replyErr(`銀行残高が足りないよ！銀行: ${fmt(eco.bank)}`);return;}await dbQuery('UPDATE discord_economy SET wallet=wallet+$1,bank=bank-$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[amount,gid,uid]);await reply(`**${fmt(amount)}** を銀行から引き出したよ！`,{title:'引き出し完了',color:0x3498db});return;}
-      if(cmd==='role_panel'){if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}const title=interaction.options.getString('title');const options=[];for(let i=1;i<=24;i++){const role=interaction.options.getRole(`role${i}`);if(role)options.push({label:role.name,value:role.id});}if(!options.length){await replyErr('ロールを1つ以上指定してね');return;}const{ActionRowBuilder,StringSelectMenuBuilder}=require('discord.js');const menu=new StringSelectMenuBuilder().setCustomId('role_panel_select').setPlaceholder('ロールを選択してね（複数選択可）').setMinValues(0).setMaxValues(options.length).addOptions(options);await interaction.editReply({embeds:[{title,description:'メニューからロールを選択するとロールが付与・解除されるよ！',color:0x7289da}],components:[new ActionRowBuilder().addComponents(menu)],content:''});return;}
+      if(cmd==='bank-deposit'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const amount=interaction.options.getInteger('amount'),gid=interaction.guild.id,uid=interaction.user.id,eco=await getEconomy(gid,uid);if(parseInt(eco.wallet)<amount){await replyErr(`財布の残高が足りないよ！財布: ${fmt(eco.wallet)}`);return;}await dbQuery('UPDATE discord_economy SET wallet=wallet-$1,bank=bank+$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[amount,gid,uid]);await reply(`**${fmt(amount)}** を銀行に預けたよ！`,{title:'預け入れ完了',color:0x3498db});return;}
+      if(cmd==='bank-withdraw'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const amount=interaction.options.getInteger('amount'),gid=interaction.guild.id,uid=interaction.user.id,eco=await getEconomy(gid,uid);if(parseInt(eco.bank)<amount){await replyErr(`銀行残高が足りないよ！銀行: ${fmt(eco.bank)}`);return;}await dbQuery('UPDATE discord_economy SET wallet=wallet+$1,bank=bank-$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[amount,gid,uid]);await reply(`**${fmt(amount)}** を銀行から引き出したよ！`,{title:'引き出し完了',color:0x3498db});return;}
+      if(cmd==='role-panel'){if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}const title=interaction.options.getString('title');const options=[];for(let i=1;i<=24;i++){const role=interaction.options.getRole(`role${i}`);if(role)options.push({label:role.name,value:role.id});}if(!options.length){await replyErr('ロールを1つ以上指定してね');return;}const{ActionRowBuilder,StringSelectMenuBuilder}=require('discord.js');const menu=new StringSelectMenuBuilder().setCustomId('role_panel_select').setPlaceholder('ロールを選択してね（複数選択可）').setMinValues(0).setMaxValues(options.length).addOptions(options);await interaction.editReply({embeds:[{title,description:'メニューからロールを選択するとロールが付与・解除されるよ！',color:0x7289da}],components:[new ActionRowBuilder().addComponents(menu)],content:''});return;}
       if(cmd==='verify'){if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}const role=interaction.options.getRole('role'),title=interaction.options.getString('title')||'認証',desc=interaction.options.getString('description')||'ボタンを押すと認証されてロールが付与されるよ！';const{ActionRowBuilder,ButtonBuilder,ButtonStyle}=require('discord.js');const btn=new ButtonBuilder().setCustomId(`verify_btn:${role.id}`).setLabel('認証する').setStyle(ButtonStyle.Primary);await interaction.editReply({embeds:[{title,description:desc,color:0x2ecc71,footer:{text:`付与されるロール: ${role.name}`}}],components:[new ActionRowBuilder().addComponents(btn)],content:''});return;}
       if(cmd==='event'){
         const sub=interaction.options.getSubcommand();
@@ -2532,7 +2532,7 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
       // ── dictionary_add ──
-      if(cmd==='dictionary_add'){
+      if(cmd==='dictionary-add'){
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const word=interaction.options.getString('word'),reading=interaction.options.getString('reading');
         await dbQuery('INSERT INTO voice_dictionary (guild_id,word,reading) VALUES ($1,$2,$3) ON CONFLICT (guild_id,word) DO UPDATE SET reading=$3',[interaction.guild.id,word,reading]);
@@ -2540,7 +2540,7 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
       // ── dictionary_list ──
-      if(cmd==='dictionary_list'){
+      if(cmd==='dictionary-list'){
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const page=Math.max(1,interaction.options.getInteger('page')||1);
         const r=await dbQuery('SELECT word,reading FROM voice_dictionary WHERE guild_id=$1 ORDER BY created_at',[interaction.guild.id]);
@@ -2551,7 +2551,7 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
       // ── dictionary_remove ──
-      if(cmd==='dictionary_remove'){
+      if(cmd==='dictionary-remove'){
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const keyword=interaction.options.getString('keyword');
         const r=await dbQuery('DELETE FROM voice_dictionary WHERE guild_id=$1 AND (word=$2 OR reading=$2) RETURNING word,reading',[interaction.guild.id,keyword]);
@@ -2592,7 +2592,7 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
       // ── speaker_list ──
-      if(cmd==='speaker_list'){
+      if(cmd==='speaker-list'){
         const page=Math.max(1,interaction.options.getInteger('page')||1);
         const speakers=await fetchVoicevoxSpeakers();
         const entries=Object.entries(speakers);
@@ -2603,7 +2603,7 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
       // ── discord_ng_add ──
-      if(cmd==='discord_ng_add'){
+      if(cmd==='discord-ng-add'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const pattern=interaction.options.getString('pattern');
@@ -2613,7 +2613,7 @@ if(DISCORD_BOT_TOKEN){
         await reply(`「${pattern}」をDiscord NGワードに登録したよ！${isRegex?' (正規表現)':''}`,{title:'Discord NGワード登録',color:0xe74c3c});return;
       }
       // ── discord_ng_list ──
-      if(cmd==='discord_ng_list'){
+      if(cmd==='discord-ng-list'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const r=await dbQuery('SELECT id,pattern,is_regex FROM discord_ng_words WHERE guild_id=$1 ORDER BY id',[interaction.guild.id]);
@@ -2624,7 +2624,7 @@ if(DISCORD_BOT_TOKEN){
         await reply(`${list}\n\n**除外チャンネル：** ${exList}`,{title:'Discord NGワード一覧'});return;
       }
       // ── discord_ng_remove ──
-      if(cmd==='discord_ng_remove'){
+      if(cmd==='discord-ng-remove'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const id=interaction.options.getInteger('id');
@@ -2633,7 +2633,7 @@ if(DISCORD_BOT_TOKEN){
         await reply(`「${r.rows[0].pattern}」を削除したよ`,{title:'Discord NGワード削除',color:0x2ecc71});return;
       }
       // ── discord_ng_exclude ──
-      if(cmd==='discord_ng_exclude'){
+      if(cmd==='discord-ng-exclude'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const chId=interaction.channelId;
@@ -2648,7 +2648,7 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
       // ── discord_warning_reset ──
-      if(cmd==='discord_warning_reset'){
+      if(cmd==='discord-warning-reset'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const target=interaction.options.getUser('user');
@@ -2656,7 +2656,7 @@ if(DISCORD_BOT_TOKEN){
         await reply(`<@${target.id}> の警告回数をリセットしたよ`,{title:'警告リセット',color:0x2ecc71});return;
       }
       // ── server_status ──
-      if(cmd==='server_status'){
+      if(cmd==='server-status'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         await reply('サーバー概要カテゴリを作成中…少し待ってね',{title:'Server Status',color:0x7289da});
