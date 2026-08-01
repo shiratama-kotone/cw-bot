@@ -2888,44 +2888,49 @@ async function generateQuakeMapPng(quake) {
   try {
     const { createCanvas, registerFont } = require('canvas');
     try { registerFont(__dirname+'/HiraKakuProN-W4-AlphaNum-01.otf', {family:'HiraKaku'}); } catch{}
-    const FONT_BOLD = 'bold 16px "HiraKaku", sans-serif';
-    const FONT_NUM  = 'bold 20px "HiraKaku", sans-serif';
-    const W = 1000, H = 800;
+    const FONT_NUM = 'bold 18px "HiraKaku", sans-serif';
+    const W = 1200, H = 900;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext('2d');
 
-    // 都道府県ごとの最大震度を集計
     const points = quake.points||[];
-    const prefMaxScale = {};
+    // 市単位・都道府県単位で最大震度を集計
+    const cityMaxScale = {}, prefMaxScale = {};
     for(const p of points){
       if(!p.isObserved || p.scale==null) continue;
-      const pref = p.pref || (p.addr||'').match(/^.{2,4}?[都道府県]/)?.[0];
-      if(!pref) continue;
-      if(prefMaxScale[pref]==null || p.scale>prefMaxScale[pref]) prefMaxScale[pref]=p.scale;
+      const addr = p.addr||'';
+      const pref = p.pref || addr.match(/^.{2,4}?[都道府県]/)?.[0];
+      if(pref){ if(prefMaxScale[pref]==null||p.scale>prefMaxScale[pref]) prefMaxScale[pref]=p.scale; }
+      const cityMatch = addr.match(/([^\s]+市)/);
+      if(cityMatch && pref){
+        const k = pref+cityMatch[1];
+        if(cityMaxScale[k]==null||p.scale>cityMaxScale[k]) cityMaxScale[k]=p.scale;
+      }
     }
-    const prefLabel = {};
+    const cityLabel={}, prefLabel={};
+    for(const [k,v] of Object.entries(cityMaxScale)) cityLabel[k]=scaleToLabel(v);
     for(const [k,v] of Object.entries(prefMaxScale)) prefLabel[k]=scaleToLabel(v);
 
     const hypo = quake.earthquake?.hypocenter||{};
     const epicLat=hypo.latitude, epicLng=hypo.longitude;
 
-    // 自動ズーム
+    // 自動ズーム（パディング小さめ）
     const obsPts=points.filter(p=>p.isObserved&&p.lat&&p.lng);
     let latMin,latMax,lngMin,lngMax;
     if(obsPts.length>0){
-      latMin=Math.min(...obsPts.map(p=>p.lat))-1.5; latMax=Math.max(...obsPts.map(p=>p.lat))+1.5;
-      lngMin=Math.min(...obsPts.map(p=>p.lng))-1.5; lngMax=Math.max(...obsPts.map(p=>p.lng))+1.5;
-      if(epicLat){latMin=Math.min(latMin,epicLat-1);latMax=Math.max(latMax,epicLat+1);}
-      if(epicLng){lngMin=Math.min(lngMin,epicLng-1);lngMax=Math.max(lngMax,epicLng+1);}
+      latMin=Math.min(...obsPts.map(p=>p.lat))-0.8; latMax=Math.max(...obsPts.map(p=>p.lat))+0.8;
+      lngMin=Math.min(...obsPts.map(p=>p.lng))-0.8; lngMax=Math.max(...obsPts.map(p=>p.lng))+0.8;
+      if(epicLat){latMin=Math.min(latMin,epicLat-0.5);latMax=Math.max(latMax,epicLat+0.5);}
+      if(epicLng){lngMin=Math.min(lngMin,epicLng-0.5);lngMax=Math.max(lngMax,epicLng+0.5);}
     } else if(epicLat&&epicLng){
-      latMin=epicLat-4;latMax=epicLat+4;lngMin=epicLng-4;lngMax=epicLng+4;
+      latMin=epicLat-3;latMax=epicLat+3;lngMin=epicLng-3;lngMax=epicLng+3;
     } else { latMin=30;latMax=46;lngMin=128;lngMax=146; }
     const aspect=W/H;
     const latR=latMax-latMin, lngR=lngMax-lngMin;
     if(lngR/latR>aspect){const d=(lngR/aspect-latR)/2;latMin-=d;latMax+=d;}
     else{const d=(latR*aspect-lngR)/2;lngMin-=d;lngMax+=d;}
 
-    const PAD=40;
+    const PAD=20;
     const toX=lng=>PAD+(lng-lngMin)/(lngMax-lngMin)*(W-PAD*2);
     const toY=lat=>PAD+(latMax-lat)/(latMax-latMin)*(H-PAD*2);
 
@@ -2933,10 +2938,15 @@ async function generateQuakeMapPng(quake) {
 
     const geo=await loadMunicipalityGeoJson();
     if(geo?.features){
+      // 1パス: ポリゴン塗り分け（市単位優先、なければ都道府県単位）
       for(const feat of geo.features){
-        const pn=feat.properties?.N03_001||feat.properties?.name||'';
-        ctx.fillStyle=prefMaxScale[pn]!=null?intensityColor(prefLabel[pn]):'#3a3a3a';
-        ctx.strokeStyle='#222222'; ctx.lineWidth=0.8;
+        const props=feat.properties||{};
+        const pref=props.N03_001||'', city=props.N03_004||'';
+        const cityKey=pref+city;
+        let color='#3a3a3a';
+        if(city.endsWith('市') && cityMaxScale[cityKey]!=null) color=intensityColor(cityLabel[cityKey]);
+        else if(prefMaxScale[pref]!=null) color=intensityColor(prefLabel[pref]);
+        ctx.fillStyle=color; ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=0.5;
         const drawRing=coords=>{
           if(!coords.length)return;
           ctx.beginPath(); ctx.moveTo(toX(coords[0][0]),toY(coords[0][1]));
@@ -2947,9 +2957,12 @@ async function generateQuakeMapPng(quake) {
         if(g.type==='Polygon')g.coordinates.forEach(r=>drawRing(r));
         else if(g.type==='MultiPolygon')g.coordinates.forEach(p=>p.forEach(r=>drawRing(r)));
       }
-      // 都道府県境界
-      ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1;
+      // 2パス: 都道府県境界（白）
+      ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1.2;
+      const drawnPref=new Set();
       for(const feat of geo.features){
+        const pref=feat.properties?.N03_001||'';
+        if(drawnPref.has(pref))continue; drawnPref.add(pref);
         const g=feat.geometry; if(!g)continue;
         const drawB=coords=>{
           if(!coords.length)return;
@@ -2960,11 +2973,18 @@ async function generateQuakeMapPng(quake) {
         if(g.type==='Polygon')g.coordinates.forEach(r=>drawB(r));
         else if(g.type==='MultiPolygon')g.coordinates.forEach(p=>p.forEach(r=>drawB(r)));
       }
-      // 震度数字
+      // 3パス: 震度数字（市単位）
+      const drawn=new Set();
       for(const feat of geo.features){
-        const pn=feat.properties?.N03_001||feat.properties?.name||'';
-        if(!prefMaxScale[pn])continue;
-        const label=prefLabel[pn];
+        const props=feat.properties||{};
+        const pref=props.N03_001||'', city=props.N03_004||'';
+        const cityKey=pref+city;
+        const isCity=city.endsWith('市');
+        const key=isCity?cityKey:pref;
+        if(drawn.has(key))continue;
+        const label=isCity&&cityLabel[cityKey]?cityLabel[cityKey]:prefLabel[pref];
+        if(!label)continue;
+        drawn.add(key);
         const g=feat.geometry; if(!g)continue;
         let coords=[];
         if(g.type==='Polygon')coords=g.coordinates[0]||[];
@@ -2977,18 +2997,17 @@ async function generateQuakeMapPng(quake) {
         const cy=coords.reduce((s,c)=>s+c[1],0)/coords.length;
         const px=toX(cx),py=toY(cy);
         if(px<PAD||px>W-PAD||py<PAD||py>H-PAD)continue;
-        const bw=28,bh=28;
-        ctx.fillStyle=intensityColor(label);
-        ctx.strokeStyle='#ffffff'; ctx.lineWidth=2;
-        ctx.fillRect(px-bw/2,py-bh/2,bw,bh);
-        ctx.strokeRect(px-bw/2,py-bh/2,bw,bh);
+        const bColor=isCity&&cityLabel[cityKey]?intensityColor(cityLabel[cityKey]):intensityColor(prefLabel[pref]);
+        const bw=26,bh=26;
+        ctx.fillStyle=bColor; ctx.strokeStyle='#ffffff'; ctx.lineWidth=2;
+        ctx.fillRect(px-bw/2,py-bh/2,bw,bh); ctx.strokeRect(px-bw/2,py-bh/2,bw,bh);
         ctx.fillStyle='#ffffff'; ctx.font=FONT_NUM;
         ctx.textAlign='center'; ctx.textBaseline='middle';
         ctx.fillText(label,px,py);
         ctx.textAlign='left'; ctx.textBaseline='alphabetic';
       }
     }
-    // 震源×
+    // 震源×印
     if(epicLat&&epicLng){
       const ex=toX(epicLng),ey=toY(epicLat),S=16;
       ctx.strokeStyle='#ffffff'; ctx.lineWidth=6;
@@ -2999,7 +3018,7 @@ async function generateQuakeMapPng(quake) {
       ctx.beginPath();ctx.moveTo(ex+S,ey-S);ctx.lineTo(ex-S,ey+S);ctx.stroke();
     }
     return canvas.toBuffer('image/png');
-  }catch(e){ console.error('[EEW] 地図生成エラー:',e.message); return null; }
+  }catch(e){ console.error('[EEW] 地図生成エラー:',e.message,e.stack); return null; }
 }
 
 // p2pquake WebSocket接続
