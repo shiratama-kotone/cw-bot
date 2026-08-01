@@ -2083,6 +2083,11 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('ng-check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
       // チャンネル設定コマンド
       new SlashCommandBuilder().setName('eew').setDescription('このチャンネルを地震情報チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('eew-test').setDescription('緊急地震速報のテスト表示をするよ')
+        .addNumberOption(o=>o.setName('lat').setDescription('震源の緯度（例: 35.6）').setRequired(true).setMinValue(24).setMaxValue(46))
+        .addNumberOption(o=>o.setName('lng').setDescription('震源の経度（例: 137.0）').setRequired(true).setMinValue(122).setMaxValue(150))
+        .addNumberOption(o=>o.setName('magnitude').setDescription('マグニチュード（1〜10）').setRequired(true).setMinValue(1).setMaxValue(10))
+        .addNumberOption(o=>o.setName('depth').setDescription('震源の深さ（km、デフォルト10）').setMinValue(0).setMaxValue(700)),
       new SlashCommandBuilder().setName('join-notice').setDescription('このチャンネルを入室通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('leveling').setDescription('このチャンネルをレベルアップ通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('chatwork').setDescription('このチャンネルをChatwork連携チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
@@ -2676,6 +2681,34 @@ if(DISCORD_BOT_TOKEN){
         'admin': {label:'管理者', type:'admin'},
         'log': {label:'ログ', type:'log'},
       };
+      // ── eew-test ──
+      if(cmd==='eew-test'){
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const lat = interaction.options.getNumber('lat');
+        const lng = interaction.options.getNumber('lng');
+        const mag = interaction.options.getNumber('magnitude');
+        const depth = interaction.options.getNumber('depth') ?? 10;
+        await reply(`緊急地震速報テスト地図を生成中…\nM${mag} 深さ${depth}km (${lat}, ${lng})`,{title:'⚠️ EEWテスト',color:0xFFD700});
+        const png = await generateEewTestMapPng(lat, lng, mag, depth);
+        if(png){
+          const { AttachmentBuilder:AB2 } = require('discord.js');
+          const att = new AB2(png, {name:'eew_test.png'});
+          await interaction.editReply({
+            embeds:[{
+              title:'⚠️ 緊急地震速報（テスト）',
+              description:`M**${mag}** 深さ**${depth}km** (${lat}, ${lng})\n-# これはテストです。実際の地震ではありません。`,
+              color:0xFFD700,
+              image:{url:'attachment://eew_test.png'}
+            }],
+            files:[att],
+            content:''
+          });
+        } else {
+          await replyErr('地図の生成に失敗したよ（canvasパッケージを確認してね）');
+        }
+        return;
+      }
+
       if(CH_CMD_MAP[cmd]){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
@@ -2882,6 +2915,190 @@ function scaleToLabel(scale) {
   if(scale<=10) return '1'; if(scale<=20) return '2'; if(scale<=30) return '3';
   if(scale<=40) return '4'; if(scale<=45) return '5弱'; if(scale<=50) return '5強';
   if(scale<=55) return '6弱'; if(scale<=60) return '6強'; return '7';
+}
+
+// 震源距離(km)とMから推定震度を計算（気象庁の簡易式ベース）
+function estimateIntensity(distKm, magnitude, depthKm) {
+  // 震源距離
+  const hypoDist = Math.sqrt(distKm*distKm + depthKm*depthKm);
+  if(hypoDist < 1) return '7';
+  // 気象庁マグニチュードから推定震度（簡易版）
+  // I = 2.606 + 1.313*M - 1.556*log10(hypoDist) - 0.0066*hypoDist
+  const I = 2.606 + 1.313*magnitude - 1.556*Math.log10(hypoDist) - 0.0066*hypoDist;
+  if(I >= 6.5) return '7';
+  if(I >= 6.0) return '6強';
+  if(I >= 5.5) return '6弱';
+  if(I >= 5.0) return '5強';
+  if(I >= 4.5) return '5弱';
+  if(I >= 3.5) return '4';
+  if(I >= 2.5) return '3';
+  if(I >= 1.5) return '2';
+  if(I >= 0.5) return '1';
+  return null; // 震度1未満
+}
+
+// 緯度・経度間の距離(km)計算
+function latlngDistKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2-lat1)*Math.PI/180;
+  const dLng = (lng2-lng1)*Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
+
+// EEWテスト用地図生成（同心円状の推定震度で都道府県・市を塗り分け）
+async function generateEewTestMapPng(epicLat, epicLng, magnitude, depthKm) {
+  try {
+    const { createCanvas, registerFont } = require('canvas');
+    try { registerFont(__dirname+'/HiraKakuProN-W4-AlphaNum-01.otf', {family:'HiraKaku'}); } catch{}
+    const FONT_NUM = 'bold 18px "HiraKaku", sans-serif';
+    const FONT_SM  = '13px "HiraKaku", sans-serif';
+    const W = 1200, H = 900;
+    const canvas = createCanvas(W, H);
+    const ctx = canvas.getContext('2d');
+
+    // 各都道府県・市の代表座標と推定震度を計算
+    const geo = await loadMunicipalityGeoJson();
+
+    // featureごとに重心座標を計算→距離→推定震度
+    const featureIntensity = new Map(); // feature index -> label
+    if(geo?.features){
+      geo.features.forEach((feat, idx) => {
+        const g = feat.geometry; if(!g) return;
+        let coords = [];
+        if(g.type==='Polygon') coords = g.coordinates[0]||[];
+        else if(g.type==='MultiPolygon'){
+          let mx=0;
+          for(const p of g.coordinates){ if((p[0]||[]).length>mx){mx=(p[0]||[]).length; coords=p[0]||[];} }
+        }
+        if(!coords.length) return;
+        const cx = coords.reduce((s,c)=>s+c[0],0)/coords.length;
+        const cy = coords.reduce((s,c)=>s+c[1],0)/coords.length;
+        const dist = latlngDistKm(cy, cx, epicLat, epicLng);
+        const label = estimateIntensity(dist, magnitude, depthKm);
+        featureIntensity.set(idx, label);
+      });
+    }
+
+    // 自動ズーム（震度1以上の範囲）
+    const obs = [];
+    if(geo?.features){
+      geo.features.forEach((feat, idx) => {
+        const label = featureIntensity.get(idx);
+        if(!label) return;
+        const g = feat.geometry; if(!g) return;
+        let coords = [];
+        if(g.type==='Polygon') coords = g.coordinates[0]||[];
+        else if(g.type==='MultiPolygon'){
+          let mx=0;
+          for(const p of g.coordinates){ if((p[0]||[]).length>mx){mx=(p[0]||[]).length; coords=p[0]||[];} }
+        }
+        if(!coords.length) return;
+        const cx = coords.reduce((s,c)=>s+c[0],0)/coords.length;
+        const cy = coords.reduce((s,c)=>s+c[1],0)/coords.length;
+        obs.push({lat:cy, lng:cx});
+      });
+    }
+    let latMin, latMax, lngMin, lngMax;
+    if(obs.length > 0){
+      latMin = Math.min(...obs.map(p=>p.lat))-0.8; latMax = Math.max(...obs.map(p=>p.lat))+0.8;
+      lngMin = Math.min(...obs.map(p=>p.lng))-0.8; lngMax = Math.max(...obs.map(p=>p.lng))+0.8;
+    } else {
+      latMin=epicLat-4; latMax=epicLat+4; lngMin=epicLng-4; lngMax=epicLng+4;
+    }
+    latMin=Math.min(latMin,epicLat-0.5); latMax=Math.max(latMax,epicLat+0.5);
+    lngMin=Math.min(lngMin,epicLng-0.5); lngMax=Math.max(lngMax,epicLng+0.5);
+    const aspect=W/H;
+    const latR=latMax-latMin, lngR=lngMax-lngMin;
+    if(lngR/latR>aspect){const d=(lngR/aspect-latR)/2;latMin-=d;latMax+=d;}
+    else{const d=(latR*aspect-lngR)/2;lngMin-=d;lngMax+=d;}
+    const PAD=20;
+    const toX=lng=>PAD+(lng-lngMin)/(lngMax-lngMin)*(W-PAD*2);
+    const toY=lat=>PAD+(latMax-lat)/(latMax-latMin)*(H-PAD*2);
+
+    ctx.fillStyle='#111111'; ctx.fillRect(0,0,W,H);
+
+    if(geo?.features){
+      // 1パス: ポリゴン塗り分け
+      geo.features.forEach((feat, idx) => {
+        const label = featureIntensity.get(idx);
+        ctx.fillStyle = label ? intensityColor(label) : '#3a3a3a';
+        ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=0.5;
+        const drawRing=coords=>{
+          if(!coords.length)return;
+          ctx.beginPath(); ctx.moveTo(toX(coords[0][0]),toY(coords[0][1]));
+          for(let i=1;i<coords.length;i++)ctx.lineTo(toX(coords[i][0]),toY(coords[i][1]));
+          ctx.closePath(); ctx.fill(); ctx.stroke();
+        };
+        const g=feat.geometry; if(!g)return;
+        if(g.type==='Polygon')g.coordinates.forEach(r=>drawRing(r));
+        else if(g.type==='MultiPolygon')g.coordinates.forEach(p=>p.forEach(r=>drawRing(r)));
+      });
+
+      // 2パス: 都道府県境界
+      ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1.2;
+      const drawnP=new Set();
+      for(const feat of geo.features){
+        const pref=feat.properties?.N03_001||'';
+        if(drawnP.has(pref))continue; drawnP.add(pref);
+        const g=feat.geometry; if(!g)continue;
+        const drawB=coords=>{
+          if(!coords.length)return;
+          ctx.beginPath(); ctx.moveTo(toX(coords[0][0]),toY(coords[0][1]));
+          for(let i=1;i<coords.length;i++)ctx.lineTo(toX(coords[i][0]),toY(coords[i][1]));
+          ctx.closePath(); ctx.stroke();
+        };
+        if(g.type==='Polygon')g.coordinates.forEach(r=>drawB(r));
+        else if(g.type==='MultiPolygon')g.coordinates.forEach(p=>p.forEach(r=>drawB(r)));
+      }
+
+      // 3パス: 震度数字（都道府県単位）
+      const drawnLabel=new Set();
+      geo.features.forEach((feat, idx) => {
+        const pref=feat.properties?.N03_001||'';
+        if(drawnLabel.has(pref))return;
+        const label=featureIntensity.get(idx);
+        if(!label)return;
+        drawnLabel.add(pref);
+        const g=feat.geometry; if(!g)return;
+        let coords=[];
+        if(g.type==='Polygon')coords=g.coordinates[0]||[];
+        else if(g.type==='MultiPolygon'){
+          let mx=0;
+          for(const p of g.coordinates){if((p[0]||[]).length>mx){mx=(p[0]||[]).length;coords=p[0]||[];}}
+        }
+        if(!coords.length)return;
+        const cx=coords.reduce((s,c)=>s+c[0],0)/coords.length;
+        const cy=coords.reduce((s,c)=>s+c[1],0)/coords.length;
+        const px=toX(cx),py=toY(cy);
+        if(px<PAD||px>W-PAD||py<PAD||py>H-PAD)return;
+        const bw=26,bh=26;
+        ctx.fillStyle=intensityColor(label); ctx.strokeStyle='#ffffff'; ctx.lineWidth=2;
+        ctx.fillRect(px-bw/2,py-bh/2,bw,bh); ctx.strokeRect(px-bw/2,py-bh/2,bw,bh);
+        ctx.fillStyle='#ffffff'; ctx.font=FONT_NUM;
+        ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(label,px,py);
+        ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+      });
+    }
+
+    // 震源×印
+    const ex=toX(epicLng), ey=toY(epicLat), S=18;
+    ctx.strokeStyle='#ffffff'; ctx.lineWidth=7;
+    ctx.beginPath();ctx.moveTo(ex-S,ey-S);ctx.lineTo(ex+S,ey+S);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(ex+S,ey-S);ctx.lineTo(ex-S,ey+S);ctx.stroke();
+    ctx.strokeStyle='#dd2222'; ctx.lineWidth=5;
+    ctx.beginPath();ctx.moveTo(ex-S,ey-S);ctx.lineTo(ex+S,ey+S);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(ex+S,ey-S);ctx.lineTo(ex-S,ey+S);ctx.stroke();
+
+    // タイトル
+    ctx.fillStyle='rgba(0,0,0,0.7)'; ctx.fillRect(0,0,W,32);
+    ctx.fillStyle='#FFD700'; ctx.font='bold 16px "HiraKaku", sans-serif';
+    ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText(`⚠️ EEWテスト  M${magnitude}  深さ${depthKm}km  (${epicLat.toFixed(2)}, ${epicLng.toFixed(2)})`, 8, 16);
+
+    return canvas.toBuffer('image/png');
+  } catch(e){ console.error('[EEW-TEST] 地図生成エラー:',e.message); return null; }
 }
 
 async function generateQuakeMapPng(quake) {
