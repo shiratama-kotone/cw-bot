@@ -2871,13 +2871,56 @@ if(DISCORD_BOT_TOKEN){
       if(!logChId||logChId===msg.channel.id) return;
       const logCh = msg.guild.channels.cache.get(logChId);
       if(!logCh) return;
-      await logCh.send({embeds:[{
-        description: msg.content||'(添付ファイル)',
-        color:0x2d2d2d,
-        author:{name:`${msg.author.tag}`,icon_url:msg.author.displayAvatarURL()},
-        footer:{text:`#${msg.channel.name} | ${msg.createdAt.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}`}
-      }]});
-    }catch{}
+
+      // テキスト本文
+      const desc = msg.content||'';
+
+      // 添付ファイル
+      const attachments = [...msg.attachments.values()];
+      const attachLines = attachments.map(a=>`📎 [${a.name}](${a.url})`);
+
+      // スタンプ（スタンプは画像として送信）
+      const stickers = [...(msg.stickers?.values()||[])];
+      const stickerLines = stickers.map(s=>`🏷️ スタンプ: **${s.name}**`);
+
+      // Embedの説明文を組み立て
+      const parts = [];
+      if(desc) parts.push(desc);
+      if(stickerLines.length) parts.push(stickerLines.join('\n'));
+      if(attachLines.length) parts.push(attachLines.join('\n'));
+      const description = parts.join('\n') || '(内容なし)';
+
+      // 画像の添付ファイルはembedのimageに表示（最初の1枚）
+      const imageAttachment = attachments.find(a=>a.contentType?.startsWith('image/'));
+      const embed = {
+        description: description.substring(0,4096),
+        color: 0x2d2d2d,
+        author: {name:`${msg.author.tag} (#${msg.channel.name})`, icon_url:msg.author.displayAvatarURL()},
+        footer: {text:`${msg.createdAt.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}`},
+      };
+      if(imageAttachment) embed.image = {url: imageAttachment.url};
+
+      // スタンプ画像をサムネイルに
+      if(stickers.length && stickers[0].format !== 3){ // LOTTIE以外
+        const stickerUrl = `https://media.discordapp.net/stickers/${stickers[0].id}.png`;
+        embed.thumbnail = {url: stickerUrl};
+      }
+
+      await logCh.send({embeds:[embed]});
+
+      // 画像以外の添付ファイルが複数ある場合は追加Embed
+      const nonImageAttachments = attachments.filter(a=>!a.contentType?.startsWith('image/'));
+      if(nonImageAttachments.length > 0){
+        // ファイルのURLリストを追加Embedで
+        await logCh.send({
+          embeds:[{
+            description: nonImageAttachments.map(a=>`📎 [${a.name}](${a.url}) (${Math.round(a.size/1024)}KB)`).join('\n'),
+            color:0x444444,
+            footer:{text:'添付ファイル'}
+          }]
+        });
+      }
+    }catch(e){ console.error('[LOG]',e.message); }
   });
   discordClient.on(Events.InteractionCreate,async(interaction)=>{if(!interaction.isStringSelectMenu()||interaction.customId!=='role_panel_select')return;try{await interaction.deferReply({ephemeral:true});const member=interaction.member,guild=interaction.guild,selected=new Set(interaction.values),allOpts=interaction.component.options.map(o=>o.value),added=[],removed=[];for(const roleId of allOpts){const role=guild.roles.cache.get(roleId);if(!role)continue;const has=member.roles.cache.has(roleId);if(selected.has(roleId)&&!has){await member.roles.add(role).catch(()=>{});added.push(role.name);}else if(!selected.has(roleId)&&has){await member.roles.remove(role).catch(()=>{});removed.push(role.name);}}const lines=[];if(added.length)lines.push(`付与：${added.join('、')}`);if(removed.length)lines.push(`解除：${removed.join('、')}`);await interaction.editReply({embeds:[{title:'ロール更新完了',description:lines.length?lines.join('\n'):'変更なし',color:0x2ecc71}]});}catch(e){console.error('[Discord]ロールパネル:',e.message);try{await interaction.editReply({embeds:[{title:'エラー',description:'ロールの更新に失敗したよ',color:0xe74c3c}]});}catch{}}});
   discordClient.on(Events.InteractionCreate,async(interaction)=>{if(!interaction.isButton()||!interaction.customId.startsWith('verify_btn:'))return;try{await interaction.deferReply({ephemeral:true});const roleId=interaction.customId.split(':')[1],member=interaction.member;if(member.roles.cache.has(roleId)){await interaction.editReply({embeds:[{description:'すでに認証済みだよ！',color:0x2ecc71}]});return;}const role=interaction.guild.roles.cache.get(roleId)||await interaction.guild.roles.fetch(roleId).catch(()=>null);if(!role){await interaction.editReply({embeds:[{description:'ロールが見つからなかったよ',color:0xe74c3c}]});return;}await member.roles.add(role);await interaction.editReply({embeds:[{description:`認証完了！**${role.name}**が付与されたよ！`,color:0x2ecc71}]});}catch(e){console.error('[Discord]認証ボタン:',e.message);try{await interaction.editReply({embeds:[{description:'認証に失敗したよ…',color:0xe74c3c}]});}catch{}}});
