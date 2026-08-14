@@ -371,20 +371,32 @@ async function updateServerStatus(guild) {
 // ============================================================
 async function checkDiscordNgWords(message) {
   if (!message.guild) return;
-  // 除外チャンネルチェック
   const excl = await dbQuery('SELECT 1 FROM discord_ng_exclude_channels WHERE guild_id=$1 AND channel_id=$2', [message.guild.id, message.channel.id]);
   if (excl.rowCount > 0) return;
 
   const ng = await dbQuery('SELECT pattern, is_regex FROM discord_ng_words WHERE guild_id=$1', [message.guild.id]);
   if (!ng.rowCount) return;
 
+  // 英語大文字小文字・ひらがなカタカナを正規化した文字列で比較
+  function normalize(str) {
+    return str
+      .toLowerCase()
+      // カタカナ→ひらがな
+      .replace(/[\u30A1-\u30F6]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+  }
+
   const content = message.content || '';
+  const normalizedContent = normalize(content);
   let matched = false;
   for (const row of ng.rows) {
     if (row.is_regex) {
-      try { if (new RegExp(row.pattern, 'i').test(content)) { matched = true; break; } } catch {}
+      // 正規表現は i フラグで大文字小文字無視、カタカナ→ひらがな変換後にも適用
+      try {
+        const re = new RegExp(normalize(row.pattern), 'i');
+        if (re.test(normalizedContent)) { matched = true; break; }
+      } catch {}
     } else {
-      if (content.includes(row.pattern)) { matched = true; break; }
+      if (normalizedContent.includes(normalize(row.pattern))) { matched = true; break; }
     }
   }
   if (!matched) return;
@@ -1061,7 +1073,12 @@ async function processWebHook(data) {
       if(ngR.rowCount>0){
         const mems=await CW.members(roomId);
         if(!CW.isAdmin(accountId,mems)){
-          const hit=ngR.rows.find(r=>messageBody.includes(r.word));
+          // 英語大文字小文字・カタカナひらがなを正規化して比較
+          const normMsg = messageBody.toLowerCase().replace(/[\u30A1-\u30F6]/g,c=>String.fromCharCode(c.charCodeAt(0)-0x60));
+          const hit=ngR.rows.find(r=>{
+            const normWord = r.word.toLowerCase().replace(/[\u30A1-\u30F6]/g,c=>String.fromCharCode(c.charCodeAt(0)-0x60));
+            return normMsg.includes(normWord);
+          });
           if(hit){
             await CW.addBlackList(roomId,accountId);
             await CW.forceReadOnly(roomId,accountId,mems);
@@ -3313,7 +3330,7 @@ function connectEewWebSocket() {
         const month = jstDate.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',month:'numeric'});
         const day   = jstDate.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',day:'numeric'});
         const hhmm  = jstDate.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',hour12:false});
-        const timeLabel = `${month}${day} ${hhmm}ごろ`;
+        const timeLabel = `${month}月${day}日 ${hhmm}ごろ`;
 
         const tsunami = eq.domesticTsunami==='None'?'ありません':
           eq.domesticTsunami==='Unknown'||eq.domesticTsunami==='Checking'?'現在調査中です':
