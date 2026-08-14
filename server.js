@@ -1486,8 +1486,8 @@ async function processWebHook(data) {
       await rp('使い方: /event add MM-DD 内容 / /event list [MM-DD] / /event del {ID}'); return;
     }
     if(messageBody==='/help'){
-      const common='[info][title]コマンド一覧だよっ！[/title]/help - このヘルプを表示\n[hr]/today - 今日の日付とイベント\n[hr]/test - あなたとこの部屋の情報\n[hr]/info - この部屋の情報\n[hr]/member - メンバー一覧\n[hr]/member-name - メンバー名一覧\n[hr]/romera - 今日のメッセージ数ランキング\n[hr]/message-total - 累計発言数ランキング\n[hr]/points - 自分のポイントを確認\n[hr]/points-all - 全員のポイントランキング\n[hr]/send {ID} {pt} - ポイントを送る\n[hr]/yes-or-no - yes/noをランダム回答\n[hr]/wiki 検索ワード - Wikipedia検索\n[hr]/lyric URL - 歌詞を取得\n[hr]/song-typing-info 曲ID - 歌詞タイピング情報\n[hr]/alarm YYYY-MM-DD HH:MM メッセージ - アラーム設定\n[hr]/scratch-user ユーザー名 - Scratchユーザー情報\n[hr]/scratch-project プロジェクトID - Scratch作品情報\n[hr]/komekasegi - 過疎対策コメ連打\n[hr]/disself - 自分の権限を下げる\n[hr]おみくじ / おみくじ10連 / /yes-or-no - 運試し[/info]';
-      const admin=isSenderAdmin?'\n[info][title]管理者専用コマンドだよっ！[/title]/info {ルームID} - 別ルームの情報を取得\n[hr]/kick {ID}... - キック\n[hr]/mute {ID}... - 閲覧のみに変更\n[hr]/blacklist - ブラックリスト確認\n[hr]/blacklist-add {ID}... - ブラックリストに追加\n[hr]/blacklist-del {ID}... - ブラックリストから削除\n[hr]/fever {時間} - フィーバータイム（例: 5m, 1h）\n[hr]/ng {言葉} - NGワード登録\n[hr]/ok {言葉} - NGワード削除\n[hr]/ng-check - NGワード一覧\n[hr]/gakusei /nyanko_a /milk /admin /yuyuyu - 地雷確率トグル\n[hr]/jirai-test - 地雷確率デバッグ\n[hr]/jirai-force - 地雷強制発動テスト[/info]':'';
+      const common='[info][title]コマンド一覧だよっ！[/title]/help - このヘルプを表示\n[hr]/today - 今日の日付とイベント\n[hr]/test - あなたとこの部屋の情報\n[hr]/info - この部屋の情報\n[hr]/member - メンバー一覧\n[hr]/member-name - メンバー名一覧\n[hr]/romera - 今日のメッセージ数ランキング\n[hr]/message-total - 累計発言数ランキング\n[hr]/points - 自分のポイントを確認\n[hr]/points-all - 全員のポイントランキング\n[hr]/send {ID} {pt} - ポイントを送る\n[hr]/yes-or-no - yes/noをランダム回答\n[hr]/wiki 検索ワード - Wikipedia検索\n[hr]/lyric URL - 歌詞を取得\n[hr]/song-typing-info 曲ID - 歌詞タイピング情報\n[hr]/alarm YYYY-MM-DD HH:MM メッセージ - アラーム設定\n[hr]/scratch-user ユーザー名 - Scratchユーザー情報\n[hr]/scratch-project プロジェクトID - Scratch作品情報\n[hr]/event add MM-DD 内容 - イベント登録\n[hr]/event list [MM-DD] - イベント一覧\n[hr]/event del {ID} - イベント削除\n[hr]/komekasegi - 過疎対策コメ連打\n[hr]/disself - 自分の権限を下げる\n[hr]/normal-omikuji - 普通のおみくじ\n[hr]おみくじ / おみくじXX連 / /yes-or-no - 運試し[/info]';
+      const admin=isSenderAdmin?'\n[info][title]管理者専用コマンドだよっ！[/title]/info {ルームID} - 別ルームの情報を取得\n[hr]/kick {ID}... - キック\n[hr]/mute {ID}... - 閲覧のみに変更\n[hr]/blacklist - ブラックリスト確認\n[hr]/blacklist-add {ID}... - ブラックリストに追加\n[hr]/blacklist-del {ID}... - ブラックリストから削除\n[hr]/fever {時間} - フィーバータイム（例: 5m, 1h）\n[hr]/ng {言葉} - NGワード登録\n[hr]/ok {言葉} - NGワード削除\n[hr]/ng-check - NGワード一覧[/info]':'';
       await rp(`${userName}ちゃん\n${common}${admin}`); return;
     }
     const responses={'はんせい':`[To:10911090] はんせい\n${userName}に呼ばれてるよっ！`,'ゆゆゆ':`[To:10911090] ゆゆゆ\n${userName}に呼ばれてるよっ！`,'古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'学生':`[To:11086798] かわいこちゃん\n${userName}に呼ばれてるよっ！`,'みおん':'はーい！','いろいろあぷり':'https://shiratama-kotone.github.io/any-app/\nどーぞ！','喘いでください湊音様':'そう簡単に喘ぐとでも思った？残念！ぼくは喘ぎません...っ♡///','おやすみ':'おやすみ！','おはよう':'おはよう！','プロセカやってくる':'がんばれ！','せっ':'くす','精':'子','114':'514','ちん':'ちんㅤ','富士山':'3776m!','TOALL':'[toall...するわけないじゃん！','botのコードください':'https://github.com/shiratama-kotone/cw-bot\nどーぞ！','1+1=':'1!','トイレいってくる':'漏らさないでねっ！','6':'9','Git':'hub'};
@@ -1911,8 +1911,20 @@ async function checkNhkNews(){
     const rid=rm[1]; const lt=lm[1].replace(/<!\[CDATA\[|\]\]>/g,'').trim();
     if(rid===mem.lastNhkNewsId) return; mem.lastNhkNewsId=rid;
     const lnk=(xml.match(/link="([^"]+)"/))?.[1]||'';
-    const msg=`[info][title]NHK速報[/title]${lt}${lnk?'\n'+lnk:''}[/info]`;
-    for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){ await CW.send(r,msg).catch(()=>{}); await new Promise(r=>setTimeout(r,300)); }
+    // CWに送信
+    const cwMsg=`[info][title]NHK速報[/title]${lt}${lnk?'\n'+lnk:''}[/info]`;
+    for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){ await CW.send(r,cwMsg).catch(()=>{}); await new Promise(r=>setTimeout(r,300)); }
+    // Discordに送信（nhkチャンネルが設定されているサーバー）
+    if(discordClient){
+      try{
+        const rows=(await dbQuery("SELECT guild_id,channel_id FROM guild_channels WHERE channel_type='nhk'")).rows;
+        const embed={title:'NHK速報',description:`${lt}${lnk?`\n[リンク](${lnk})`:''}`,color:0xe74c3c,footer:{text:'NHK NEWS WEB'},timestamp:new Date().toISOString()};
+        for(const row of rows){
+          const ch=await discordClient.channels.fetch(row.channel_id).catch(()=>null);
+          if(ch) await ch.send({embeds:[embed]}).catch(()=>{});
+        }
+      }catch{}
+    }
   } catch{}
 }
 const WN={暴風警報:'',大雨警報:'',洪水警報:'',大雪警報:'',暴風雪警報:'',波浪警報:'',高潮警報:'',暴風注意報:'',大雨注意報:'',洪水注意報:'',大雪注意報:'',雷注意報:'',濃霧注意報:'',乾燥注意報:'',強風注意報:'',波浪注意報:'',高潮注意報:'',霜注意報:'',低温注意報:''};
@@ -2100,6 +2112,7 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('ng-check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
       // チャンネル設定コマンド
       new SlashCommandBuilder().setName('eew').setDescription('このチャンネルを地震情報チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('nhk').setDescription('このチャンネルをNHK速報チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('eew-test').setDescription('緊急地震速報のテスト表示をするよ')
         .addNumberOption(o=>o.setName('lat').setDescription('震源の緯度（例: 35.6）').setRequired(true).setMinValue(24).setMaxValue(46))
         .addNumberOption(o=>o.setName('lng').setDescription('震源の経度（例: 137.0）').setRequired(true).setMinValue(122).setMaxValue(150))
@@ -2195,37 +2208,60 @@ if(DISCORD_BOT_TOKEN){
       // ── /help ──
       if(cmd==='help'){
         const lines=[
-          '**コマンド一覧**',
-          '`/normal_omikuji` - 普通のおみくじ（均等な確率）',
-          '`/normal_omikuji_n [count]` - 普通のおみくじN連（均等な確率）',
-          '`/omikuji_n [count]` - おみくじN連（大凶99%版）',
-          '※ 「おみくじ」「おみくじXX連」「おやすみ」「おはよう」はメッセージ送信で反応するよ',
-          '`/yes_or_no` - yes/noをランダム回答',
+          '**一般コマンド**',
+          '`/normal-omikuji` - 普通のおみくじ',
+          '`/normal-omikuji-n [count]` - 普通のおみくじN連',
+          '`/omikuji-n [count]` - おみくじN連（大凶99%版）',
+          '`/yes-or-no` - yes/noをランダム回答',
           '`/wiki [word]` - Wikipedia検索',
           '`/today` - 今日の日付とイベント',
-          '`/lyric [url]` - 歌詞取得（utaten/uta-net/atwiki）',
-          '`/scratch_user [username]` - Scratchユーザー情報',
-          '`/scratch_project [id]` - Scratchプロジェクト情報',
-          '`/song_typing_info [id]` - 歌詞タイピング情報',
+          '`/lyric [url]` - 歌詞取得',
+          '`/scratch-user [username]` - Scratchユーザー情報',
+          '`/scratch-project [id]` - Scratchプロジェクト情報',
+          '`/song-typing-info [id]` - 歌詞タイピング情報',
           '`/romera` - 今日のメッセージ数ランキング（CW）',
-          '`/message_total` - 累計発言数ランキング（CW）',
-          '`/alarm [datetime] [message]` - このチャンネルにアラーム設定',
+          '`/message-total` - 累計発言数ランキング（CW）',
+          '`/alarm [datetime] [message]` - アラーム設定',
           '`/miaq [message_id]` - Make it a Quote',
-          '`/room_info [room_id]` - CWルーム情報表示',
+          '`/room-info [room_id]` - CWルーム情報',
+          '`/event add/list/delete` - イベント管理',
+          '',
+          '**読み上げ（VC）**',
+          '`/join` - VCに参加して読み上げ開始',
+          '`/leave` - VCから退出',
+          '`/speaker` - 話者変更',
+          '`/speaker-list` - 話者一覧',
+          '`/pitch / /speed / /intonation` - 音声設定',
+          '`/dictionary-add / /dictionary-list / /dictionary-remove` - 読み上げ辞書',
+          '',
+          '**経済（指定サーバーのみ）**',
+          '`/rank` - レベル・XP確認',
+          '`/work` - 仕事をする',
+          '`/job / /job-set / /job-info` - 職業確認・変更',
+          '`/money / /money-send` - 所持金確認・送金',
+          '`/bank / /bank-deposit / /bank-withdraw` - 銀行',
           '',
           '**管理者専用**',
-          '`/clear [count]` - メッセージを指定数削除（最大100）',
-          '`/prohibit [duration]` - このチャンネルで発言禁止（例: 5m, 1h）',
-          '`/release` - このチャンネルの発言禁止を解除',
-          '`/ban [cw_id]` - CWブラックリスト追加 + 閲覧のみ',
-          '`/unban [cw_id]` - CWブラックリストから削除',
-          '`/blacklist` - CWブラックリスト確認',
-          '`/kick [cw_id]` - CWルームからキック',
-          '`/mute [cw_id]` - CWルームで閲覧のみ',
-          '`/fever [duration]` - CWフィーバータイム（例: 5m, 1h）',
-          '`/ng_add [word]` - CW NGワード登録',
-          '`/ng_del [word]` - CW NGワード削除',
-          '`/ng_check` - CW NGワード一覧',
+          '`/clear [count]` - メッセージを指定数削除',
+          '`/prohibit [duration]` - 発言禁止（例: 5m, 1h）',
+          '`/release` - 発言禁止解除',
+          '`/ban [user] [reason]` - BANする',
+          '`/unban [user_id]` - BAN解除',
+          '`/blacklist` - BANリスト確認',
+          '`/kick [user] [reason]` - キック',
+          '`/mute [user] [minutes]` - タイムアウト',
+          '`/fever [duration]` - CWフィーバータイム',
+          '`/ng-add / /ng-del / /ng-check` - CW NGワード管理',
+          '`/discord-ng-add / /discord-ng-list / /discord-ng-remove` - Discord NGワード管理',
+          '`/discord-ng-exclude` - NGワード除外チャンネル設定',
+          '`/discord-warning-reset [user]` - 警告リセット',
+          '`/role-panel` - ロールパネル作成',
+          '`/verify` - 認証パネル作成',
+          '`/server-status` - サーバー概要チャンネル作成',
+          '`/eew` - 地震情報チャンネル設定',
+          '`/eew-test` - EEWテスト地図生成',
+          '`/eew / /nhk / /join-notice / /leveling / /chatwork / /bbs / /admin / /log` - チャンネル設定',
+          '`/event add/list/delete` - イベント管理',
         ];
         await reply(lines.join('\n'), {title:'コマンド一覧'}); return;
       }
@@ -2691,6 +2727,7 @@ if(DISCORD_BOT_TOKEN){
       // ── チャンネル設定コマンド ──
       const CH_CMD_MAP = {
         'eew': {label:'地震情報', type:'eew'},
+        'nhk': {label:'NHK速報', type:'nhk'},
         'join-notice': {label:'入室通知', type:'join_notice'},
         'leveling': {label:'レベルアップ通知', type:'leveling'},
         'chatwork': {label:'Chatwork連携', type:'chatwork'},
