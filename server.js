@@ -1903,6 +1903,70 @@ async function checkAlarms(){
     await dbQuery('DELETE FROM alarms WHERE id=$1',[a.id]);
   }
 }
+// 既送済みJMA情報IDセット（再起動でリセットされるが重複送信は短期間のみ）
+const jmaSentIds = new Set();
+
+async function checkJmaFeed(){
+  try{
+    const res = await axios.get('https://www.data.jma.go.jp/developer/xml/feed/extra.xml',{
+      timeout:10000, headers:{'User-Agent':'ChatworkBot/1.0'}
+    });
+    const xml = res.data;
+
+    // entryを全部抽出
+    const entries = [];
+    const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+    let m;
+    while((m = entryRe.exec(xml)) !== null){
+      const block = m[1];
+      const title   = (block.match(/<title>([^<]*)<\/title>/))?.[1]||'';
+      const id      = (block.match(/<id>([^<]*)<\/id>/))?.[1]||'';
+      const author  = (block.match(/<name>([^<]*)<\/name>/))?.[1]||'';
+      const content = (block.match(/<content[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/content>/))?.[1]?.trim()||'';
+
+      // R06のエントリのみ対象
+      if(!title.includes('Ｒ０６') && !title.includes('R06')) continue;
+      if(!id || jmaSentIds.has(id)) continue;
+
+      entries.push({title, id, author, content});
+    }
+
+    if(!entries.length) return;
+
+    for(const entry of entries){
+      jmaSentIds.add(entry.id);
+      // 古くなったIDを削除（1000件超えたら古い順に削除）
+      if(jmaSentIds.size > 1000){
+        const first = jmaSentIds.values().next().value;
+        jmaSentIds.delete(first);
+      }
+
+      // CWに送信
+      const cwMsg = `[info][title]${entry.author}[/title]${entry.content}[/info]`;
+      for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){
+        await CW.send(r, cwMsg).catch(()=>{});
+        await new Promise(r=>setTimeout(r,300));
+      }
+
+      // Discordに送信（nhkチャンネル）
+      if(discordClient){
+        const rows = (await dbQuery("SELECT guild_id,channel_id FROM guild_channels WHERE channel_type='nhk'")).rows;
+        const embed = {
+          title: entry.author,
+          description: entry.content,
+          color: 0x0066cc,
+          footer: {text:'気象庁 防災気象情報'},
+          timestamp: new Date().toISOString(),
+        };
+        for(const row of rows){
+          const ch = await discordClient.channels.fetch(row.channel_id).catch(()=>null);
+          if(ch) await ch.send({embeds:[embed]}).catch(()=>{});
+        }
+      }
+    }
+  }catch(e){ console.error('[JMA] フィード取得エラー:', e.message); }
+}
+
 async function checkNhkNews(){
   try{
     const r=await axios.get('https://api.web.nhk/sokuho/news/sokuho_news.xml',{timeout:8000,headers:{'User-Agent':'ChatworkBot/1.0'}});
@@ -1971,7 +2035,7 @@ cron.schedule('* * * * *', async()=>{
   }catch(e){console.error('[ServerStatus] cronエラー:',e.message);}
 });
 
-cron.schedule('*/1 * * * *',  async()=>{ await checkEQ(); await checkAlarms(); await checkNhkNews(); await checkWarnings(); },{timezone:'Asia/Tokyo'});
+cron.schedule('*/1 * * * *',  async()=>{ await checkEQ(); await checkAlarms(); await checkNhkNews(); await checkWarnings(); await checkJmaFeed(); },{timezone:'Asia/Tokyo'});
 cron.schedule('45 14 11 3 *', async()=>await send311(true),  {timezone:'Asia/Tokyo'});
 cron.schedule('46 14 11 3 *', async()=>await send311(false), {timezone:'Asia/Tokyo'});
 
