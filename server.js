@@ -1905,6 +1905,7 @@ async function checkAlarms(){
 }
 // 既送済みJMA情報IDセット（再起動でリセットされるが重複送信は短期間のみ）
 const jmaSentIds = new Set();
+const jmaStartTime = new Date(); // 起動時刻（これより前のエントリは初回スキップ）
 
 async function checkJmaFeed(){
   try{
@@ -1923,10 +1924,20 @@ async function checkJmaFeed(){
       const id      = (block.match(/<id>([^<]*)<\/id>/))?.[1]||'';
       const author  = (block.match(/<name>([^<]*)<\/name>/))?.[1]||'';
       const content = (block.match(/<content[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/content>/))?.[1]?.trim()||'';
+      const updated = (block.match(/<updated>([^<]*)<\/updated>/))?.[1]||'';
 
       // R06のエントリのみ対象
       if(!title.includes('Ｒ０６') && !title.includes('R06')) continue;
       if(!id || jmaSentIds.has(id)) continue;
+
+      // 起動前のエントリはIDをセットに追加するだけでスキップ（大量送信防止）
+      if(updated){
+        const entryTime = new Date(updated); // ISO8601形式（+09:00付き）なのでそのままパース可能
+        if(entryTime < jmaStartTime){
+          jmaSentIds.add(id);
+          continue;
+        }
+      }
 
       entries.push({title, id, author, content});
     }
