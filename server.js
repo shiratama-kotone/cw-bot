@@ -3200,7 +3200,7 @@ async function generateEewTestMapPng(epicLat, epicLng, magnitude, depthKm) {
       ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1.2;
       const drawnP=new Set();
       for(const feat of geo.features){
-        const pref=feat.properties?.N03_001||'';
+        const pref=feat.properties?.nam_ja||feat.properties?.N03_001||'';
         if(drawnP.has(pref))continue; drawnP.add(pref);
         const g=feat.geometry; if(!g)continue;
         const drawB=coords=>{
@@ -3216,7 +3216,7 @@ async function generateEewTestMapPng(epicLat, epicLng, magnitude, depthKm) {
       // 3パス: 震度数字（都道府県単位）
       const drawnLabel=new Set();
       geo.features.forEach((feat, idx) => {
-        const pref=feat.properties?.N03_001||'';
+        const pref=feat.properties?.nam_ja||feat.properties?.N03_001||'';
         if(drawnLabel.has(pref))return;
         const label=featureIntensity.get(idx);
         if(!label)return;
@@ -3276,10 +3276,12 @@ async function generateQuakeMapPng(quake) {
     const cityMaxScale = {}, prefMaxScale = {};
     for(const p of points){
       if(!p.isObserved || p.scale==null) continue;
-      const addr = p.addr||'';
-      const pref = p.pref || addr.match(/^.{2,4}?[都道府県]/)?.[0];
+      // p.prefが都道府県名（例: "沖縄県"）、p.addrが市区町村+地名（例: "宮古島市城辺福北"）
+      const pref = p.pref || '';
       if(pref){ if(prefMaxScale[pref]==null||p.scale>prefMaxScale[pref]) prefMaxScale[pref]=p.scale; }
-      const cityMatch = addr.match(/([^\s]+市)/);
+      // 市名抽出：addrの先頭から「市」で終わる部分を取得
+      const addr = p.addr||'';
+      const cityMatch = addr.match(/^([^\s]+?市)/);
       if(cityMatch && pref){
         const k = pref+cityMatch[1];
         if(cityMaxScale[k]==null||p.scale>cityMaxScale[k]) cityMaxScale[k]=p.scale;
@@ -3319,7 +3321,7 @@ async function generateQuakeMapPng(quake) {
       // 1パス: ポリゴン塗り分け（市単位優先、なければ都道府県単位）
       for(const feat of geo.features){
         const props=feat.properties||{};
-        const pref=props.N03_001||'', city=props.N03_004||'';
+        const pref=props.nam_ja||props.N03_001||''; const city='';
         const cityKey=pref+city;
         let color='#3a3a3a';
         if(city.endsWith('市') && cityMaxScale[cityKey]!=null) color=intensityColor(cityLabel[cityKey]);
@@ -3339,7 +3341,7 @@ async function generateQuakeMapPng(quake) {
       ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1.2;
       const drawnPref=new Set();
       for(const feat of geo.features){
-        const pref=feat.properties?.N03_001||'';
+        const pref=feat.properties?.nam_ja||feat.properties?.N03_001||'';
         if(drawnPref.has(pref))continue; drawnPref.add(pref);
         const g=feat.geometry; if(!g)continue;
         const drawB=coords=>{
@@ -3355,7 +3357,7 @@ async function generateQuakeMapPng(quake) {
       const drawn=new Set();
       for(const feat of geo.features){
         const props=feat.properties||{};
-        const pref=props.N03_001||'', city=props.N03_004||'';
+        const pref=props.nam_ja||props.N03_001||''; const city='';
         const cityKey=pref+city;
         const isCity=city.endsWith('市');
         const key=isCity?cityKey:pref;
