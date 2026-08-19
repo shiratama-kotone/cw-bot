@@ -1386,15 +1386,31 @@ async function processWebHook(data) {
     }
     if(messageBody.startsWith('/ng ')){
       if(!await adminOnly()) return;
-      const w=messageBody.substring(4).trim(); if(!w) return;
-      await dbQuery('INSERT INTO ng_words (room_id,word) VALUES ($1,$2) ON CONFLICT DO NOTHING',[roomId,w]);
-      await rp(`「${w}」をNGワードに登録したよ！`); return;
+      const raw=messageBody.substring(4).trim(); if(!raw) return;
+      const words=raw.split(/[\s,，、]+/).map(w=>w.trim()).filter(Boolean);
+      let added=[], skipped=[];
+      for(const w of words){
+        const r=await dbQuery('INSERT INTO ng_words (room_id,word) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING word',[roomId,w]);
+        r.rowCount>0 ? added.push(w) : skipped.push(w);
+      }
+      const msg=[];
+      if(added.length) msg.push(`「${added.join('」「')}」をNGワードに登録したよ！`);
+      if(skipped.length) msg.push(`「${skipped.join('」「')}」は既に登録済みだよ`);
+      await rp(msg.join('\n')); return;
     }
     if(messageBody.startsWith('/ok ')){
       if(!await adminOnly()) return;
-      const w=messageBody.substring(4).trim(); if(!w) return;
-      await dbQuery('DELETE FROM ng_words WHERE room_id=$1 AND word=$2',[roomId,w]);
-      await rp(`「${w}」をNGワードから削除したよ！`); return;
+      const raw=messageBody.substring(4).trim(); if(!raw) return;
+      const words=raw.split(/[\s,，、]+/).map(w=>w.trim()).filter(Boolean);
+      let deleted=[], notFound=[];
+      for(const w of words){
+        const r=await dbQuery('DELETE FROM ng_words WHERE room_id=$1 AND word=$2 RETURNING word',[roomId,w]);
+        r.rowCount>0 ? deleted.push(w) : notFound.push(w);
+      }
+      const msg=[];
+      if(deleted.length) msg.push(`「${deleted.join('」「')}」をNGワードから削除したよ！`);
+      if(notFound.length) msg.push(`「${notFound.join('」「')}」は登録されていなかったよ`);
+      await rp(msg.join('\n')); return;
     }
     if(messageBody==='/ng-check'){
       if(!await adminOnly()) return;
@@ -1487,7 +1503,7 @@ async function processWebHook(data) {
     }
     if(messageBody==='/help'){
       const common='[info][title]コマンド一覧だよっ！[/title]/help - このヘルプを表示\n[hr]/today - 今日の日付とイベント\n[hr]/test - あなたとこの部屋の情報\n[hr]/info - この部屋の情報\n[hr]/member - メンバー一覧\n[hr]/member-name - メンバー名一覧\n[hr]/romera - 今日のメッセージ数ランキング\n[hr]/message-total - 累計発言数ランキング\n[hr]/points - 自分のポイントを確認\n[hr]/points-all - 全員のポイントランキング\n[hr]/send {ID} {pt} - ポイントを送る\n[hr]/yes-or-no - yes/noをランダム回答\n[hr]/wiki 検索ワード - Wikipedia検索\n[hr]/lyric URL - 歌詞を取得\n[hr]/song-typing-info 曲ID - 歌詞タイピング情報\n[hr]/alarm YYYY-MM-DD HH:MM メッセージ - アラーム設定\n[hr]/scratch-user ユーザー名 - Scratchユーザー情報\n[hr]/scratch-project プロジェクトID - Scratch作品情報\n[hr]/event add MM-DD 内容 - イベント登録\n[hr]/event list [MM-DD] - イベント一覧\n[hr]/event del {ID} - イベント削除\n[hr]/komekasegi - 過疎対策コメ連打\n[hr]/disself - 自分の権限を下げる\n[hr]/normal-omikuji - 普通のおみくじ\n[hr]おみくじ / おみくじXX連 / /yes-or-no - 運試し[/info]';
-      const admin=isSenderAdmin?'\n[info][title]管理者専用コマンドだよっ！[/title]/info {ルームID} - 別ルームの情報を取得\n[hr]/kick {ID}... - キック\n[hr]/mute {ID}... - 閲覧のみに変更\n[hr]/blacklist - ブラックリスト確認\n[hr]/blacklist-add {ID}... - ブラックリストに追加\n[hr]/blacklist-del {ID}... - ブラックリストから削除\n[hr]/fever {時間} - フィーバータイム（例: 5m, 1h）\n[hr]/ng {言葉} - NGワード登録\n[hr]/ok {言葉} - NGワード削除\n[hr]/ng-check - NGワード一覧[/info]':'';
+      const admin=isSenderAdmin?'\n[info][title]管理者専用コマンドだよっ！[/title]/info {ルームID} - 別ルームの情報を取得\n[hr]/kick {ID}... - キック\n[hr]/mute {ID}... - 閲覧のみに変更\n[hr]/blacklist - ブラックリスト確認\n[hr]/blacklist-add {ID}... - ブラックリストに追加\n[hr]/blacklist-del {ID}... - ブラックリストから削除\n[hr]/fever {時間} - フィーバータイム（例: 5m, 1h）\n[hr]/ng {言葉1} {言葉2}... - NGワード登録（スペース・カンマ区切りで複数可）\n[hr]/ok {言葉1} {言葉2}... - NGワード削除（スペース・カンマ区切りで複数可）\n[hr]/ng-check - NGワード一覧[/info]':'';
       await rp(`${userName}ちゃん\n${common}${admin}`); return;
     }
     const responses={'はんせい':`[To:10911090] はんせい\n${userName}に呼ばれてるよっ！`,'ゆゆゆ':`[To:10911090] ゆゆゆ\n${userName}に呼ばれてるよっ！`,'古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'学生':`[To:11086798] かわいこちゃん\n${userName}に呼ばれてるよっ！`,'みおん':'はーい！','いろいろあぷり':'https://shiratama-kotone.github.io/any-app/\nどーぞ！','喘いでください湊音様':'そう簡単に喘ぐとでも思った？残念！ぼくは喘ぎません...っ♡///','おやすみ':'おやすみ！','おはよう':'おはよう！','プロセカやってくる':'がんばれ！','せっ':'くす','精':'子','114':'514','ちん':'ちんㅤ','富士山':'3776m!','TOALL':'[toall...するわけないじゃん！','botのコードください':'https://github.com/shiratama-kotone/cw-bot\nどーぞ！','1+1=':'1!','トイレいってくる':'漏らさないでねっ！','6':'9','Git':'hub'};
@@ -1915,7 +1931,7 @@ async function checkJmaFeed(){
     const xml = res.data;
 
     // entryを全部抽出
-    const entries = [];
+    const newEntries = [];
     const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
     let m;
     while((m = entryRe.exec(xml)) !== null){
@@ -1926,50 +1942,62 @@ async function checkJmaFeed(){
       const content = (block.match(/<content[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/content>/))?.[1]?.trim()||'';
       const updated = (block.match(/<updated>([^<]*)<\/updated>/))?.[1]||'';
 
-      // R06のエントリのみ対象
       if(!title.includes('Ｒ０６') && !title.includes('R06')) continue;
       if(!id || jmaSentIds.has(id)) continue;
 
-      // 起動前のエントリはIDをセットに追加するだけでスキップ（大量送信防止）
       if(updated){
-        const entryTime = new Date(updated); // ISO8601形式（+09:00付き）なのでそのままパース可能
-        if(entryTime < jmaStartTime){
-          jmaSentIds.add(id);
-          continue;
-        }
+        const entryTime = new Date(updated);
+        if(entryTime < jmaStartTime){ jmaSentIds.add(id); continue; }
       }
 
-      entries.push({title, id, author, content});
+      // 分単位キー
+      const minuteKey = updated ? updated.substring(0, 16) : 'unknown';
+      newEntries.push({id, author, content, minuteKey});
     }
 
-    if(!entries.length) return;
+    if(!newEntries.length) return;
 
-    for(const entry of entries){
-      jmaSentIds.add(entry.id);
-      // 古くなったIDを削除（1000件超えたら古い順に削除）
-      if(jmaSentIds.size > 1000){
-        const first = jmaSentIds.values().next().value;
-        jmaSentIds.delete(first);
-      }
+    // IDをセットに追加
+    for(const e of newEntries){
+      jmaSentIds.add(e.id);
+      if(jmaSentIds.size > 1000) jmaSentIds.delete(jmaSentIds.values().next().value);
+    }
+
+    // 同分内の全エントリを1つにまとめる
+    // キー: minuteKey → {authors(重複なし), contents(重複なし)}
+    const groups = new Map();
+    for(const e of newEntries){
+      if(!groups.has(e.minuteKey)) groups.set(e.minuteKey, {authors:[], contents:[]});
+      const g = groups.get(e.minuteKey);
+      if(!g.authors.includes(e.author)) g.authors.push(e.author);
+      if(!g.contents.includes(e.content)) g.contents.push(e.content);
+    }
+
+    const nhkRows = discordClient
+      ? (await dbQuery("SELECT guild_id,channel_id FROM guild_channels WHERE channel_type='nhk'")).rows
+      : [];
+
+    for(const [, g] of groups){
+      const titleStr = g.authors.join('・');
+      const body = g.contents.join('\n');
 
       // CWに送信
-      const cwMsg = `[info][title]${entry.author}[/title]${entry.content}[/info]`;
+      const cwMsg = `[info][title]${titleStr}[/title]${body}[/info]`;
       for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){
         await CW.send(r, cwMsg).catch(()=>{});
         await new Promise(r=>setTimeout(r,300));
       }
 
-      // Discordに送信（nhkチャンネル）
-      if(discordClient){
-        const rows = (await dbQuery("SELECT guild_id,channel_id FROM guild_channels WHERE channel_type='nhk'")).rows;
+      // Discordに送信
+      if(discordClient && nhkRows.length){
         const embed = {
-          title: entry.author,
-          description: entry.content,
+          title: titleStr,
+          description: body,
           color: 0x0066cc,
           footer: {text:'気象庁 防災気象情報'},
           timestamp: new Date().toISOString(),
         };
-        for(const row of rows){
+        for(const row of nhkRows){
           const ch = await discordClient.channels.fetch(row.channel_id).catch(()=>null);
           if(ch) await ch.send({embeds:[embed]}).catch(()=>{});
         }
@@ -2167,11 +2195,8 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('scratch-user').setDescription('Scratchユーザー情報を表示するよ').addStringOption(o=>o.setName('username').setDescription('ユーザー名').setRequired(true)),
       new SlashCommandBuilder().setName('scratch-project').setDescription('Scratchプロジェクト情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('プロジェクトID').setRequired(true)),
       new SlashCommandBuilder().setName('song-typing-info').setDescription('歌詞タイピング情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('曲ID').setRequired(true)),
-      new SlashCommandBuilder().setName('romera').setDescription('今日のメッセージ数ランキングを表示するよ（CWルーム415060980対象）'),
-      new SlashCommandBuilder().setName('message-total').setDescription('累計発言数ランキングを表示するよ（CWルーム415060980対象）'),
       new SlashCommandBuilder().setName('alarm').setDescription('このチャンネルにアラームを設定するよ').addStringOption(o=>o.setName('datetime').setDescription('日時（YYYY-MM-DD HH:MM）').setRequired(true)).addStringOption(o=>o.setName('message').setDescription('メッセージ').setRequired(true)),
       new SlashCommandBuilder().setName('miaq').setDescription('メッセージをMake it a Quoteにするよ').addStringOption(o=>o.setName('message-id').setDescription('対象のメッセージID').setRequired(true)),
-      new SlashCommandBuilder().setName('room-info').setDescription('CWルームの情報を表示するよ（要INFO_API_TOKEN）').addStringOption(o=>o.setName('room-id').setDescription('CWルームID').setRequired(true)),
       // ━━ 管理者専用コマンド ━━
       new SlashCommandBuilder().setName('clear').setDescription('メッセージを指定数削除するよ').addIntegerOption(o=>o.setName('count').setDescription('削除数（1〜100）').setRequired(true).setMinValue(1).setMaxValue(100)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('prohibit').setDescription('このチャンネルで発言禁止にするよ').addStringOption(o=>o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
@@ -2181,10 +2206,6 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('blacklist').setDescription('CWブラックリストを確認するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('kick').setDescription('Discordサーバーからキックするよ').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('理由（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('mute').setDescription('DiscordユーザーをタイムアウトするよDefault30分').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)).addIntegerOption(o=>o.setName('minutes').setDescription('タイムアウト時間（分、デフォルト30）').setMinValue(1).setMaxValue(40320)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('fever').setDescription('CWルームのフィーバータイムを開始するよ').addStringOption(o=>o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng-add').setDescription('CWルームにNGワードを登録するよ').addStringOption(o=>o.setName('word').setDescription('NGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng-del').setDescription('CWルームのNGワードを削除するよ').addStringOption(o=>o.setName('word').setDescription('削除するNGワード').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng-check').setDescription('CWルームのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
       // チャンネル設定コマンド
       new SlashCommandBuilder().setName('eew').setDescription('このチャンネルを地震情報チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('nhk').setDescription('このチャンネルをNHK速報チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
@@ -2200,16 +2221,16 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('admin').setDescription('このチャンネルを管理者チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('log').setDescription('このチャンネルでログを受け取るように設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       // Discord NGワード（サーバーごと）
-      new SlashCommandBuilder().setName('discord-ng-add').setDescription('DiscordのNGワードを追加するよ')
+      new SlashCommandBuilder().setName('ng-add').setDescription('DiscordのNGワードを追加するよ')
         .addStringOption(o=>o.setName('pattern').setDescription('NG文字列または正規表現').setRequired(true))
         .addBooleanOption(o=>o.setName('is-regex').setDescription('正規表現として扱う（デフォルト:false）'))
         .setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord-ng-list').setDescription('DiscordのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord-ng-remove').setDescription('DiscordのNGワードを削除するよ')
+      new SlashCommandBuilder().setName('ng-list').setDescription('DiscordのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('ng-remove').setDescription('DiscordのNGワードを削除するよ')
         .addIntegerOption(o=>o.setName('id').setDescription('NGワードのID（一覧で確認）').setRequired(true))
         .setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord-ng-exclude').setDescription('NGワードチェックをこのチャンネルで除外・解除するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('discord-warning-reset').setDescription('ユーザーの警告回数をリセットするよ')
+      new SlashCommandBuilder().setName('ng-exclude').setDescription('NGワードチェックをこのチャンネルで除外・解除するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('warning-reset').setDescription('ユーザーの警告回数をリセットするよ')
         .addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true))
         .setDefaultMemberPermissions(ADMIN_PERM),
       // サーバーステータス
@@ -2257,6 +2278,26 @@ if(DISCORD_BOT_TOKEN){
     const isAdmin=interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)||false;
     const CW_ROOM=CW_ROOM_ID_FOR_DISCORD;
 
+    // コマンド使用をlogチャンネルに記録
+    if(interaction.guild){
+      (async()=>{
+        try{
+          const logChId = await getGuildChannel(interaction.guild.id,'log');
+          if(!logChId||logChId===interaction.channelId) return;
+          const logCh = interaction.guild.channels.cache.get(logChId);
+          if(!logCh) return;
+          // オプションを文字列化
+          const opts = interaction.options?.data?.map(o=>`${o.name}:${o.value??o.options?.map(s=>`${s.name}:${s.value}`).join(' ')??''}`).join(' ')||'';
+          await logCh.send({embeds:[{
+            description:`\`/${cmd}${opts?' '+opts:''}\``,
+            color:0x444466,
+            author:{name:`${interaction.user.tag} (#${interaction.channel?.name||'DM'})`,icon_url:interaction.user.displayAvatarURL()},
+            footer:{text:new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}
+          }]});
+        }catch{}
+      })();
+    }
+
     // embed返信ヘルパー
     const reply = (desc, opts={}) => interaction.editReply({
       embeds:[{
@@ -2294,27 +2335,22 @@ if(DISCORD_BOT_TOKEN){
           '`/scratch-user [username]` - Scratchユーザー情報',
           '`/scratch-project [id]` - Scratchプロジェクト情報',
           '`/song-typing-info [id]` - 歌詞タイピング情報',
-          '`/romera` - 今日のメッセージ数ランキング（CW）',
-          '`/message-total` - 累計発言数ランキング（CW）',
           '`/alarm [datetime] [message]` - アラーム設定',
-          '`/miaq [message_id]` - Make it a Quote',
-          '`/room-info [room_id]` - CWルーム情報',
           '`/event add/list/delete` - イベント管理',
           '',
           '**読み上げ（VC）**',
-          '`/join` - VCに参加して読み上げ開始',
-          '`/leave` - VCから退出',
-          '`/speaker` - 話者変更',
+          '`/join` / `/leave` - VCに参加・退出',
+          '`/speaker [id]` - 話者変更',
           '`/speaker-list` - 話者一覧',
-          '`/pitch / /speed / /intonation` - 音声設定',
-          '`/dictionary-add / /dictionary-list / /dictionary-remove` - 読み上げ辞書',
+          '`/pitch` / `/speed` / `/intonation` - 音声設定',
+          '`/dictionary-add` / `/dictionary-list` / `/dictionary-remove` - 読み上げ辞書',
           '',
           '**経済（指定サーバーのみ）**',
           '`/rank` - レベル・XP確認',
           '`/work` - 仕事をする',
-          '`/job / /job-set / /job-info` - 職業確認・変更',
-          '`/money / /money-send` - 所持金確認・送金',
-          '`/bank / /bank-deposit / /bank-withdraw` - 銀行',
+          '`/job` / `/job-set` / `/job-info` - 職業確認・変更',
+          '`/money` / `/money-send` - 所持金確認・送金',
+          '`/bank` / `/bank-deposit` / `/bank-withdraw` - 銀行',
           '',
           '**管理者専用**',
           '`/clear [count]` - メッセージを指定数削除',
@@ -2325,18 +2361,17 @@ if(DISCORD_BOT_TOKEN){
           '`/blacklist` - BANリスト確認',
           '`/kick [user] [reason]` - キック',
           '`/mute [user] [minutes]` - タイムアウト',
-          '`/fever [duration]` - CWフィーバータイム',
-          '`/ng-add / /ng-del / /ng-check` - CW NGワード管理',
-          '`/discord-ng-add / /discord-ng-list / /discord-ng-remove` - Discord NGワード管理',
-          '`/discord-ng-exclude` - NGワード除外チャンネル設定',
-          '`/discord-warning-reset [user]` - 警告リセット',
           '`/role-panel` - ロールパネル作成',
           '`/verify` - 認証パネル作成',
-          '`/server-status` - サーバー概要チャンネル作成',
+          '`/ng-add [pattern]` - NGワード登録（スペース・カンマ区切りで複数可、正規表現モード時は1件）',
+          '`/ng-list` / `/ng-remove [id]` - NGワード一覧・削除',
+          '`/ng-exclude` - NGワード除外チャンネル設定（トグル）',
+          '`/warning-reset [user]` - 警告回数リセット',
+          '`/server-status` - サーバー概要チャンネル作成・更新',
           '`/eew` - 地震情報チャンネル設定',
           '`/eew-test` - EEWテスト地図生成',
-          '`/eew / /nhk / /join-notice / /leveling / /chatwork / /bbs / /admin / /log` - チャンネル設定',
-          '`/event add/list/delete` - イベント管理',
+          '`/nhk` - NHK速報・気象庁情報チャンネル設定',
+          '`/join-notice` / `/leveling` / `/chatwork` / `/bbs` / `/admin` / `/log` - チャンネル設定',
         ];
         await reply(lines.join('\n'), {title:'コマンド一覧'}); return;
       }
@@ -2384,23 +2419,8 @@ if(DISCORD_BOT_TOKEN){
       if(cmd==='song-typing-info'){ const r=await getSongTypingInfo(interaction.options.getString('id')); await reply(r.replace(/\[.*?\]/g,'').substring(0,1900)); return; }
 
       // ── romera ──
-      if(cmd==='romera'){
-        const d=await getTodayCounts(CW_ROOM);
-        let msg='**今日のメッセージ数ランキング**\n';
-        if(!d.rows.length){ msg+='今日のメッセージはまだないみたい。'; }
-        else{ for(let i=0;i<d.rows.length;i++){ const n=await CW.nameById(d.rows[i].accountId,[],CW_ROOM); msg+=`${i+1}位：${n} ${d.rows[i].count}コメ\n`; } }
-        msg+=`\n合計：${d.rows.reduce((s,r)=>s+r.count,0)}コメ（ぼく込み）`;
-        await reply(msg, {title:'今日のメッセージ数ランキング'}); return;
-      }
 
       // ── message_total ──
-      if(cmd==='message-total'){
-        const r=await dbQuery('SELECT account_id,message_count FROM total_message_counts WHERE room_id=$1 ORDER BY message_count DESC',[CW_ROOM]);
-        if(!r.rows.length){ await reply('累計発言数はまだないみたい', {title:'累計発言数ランキング'}); return; }
-        let msg='**累計発言数ランキング**\n';
-        for(let i=0;i<r.rows.length;i++){ const n=await CW.nameById(r.rows[i].account_id,[],CW_ROOM); msg+=`${i+1}位：${n} ${r.rows[i].message_count}コメ\n`; }
-        await reply(msg, {title:'累計発言数ランキング'}); return;
-      }
 
       // ── alarm ──
       if(cmd==='alarm'){
@@ -2413,38 +2433,8 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── miaq ──
-      if(cmd==='miaq'){
-        try{
-          const tm=await interaction.channel.messages.fetch(interaction.options.getString('message_id'));
-          if(!tm){ await reply('メッセージが見つからなかったよ'); return; }
-          const r=await axios.post('https://makeit-a66a.onrender.com/',{text:tm.content||'',name:tm.member?.displayName||tm.author.username,id:tm.author.id},{headers:{'Content-Type':'application/json'},responseType:'arraybuffer',timeout:20000});
-          await interaction.editReply({files:[new AttachmentBuilder(Buffer.from(r.data),{name:'quote.png'})]});
-        } catch(e){ await replyErr(`エラーが発生したよ: ${e.message}`); }
-        return;
-      }
 
       // ── room_info ──
-      if(cmd==='room-info'){
-        if(!INFO_API_TOKEN){ await reply('INFO_API_TOKENが設定されていないよ'); return; }
-        const rid=interaction.options.getString('room_id');
-        const ri=await CW.roomInfoWithToken(rid,INFO_API_TOKEN);
-        if(ri.error){ await replyErr(ri.error==='not_found'?'そのルームは見つからなかったよ':'ルーム情報の取得に失敗しちゃった'); return; }
-        const ms=await CW.membersWithToken(rid,INFO_API_TOKEN);
-        if(!ms.some(m=>String(m.account_id)===YUYUYU_ACCOUNT_ID)){ await replyErr('ますたーが参加していないルームだよ'); return; }
-        const ip=ri.icon_path||''; const il=ip?(ip.startsWith('http')?ip:`https://appdata.chatwork.com${ip}`):'なし';
-        await reply(null, {
-          title: ri.name+'の情報',
-          fields:[
-            {name:'メンバー数', value:`${ms.length}人`, inline:true},
-            {name:'管理者数', value:`${ms.filter(m=>m.role==='admin').length}人`, inline:true},
-            {name:'ルームID', value:rid, inline:true},
-            {name:'ファイル数', value:`${ri.file_num||0}`, inline:true},
-            {name:'メッセージ数', value:`${ri.message_num||0}`, inline:true},
-            {name:'アイコン', value:il, inline:false},
-            {name:'管理者', value:ms.filter(m=>m.role==='admin').map(m=>m.name).join(', ')||'なし', inline:false},
-          ]
-        }); return;
-      }
 
       // ━━ 以下、管理者専用 ━━
 
@@ -2564,39 +2554,8 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── fever ──
-      if(cmd==='fever'){
-        if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const a=interaction.options.getString('duration'); const mm=a.match(/^(\d+)m$/),hm=a.match(/^(\d+)h$/);
-        let s=mm?parseInt(mm[1])*60:hm?parseInt(hm[1])*3600:0;
-        if(s<=0||s>10800){ await reply('時間の指定がおかしいよ！5分なら `5m`、3時間なら `3h`（最大3時間）'); return; }
-        const ea=new Date(Date.now()+s*1000);
-        await dbQuery(`INSERT INTO fever (room_id,ends_at) VALUES ($1,$2) ON CONFLICT (room_id) DO UPDATE SET ends_at=$2`,[CW_ROOM,ea]);
-        await reply(`**${ea.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}** まで獲得ポイント10倍だよっ！`, {title:'フィーバータイム開始', color:0xf39c12}); return;
-      }
 
       // ── ng_add ──
-      if(cmd==='ng-add'){
-        if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const w=interaction.options.getString('word');
-        await dbQuery('INSERT INTO ng_words (room_id,word) VALUES ($1,$2) ON CONFLICT DO NOTHING',[CW_ROOM,w]);
-        await reply(`「${w}」をNGワードに登録したよ！`, {title:'NGワード登録', color:0xe74c3c}); return;
-      }
-
-      // ── ng_del ──
-      if(cmd==='ng-del'){
-        if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const w=interaction.options.getString('word');
-        await dbQuery('DELETE FROM ng_words WHERE room_id=$1 AND word=$2',[CW_ROOM,w]);
-        await reply(`「${w}」をNGワードから削除したよ！`, {title:'NGワード削除', color:0x2ecc71}); return;
-      }
-
-      // ── ng_check ──
-      if(cmd==='ng-check'){
-        if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
-        const r=await dbQuery('SELECT word FROM ng_words WHERE room_id=$1 ORDER BY created_at',[CW_ROOM]);
-        if(!r.rows.length){ await reply('NGワードはまだ登録されてないよ', {title:'CW NGワード一覧'}); return; }
-        await reply(r.rows.map(x=>`・${x.word}`).join('\n'), {title:'CW NGワード一覧'}); return;
-      }
       if(cmd==='rank'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const uid=interaction.user.id;const r=await dbQuery('SELECT xp,level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,uid]);const xp=r.rows.length?parseInt(r.rows[0].xp):0,lv=r.rows.length?parseInt(r.rows[0].level):0;const nextXp=totalXpForLevel(lv+1),role=getRoleForLevel(lv),ar=role?interaction.guild.roles.cache.get(role.roleId):null;await reply(null,{title:`${interaction.member.displayName} のランク`,fields:[{name:'レベル',value:`**${lv}**`,inline:true},{name:'XP',value:`${xp.toLocaleString()}`,inline:true},{name:'次のLvまで',value:`${(nextXp-xp).toLocaleString()} XP`,inline:true},{name:'現在のロール',value:ar?ar.name:'なし',inline:true}],color:role?0xf39c12:0x7289da,footer:`次のLv${lv+1}に必要な累計XP: ${nextXp.toLocaleString()}`});return;}
       if(cmd==='work'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid),lvRow=await dbQuery('SELECT level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[gid,uid]),lv=lvRow.rows.length?parseInt(lvRow.rows[0].level):0,limit=workLimitForLevel(lv),today=new Date().toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}),resetDate=eco.work_reset_date?new Date(eco.work_reset_date).toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}):null;let count=resetDate!==today?0:(eco.work_count||0);if(count>=limit){await replyErr(`今日の仕事回数上限（${limit}回）に達したよ！明日また来てね`);return;}if(eco.last_work_at){const diff=(Date.now()-new Date(eco.last_work_at).getTime())/60000;if(diff<30){await replyErr(`クールダウン中！あと**${Math.ceil(30-diff)}分**待ってね`);return;}}const job=JOBS[eco.job]||JOBS['ニート'],result=job.work(),newWallet=Math.max(0,parseInt(eco.wallet)+result.earned);await dbQuery('UPDATE discord_economy SET wallet=$1,work_count=$2,work_reset_date=CURRENT_DATE,last_work_at=NOW(),updated_at=NOW() WHERE guild_id=$3 AND user_id=$4',[newWallet,count+1,gid,uid]);await reply(result.msg+`\n\n所持金: **${fmt(newWallet)}** | 今日: ${count+1}/${limit}回`,{title:`${interaction.member.displayName} が${eco.job}として働いた！`,color:result.earned>0?0x2ecc71:result.earned<0?0xe74c3c:0x95a5a6,footer:`残りwork回数: ${limit-(count+1)}回`});return;}
       if(cmd==='job'){if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const tiers=['初級','中級','上級','特殊'];const fields=tiers.map(tier=>{const jobs=Object.entries(JOBS).filter(([,v])=>v.tier===tier);return{name:`【${tier}職】`,value:jobs.map(([n,v])=>`**${n}**（${v.cost>0?fmt(v.cost):'無料'}）\n${v.desc}`).join('\n\n'),inline:false};});await reply(null,{title:'職一覧',fields,color:0x7289da,footer:'転職は /job_set で。転職コストは所持金＋銀行の合計から判定'});return;}
@@ -2736,17 +2695,26 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
       // ── discord_ng_add ──
-      if(cmd==='discord-ng-add'){
+      if(cmd==='ng-add'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const pattern=interaction.options.getString('pattern');
-        const isRegex=interaction.options.getBoolean('is_regex')||false;
-        if(isRegex){try{new RegExp(pattern);}catch{await replyErr('正規表現の書式が正しくないよ');return;}}
-        await dbQuery('INSERT INTO discord_ng_words (guild_id,pattern,is_regex) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',[interaction.guild.id,pattern,isRegex]);
-        await reply(`「${pattern}」をDiscord NGワードに登録したよ！${isRegex?' (正規表現)':''}`,{title:'Discord NGワード登録',color:0xe74c3c});return;
+        const raw=interaction.options.getString('pattern');
+        const isRegex=interaction.options.getBoolean('is-regex')||false;
+        // スペースかカンマで分割（正規表現モードの場合は分割しない）
+        const patterns=isRegex?[raw]:raw.split(/[\s,，、]+/).map(p=>p.trim()).filter(Boolean);
+        if(isRegex){try{new RegExp(raw);}catch{await replyErr('正規表現の書式が正しくないよ');return;}}
+        const added=[],skipped=[];
+        for(const p of patterns){
+          const r=await dbQuery('INSERT INTO discord_ng_words (guild_id,pattern,is_regex) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING pattern',[interaction.guild.id,p,isRegex]);
+          r.rowCount>0?added.push(p):skipped.push(p);
+        }
+        const msg=[];
+        if(added.length) msg.push(`「${added.join('」「')}」を登録したよ！${isRegex?' (正規表現)':''}`);
+        if(skipped.length) msg.push(`「${skipped.join('」「')}」は既に登録済みだよ`);
+        await reply(msg.join('\n')||'登録したよ',{title:'Discord NGワード登録',color:0xe74c3c});return;
       }
       // ── discord_ng_list ──
-      if(cmd==='discord-ng-list'){
+      if(cmd==='ng-list'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const r=await dbQuery('SELECT id,pattern,is_regex FROM discord_ng_words WHERE guild_id=$1 ORDER BY id',[interaction.guild.id]);
@@ -2757,7 +2725,7 @@ if(DISCORD_BOT_TOKEN){
         await reply(`${list}\n\n**除外チャンネル：** ${exList}`,{title:'Discord NGワード一覧'});return;
       }
       // ── discord_ng_remove ──
-      if(cmd==='discord-ng-remove'){
+      if(cmd==='ng-remove'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const id=interaction.options.getInteger('id');
@@ -2766,7 +2734,7 @@ if(DISCORD_BOT_TOKEN){
         await reply(`「${r.rows[0].pattern}」を削除したよ`,{title:'Discord NGワード削除',color:0x2ecc71});return;
       }
       // ── discord_ng_exclude ──
-      if(cmd==='discord-ng-exclude'){
+      if(cmd==='ng-exclude'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const chId=interaction.channelId;
@@ -2781,7 +2749,7 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
       // ── discord_warning_reset ──
-      if(cmd==='discord-warning-reset'){
+      if(cmd==='warning-reset'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
         const target=interaction.options.getUser('user');
