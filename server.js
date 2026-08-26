@@ -1979,7 +1979,13 @@ async function checkJmaFeed(){
 
     for(const [, g] of groups){
       const titleStr = g.authors.join('・');
-      const body = g.contents.join('\n');
+      const rawBody = g.contents.join('\n');
+      // 口調変換: ください→ね、ます。→たよ。
+      const body = rawBody
+        .replace(/ください。/g, 'ね。')
+        .replace(/ください$/gm, 'ね')
+        .replace(/ます。/g, 'たよ。')
+        .replace(/ます$/gm, 'たよ');
 
       // CWに送信
       const cwMsg = `[info][title]${titleStr}[/title]${body}[/info]`;
