@@ -9,18 +9,18 @@
   "scripts": {
     "start": "node server.js"
   },
-  "dependencies": {
-    "express": "^4.19.2",
-    "axios": "^1.7.2",
-    "node-cron": "^3.0.3",
-    "pg": "^8.11.5",
-    "cheerio": "^1.0.0",
-    "discord.js": "^14.15.3",
-    "@discordjs/voice": "^0.17.0",
-    "opusscript": "^0.0.8",
-    "ffmpeg-static": "^5.2.0",
-    "libsodium-wrappers": "^0.7.13",
-    "ws": "^8.18.0",
-    "canvas": "^2.11.2"
-  }
+"dependencies": {
+  "express": "^4.19.2",
+  "axios": "^1.7.2",
+  "node-cron": "^3.0.3",
+  "pg": "^8.11.5",
+  "cheerio": "^1.0.0",
+  "discord.js": "^14.15.3",
+  "@discordjs/voice": "^0.17.0",
+  "opusscript": "^0.0.8",
+  "ffmpeg-static": "^5.2.0",
+  "libsodium-wrappers": "^0.7.13",
+  "ws": "^8.18.0",
+  "canvas": "^2.11.2",
+  "multer": "^1.4.5-lts.1"
 }
