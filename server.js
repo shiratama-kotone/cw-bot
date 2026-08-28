@@ -6,8 +6,6 @@ const axios = require('axios');
 const cron = require('node-cron');
 const { Pool } = require('pg');
 const cheerio = require('cheerio');
-let voiceModule = null;
-try{ voiceModule = require('@discordjs/voice'); } catch(e){ console.error('[VOICEVOX] @discordjs/voice の読み込みに失敗:', e.message); }
 const {
   Client, GatewayIntentBits, Events, REST, Routes,
   SlashCommandBuilder, AttachmentBuilder, PermissionFlagsBits, Partials
@@ -75,137 +73,6 @@ async function addDiscordXp(member,guildId){
 function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min;}
 function fmt(n){return Number(n).toLocaleString()+'円';}
 // ============================================================
-// VOICEVOX読み上げシステム
-// ============================================================
-const VOICEVOX_API_KEY = process.env.VOICEVOX_API_KEY || '';
-const VOICEVOX_BASE = 'https://deprecatedapis.tts.quest/v2/voicevox';
-let voicevoxSpeakersCache = null;
-
-async function fetchVoicevoxSpeakers() {
-  if (voicevoxSpeakersCache) return voicevoxSpeakersCache;
-  try {
-    // 話者一覧APIはkeyが不要
-    const res = await axios.get(`https://deprecatedapis.tts.quest/v2/voicevox/speakers/?key=${encodeURIComponent(VOICEVOX_API_KEY)}`, { timeout: 15000 });
-    const map = {};
-    for (const sp of res.data) {
-      for (const style of sp.styles) {
-        if(style.type === 'talk') { // 読み上げタイプのみ
-          map[style.id] = { charName: sp.name, styleName: style.name };
-        }
-      }
-    }
-    voicevoxSpeakersCache = map;
-    console.log(`[VOICEVOX] 話者キャッシュ完了: ${Object.keys(map).length}件`);
-    return map;
-  } catch (e) { console.error('[VOICEVOX] 話者一覧取得エラー:', e.message); return {}; }
-}
-
-const voiceSessions = new Map();
-
-async function getVoiceSettings(guildId, userId) {
-  const DEFAULT = { speaker_id: 3, pitch: 0, speed: 1, intonation: 1 };
-  try {
-    const u = await dbQuery('SELECT * FROM voice_settings WHERE scope=$1 AND target_id=$2', ['user', userId]);
-    if (u.rows.length) return { ...DEFAULT, ...u.rows[0] };
-    const g = await dbQuery('SELECT * FROM voice_settings WHERE scope=$1 AND target_id=$2', ['guild', guildId]);
-    if (g.rows.length) return { ...DEFAULT, ...g.rows[0] };
-  } catch {}
-  return DEFAULT;
-}
-
-async function applyDictionary(guildId, text) {
-  try {
-    const r = await dbQuery('SELECT word, reading FROM voice_dictionary WHERE guild_id=$1 ORDER BY LENGTH(word) DESC', [guildId]);
-    for (const row of r.rows) {
-      text = text.split(row.word).join(row.reading);
-    }
-  } catch {}
-  return text;
-}
-
-function buildSpeechText(message) {
-  let content = message.content || '';
-  const hasAttachment = message.attachments && message.attachments.size > 0;
-  content = content.replace(/https?:\/\/\S+/g, 'リンク省略');
-  let text = content.trim();
-  if (hasAttachment) {
-    text = text ? `添付ファイル。${text}` : '添付ファイル。';
-  }
-  if (!text) return null;
-  if (text.length > 50) {
-    text = text.substring(0, 50) + '以下略';
-  }
-  return text;
-}
-
-function getSpeechUrl(text, settings) {
-  const params = new URLSearchParams({
-    text,
-    speaker: settings.speaker_id,
-    pitch: settings.pitch,
-    speed: settings.speed,
-    intonationScale: settings.intonation,
-    key: VOICEVOX_API_KEY,
-  });
-  return `${VOICEVOX_BASE}/audio/?${params.toString()}`;
-}
-
-async function enqueueSpeech(guildId, text, settings) {
-  const session = voiceSessions.get(guildId);
-  if (!session) return;
-  session.queue.push({ text, settings });
-  if (session.queue.length === 1) processQueue(guildId);
-}
-
-async function processQueue(guildId) {
-  const session = voiceSessions.get(guildId);
-  if (!session || !session.queue.length) return;
-  const { text, settings } = session.queue[0];
-  console.log(`[VOICEVOX] 再生開始: "${text}"`);
-  try {
-    if(!voiceModule) throw new Error('@discordjs/voice未インストール');
-    const { createAudioResource, StreamType } = voiceModule;
-    const url = getSpeechUrl(text, settings);
-    console.log(`[VOICEVOX] リクエストURL（key伏字）: ${url.replace(/key=[^&]+/,'key=***')}`);
-    const res = await axios.get(url, { responseType: 'stream', timeout: 20000 });
-    console.log(`[VOICEVOX] 音声取得成功 status=${res.status}`);
-    const resource = createAudioResource(res.data, { inputType: StreamType.Arbitrary, inlineVolume: false });
-    session.player.play(resource);
-    console.log(`[VOICEVOX] player.play実行 playerState=${session.player.state.status}`);
-  } catch (e) {
-    console.error('[VOICEVOX] 再生エラー詳細:', e.response?.status, e.response?.statusText, e.message);
-    session.queue.shift();
-    processQueue(guildId);
-  }
-}
-function setupPlayerListeners(guildId) {
-  const session = voiceSessions.get(guildId);
-  if (!session) return;
-  if(!voiceModule) return;
-  const { AudioPlayerStatus } = voiceModule;
-  session.player.on(AudioPlayerStatus.Idle, () => {
-    console.log('[VOICEVOX] player状態: Idle（再生終了）');
-    const s = voiceSessions.get(guildId);
-    if (!s) return;
-    s.queue.shift();
-    if (s.queue.length) processQueue(guildId);
-  });
-  session.player.on(AudioPlayerStatus.Playing, () => {
-    console.log('[VOICEVOX] player状態: Playing（再生中）');
-  });
-  session.player.on('error', (e) => {
-    console.error('[VOICEVOX] playerエラー:', e.message);
-    const s = voiceSessions.get(guildId);
-    if (s) { s.queue.shift(); if (s.queue.length) processQueue(guildId); }
-  });
-  session.connection.on('error', (e) => {
-    console.error('[VOICEVOX] connectionエラー:', e.message);
-  });
-  session.connection.on('stateChange', (oldS, newS) => {
-    console.log(`[VOICEVOX] connection状態変化: ${oldS.status} -> ${newS.status}`);
-  });
-}
-
 const JOBS={
   'コンビニアルバイト':{tier:'初級',cost:0,desc:'安定して少額稼げる',
     work:(_eco)=>{const b=rand(1057,1300);return{earned:b,msg:`🏪 レジ打ちをした。**${b}円**稼いだ！`};}},
@@ -1641,8 +1508,14 @@ textarea{min-height:130px;resize:vertical;font-family:inherit;}
       <option value="">-- チャンネルを選択 --</option>
     </select>
 
-    <label>メッセージ</label>
-    <textarea id="dc-msg" placeholder="送信内容を入力してください"></textarea>
+    <label>またはユーザーID（DM送信）<span class="badge">入力するとDM優先</span></label>
+    <input id="dc-user-id" type="text" placeholder="DiscordユーザーID（例: 123456789012345678）">
+
+    <label>メッセージ <span class="badge">スラッシュコマンドも送信可（例: /ban user:123 reason:test）</span></label>
+    <textarea id="dc-msg" placeholder="送信内容を入力してください&#10;コマンドもそのまま入力できるよ（例: /help）"></textarea>
+
+    <label>ファイル添付（任意）</label>
+    <input id="dc-file" type="file" multiple style="background:#2d3748;color:#e2e8f0;border:1px solid #4a5568;border-radius:6px;padding:6px;width:100%;box-sizing:border-box;">
 
     <label>絵文字 <span class="badge">クリックで挿入</span></label>
     <div id="emoji-bar" class="emoji-bar"><span style="color:#4a5568;font-size:12px">サーバーを選択すると絵文字が表示されるよ</span></div>
@@ -1758,15 +1631,40 @@ async function sendCw(){
 
 async function sendDc(){
   const channelId = document.getElementById('dc-channel').value;
+  const userId = document.getElementById('dc-user-id').value.trim();
   const msg = document.getElementById('dc-msg').value;
-  if(!channelId||!msg){ showMsg('チャンネルとメッセージを入力してね', false); return; }
+  const files = document.getElementById('dc-file').files;
+
+  if(!msg && files.length===0){ showMsg('メッセージかファイルを入力してね', false); return; }
+  if(!userId && !channelId){ showMsg('チャンネルかユーザーIDを入力してね', false); return; }
+
   const btn = document.querySelector('#sec-dc .send-btn');
   btn.disabled = true; btn.textContent = '送信中...';
   try{
-    const r = await fetch('/api/discord/send', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channelId,content:msg})});
-    const d = await r.json();
-    if(d.status==='success') showMsg('Discordに送信したよ！', true);
-    else showMsg('エラー: '+d.message, false);
+    // ファイルがある場合はFormDataで送信
+    if(files.length > 0){
+      const fd = new FormData();
+      if(userId) fd.append('userId', userId);
+      else fd.append('channelId', channelId);
+      if(msg) fd.append('content', msg);
+      for(const f of files) fd.append('files', f);
+      const r = await fetch('/api/discord/send-with-files', {method:'POST', body:fd});
+      const d = await r.json();
+      if(d.status==='success') showMsg('Discordに送信したよ！', true);
+      else showMsg('エラー: '+d.message, false);
+    } else if(userId){
+      // DM送信
+      const r = await fetch('/api/discord/dm', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,content:msg})});
+      const d = await r.json();
+      if(d.status==='success') showMsg('DMを送信したよ！', true);
+      else showMsg('エラー: '+d.message, false);
+    } else {
+      // チャンネル送信（コマンド含む）
+      const r = await fetch('/api/discord/send', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channelId,content:msg})});
+      const d = await r.json();
+      if(d.status==='success') showMsg('Discordに送信したよ！', true);
+      else showMsg('エラー: '+d.message, false);
+    }
   }catch(e){ showMsg('エラー: '+e.message, false); }
   btn.disabled = false; btn.textContent = 'Discordに送信';
 }
@@ -1827,6 +1725,47 @@ app.post('/api/discord/send', async(req,res) => {
     const ch = await discordClient.channels.fetch(channelId).catch(()=>null);
     if(!ch) return res.status(404).json({status:'error',message:'チャンネルが見つかりません'});
     await ch.send(content);
+    res.json({status:'success'});
+  }catch(e){ res.status(500).json({status:'error',message:e.message}); }
+});
+
+// Discord DM送信API
+app.post('/api/discord/dm', async(req,res) => {
+  const {userId, content} = req.body;
+  if(!userId||!content) return res.status(400).json({status:'error',message:'userIdとcontentは必須です'});
+  if(!discordClient) return res.status(503).json({status:'error',message:'Discord botが起動していません'});
+  try{
+    const user = await discordClient.users.fetch(userId).catch(()=>null);
+    if(!user) return res.status(404).json({status:'error',message:'ユーザーが見つかりません'});
+    await user.send(content);
+    res.json({status:'success'});
+  }catch(e){ res.status(500).json({status:'error',message:e.message}); }
+});
+
+// ファイル付き送信API（multipart/form-data）
+const multer = require('multer');
+const multerUpload = multer({storage: multer.memoryStorage(), limits:{fileSize:25*1024*1024}});
+app.post('/api/discord/send-with-files', multerUpload.array('files',10), async(req,res) => {
+  if(!discordClient) return res.status(503).json({status:'error',message:'Discord botが起動していません'});
+  const {channelId, userId, content} = req.body;
+  const files = req.files||[];
+  try{
+    const { AttachmentBuilder:AB } = require('discord.js');
+    const attachments = files.map(f=>new AB(f.buffer,{name:f.originalname}));
+    const payload = {};
+    if(content) payload.content = content;
+    if(attachments.length) payload.files = attachments;
+    if(userId){
+      const user = await discordClient.users.fetch(userId).catch(()=>null);
+      if(!user) return res.status(404).json({status:'error',message:'ユーザーが見つかりません'});
+      await user.send(payload);
+    } else if(channelId){
+      const ch = await discordClient.channels.fetch(channelId).catch(()=>null);
+      if(!ch) return res.status(404).json({status:'error',message:'チャンネルが見つかりません'});
+      await ch.send(payload);
+    } else {
+      return res.status(400).json({status:'error',message:'channelIdまたはuserIdが必要です'});
+    }
     res.json({status:'success'});
   }catch(e){ res.status(500).json({status:'error',message:e.message}); }
 });
@@ -2220,6 +2159,8 @@ if(DISCORD_BOT_TOKEN){
         .addNumberOption(o=>o.setName('lng').setDescription('震源の経度（例: 137.0）').setRequired(true).setMinValue(122).setMaxValue(150))
         .addNumberOption(o=>o.setName('magnitude').setDescription('マグニチュード（1〜10）').setRequired(true).setMinValue(1).setMaxValue(10))
         .addNumberOption(o=>o.setName('depth').setDescription('震源の深さ（km、デフォルト10）').setMinValue(0).setMaxValue(700)),
+      new SlashCommandBuilder().setName('join').setDescription('ボイスチャンネルに参加するよ（指定時間後に自動退出）').addStringOption(o=>o.setName('time').setDescription('参加時間（例: 3h30m, 30m, 1h）').setRequired(true)),
+      new SlashCommandBuilder().setName('leave').setDescription('ボイスチャンネルから退出するよ'),
       new SlashCommandBuilder().setName('join-notice').setDescription('このチャンネルを入室通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('leveling').setDescription('このチャンネルをレベルアップ通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('chatwork').setDescription('このチャンネルをChatwork連携チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
@@ -2247,16 +2188,6 @@ if(DISCORD_BOT_TOKEN){
         .addSubcommand(s=>s.setName('delete').setDescription('イベントを削除するよ').addIntegerOption(o=>o.setName('id').setDescription('イベントID').setRequired(true)))
         .setDefaultMemberPermissions(ADMIN_PERM),
       // VOICEVOX読み上げ
-      new SlashCommandBuilder().setName('join').setDescription('あなたがいるボイスチャンネルに参加して読み上げを開始するよ'),
-      new SlashCommandBuilder().setName('leave').setDescription('ボイスチャンネルから退出するよ'),
-      new SlashCommandBuilder().setName('dictionary-add').setDescription('読み上げ辞書に単語を追加するよ').addStringOption(o=>o.setName('word').setDescription('単語').setRequired(true)).addStringOption(o=>o.setName('reading').setDescription('読み方').setRequired(true)),
-      new SlashCommandBuilder().setName('dictionary-list').setDescription('読み上げ辞書一覧を表示するよ').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
-      new SlashCommandBuilder().setName('dictionary-remove').setDescription('読み上げ辞書から単語を削除するよ').addStringOption(o=>o.setName('keyword').setDescription('単語または読みの一部').setRequired(true).setAutocomplete(true)),
-      new SlashCommandBuilder().setName('pitch').setDescription('読み上げのピッチを変更するよ（-0.15~0.15）').addNumberOption(o=>o.setName('value').setDescription('ピッチ').setRequired(true).setMinValue(-0.15).setMaxValue(0.15)),
-      new SlashCommandBuilder().setName('speed').setDescription('読み上げの話速を変更するよ（0.5~2）').addNumberOption(o=>o.setName('value').setDescription('話速').setRequired(true).setMinValue(0.5).setMaxValue(2)),
-      new SlashCommandBuilder().setName('intonation').setDescription('読み上げのイントネーションを変更するよ（0~2）').addNumberOption(o=>o.setName('value').setDescription('イントネーション').setRequired(true).setMinValue(0).setMaxValue(2)),
-      new SlashCommandBuilder().setName('speaker').setDescription('読み上げの話者を変更するよ').addIntegerOption(o=>o.setName('id').setDescription('話者ID（/speaker_listで確認）').setRequired(true)),
-      new SlashCommandBuilder().setName('speaker-list').setDescription('話者一覧を表示するよ（ページ制）').addIntegerOption(o=>o.setName('page').setDescription('ページ番号（1から）')),
       new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
       new SlashCommandBuilder().setName('work').setDescription('働いてお金を稼ぐよ（クールダウン30分）'),
       new SlashCommandBuilder().setName('job').setDescription('職一覧を見る'),
@@ -2344,7 +2275,6 @@ if(DISCORD_BOT_TOKEN){
           '`/alarm [datetime] [message]` - アラーム設定',
           '`/event add/list/delete` - イベント管理',
           '',
-          '**読み上げ（VC）**',
           '`/join` / `/leave` - VCに参加・退出',
           '`/speaker [id]` - 話者変更',
           '`/speaker-list` - 話者一覧',
@@ -2598,37 +2528,6 @@ if(DISCORD_BOT_TOKEN){
         }
         return;
       }
-      // ── join ──
-      if(cmd==='join'){
-        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const vc=interaction.member.voice.channel;
-        if(!vc){await replyErr('ボイスチャンネルに参加してから実行してね');return;}
-        try{
-          if(!voiceModule) throw new Error('@discordjs/voice未インストール');
-          const {joinVoiceChannel,createAudioPlayer,entersState,VoiceConnectionStatus}=voiceModule;
-          const connection=joinVoiceChannel({channelId:vc.id,guildId:interaction.guild.id,adapterCreator:interaction.guild.voiceAdapterCreator,selfDeaf:true});
-          connection.on('debug', (m) => console.log('[VOICEVOX] connection debug:', m));
-          connection.on('stateChange', (oldS,newS) => console.log(`[VOICEVOX] connection状態(join時): ${oldS.status} -> ${newS.status}`));
-          await entersState(connection, VoiceConnectionStatus.Ready, 30000);
-          const player=createAudioPlayer();
-          connection.subscribe(player);
-          voiceSessions.set(interaction.guild.id,{connection,player,channelId:vc.id,textChannelId:interaction.channelId,queue:[]});
-          setupPlayerListeners(interaction.guild.id);
-          console.log(`[VOICEVOX] VC接続完了 guild=${interaction.guild.id} channel=${vc.id}`);
-          await reply(`**${vc.name}** に参加したよ！このテキストチャンネルの発言を読み上げるね`,{title:'VC参加',color:0x2ecc71});
-        }catch(e){console.error('[VOICEVOX] join エラー:',e.message,e.stack);await replyErr(`ボイスチャンネルへの参加に失敗したよ…\n${e.message}`);}
-        return;
-      }
-      // ── leave ──
-      if(cmd==='leave'){
-        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const session=voiceSessions.get(interaction.guild.id);
-        if(!session){await replyErr('ボイスチャンネルに参加してないよ');return;}
-        session.connection.destroy();
-        voiceSessions.delete(interaction.guild.id);
-        await reply('ボイスチャンネルから退出したよ',{title:'VC退出',color:0x95a5a6});
-        return;
-      }
       // ── dictionary_add ──
       if(cmd==='dictionary-add'){
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
@@ -2671,21 +2570,6 @@ if(DISCORD_BOT_TOKEN){
         } else {
           await dbQuery(`INSERT INTO voice_settings (scope,target_id,${col}) VALUES ('guild',$1,$2) ON CONFLICT (scope,target_id) DO UPDATE SET ${col}=$2,updated_at=NOW()`,[interaction.guild.id,value]);
           await reply(`このサーバーの${col}を**${value}**に設定したよ（個人設定がある人はそちらが優先されるよ）`,{title:'設定変更',color:0x2ecc71});
-        }
-        return;
-      }
-      // ── speaker ──
-      if(cmd==='speaker'){
-        const id=interaction.options.getInteger('id');
-        const speakers=await fetchVoicevoxSpeakers();
-        if(!speakers[id]){await replyErr('そのIDの話者は見つからなかったよ。/speaker_list で確認してね');return;}
-        const isDM=!interaction.guild;
-        if(isDM){
-          await dbQuery(`INSERT INTO voice_settings (scope,target_id,speaker_id) VALUES ('user',$1,$2) ON CONFLICT (scope,target_id) DO UPDATE SET speaker_id=$2,updated_at=NOW()`,[interaction.user.id,id]);
-          await reply(`あなたの話者を**${speakers[id].charName}（${speakers[id].styleName}）**に設定したよ`,{title:'話者変更',color:0x2ecc71});
-        } else {
-          await dbQuery(`INSERT INTO voice_settings (scope,target_id,speaker_id) VALUES ('guild',$1,$2) ON CONFLICT (scope,target_id) DO UPDATE SET speaker_id=$2,updated_at=NOW()`,[interaction.guild.id,id]);
-          await reply(`このサーバーの話者を**${speakers[id].charName}（${speakers[id].styleName}）**に設定したよ`,{title:'話者変更',color:0x2ecc71});
         }
         return;
       }
@@ -2812,6 +2696,63 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
 
+      // ── join（集合コマンド） ──
+      if(cmd==='leave'){
+        if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
+        try{
+          const { getVoiceConnection } = require('@discordjs/voice');
+          const connection = getVoiceConnection(interaction.guild.id);
+          if(!connection){ await replyErr('ボイスチャンネルに参加してないよ'); return; }
+          connection.destroy();
+          await reply('ボイスチャンネルから退出したよ',{title:'VC退出',color:0x95a5a6});
+        }catch(e){ await replyErr(`退出に失敗したよ: ${e.message}`); }
+        return;
+      }
+
+      if(cmd==='join'){
+        if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
+        const timeStr = interaction.options.getString('time');
+        // 時間パース（3h30m, 30m, 1h, 90m等）
+        let totalMs = 0;
+        const hm = timeStr.match(/(?:(\d+)h)?(?:(\d+)m)?/);
+        if(hm){ const h=parseInt(hm[1]||0),m2=parseInt(hm[2]||0); totalMs=(h*60+m2)*60*1000; }
+        if(!totalMs){ await replyErr('時間の形式が正しくないよ（例: 3h30m, 30m, 1h）'); return; }
+
+        // 実行者のVCチャンネルを確認
+        const member = await interaction.guild.members.fetch(interaction.user.id).catch(()=>null);
+        const vc = member?.voice?.channel;
+        if(!vc){ await replyErr('先にボイスチャンネルに入ってから実行してね'); return; }
+
+        try{
+          const voiceMod = require('@discordjs/voice');
+          const {joinVoiceChannel, entersState, VoiceConnectionStatus} = voiceMod;
+          const connection = joinVoiceChannel({
+            channelId: vc.id,
+            guildId: interaction.guild.id,
+            adapterCreator: interaction.guild.voiceAdapterCreator,
+            selfDeaf: true,
+          });
+          await entersState(connection, VoiceConnectionStatus.Ready, 15000);
+
+          const label = timeStr.replace(/(\d+)h/,'$1時間').replace(/(\d+)m/,'$1分');
+          const unixEnd = Math.floor((Date.now()+totalMs)/1000);
+          await reply(`**${vc.name}** に参加したよ！\n**${label}後**（<t:${unixEnd}:t>）に退出するね`,{title:'VC参加',color:0x2ecc71});
+
+          // 指定時間後に退出
+          setTimeout(()=>{
+            try{ connection.destroy(); }catch{}
+            interaction.channel.send({embeds:[{
+              title:'VC退出',
+              description:`**${vc.name}** から退出したよ（${label}経過）`,
+              color:0x95a5a6
+            }]}).catch(()=>{});
+          }, totalMs);
+        }catch(e){
+          await replyErr(`VCへの参加に失敗したよ…\n${e.message}\n（@discordjs/voiceがインストールされているか確認してね）`);
+        }
+        return;
+      }
+
       if(CH_CMD_MAP[cmd]){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
@@ -2839,25 +2780,6 @@ if(DISCORD_BOT_TOKEN){
       // ※ メッセージ反応（おみくじ等）はどのサーバーでも動く
       // XP加算・CW転送・投稿規制は許可サーバーのみ
       const isAllowedGuild = !message.guild || message.guild.id === ALLOWED_GUILD_ID;
-
-      // ━━ VOICEVOX読み上げ（VC接続中のテキストチャンネルのみ、bot以外） ━━
-      if(message.guild && !message.author.bot){
-        const session = voiceSessions.get(message.guild.id);
-        if(session && session.textChannelId === message.channel.id){
-          const speechText = buildSpeechText(message);
-          console.log(`[VOICEVOX] メッセージ検知: text="${speechText}" channel=${message.channel.id}`);
-          if(speechText){
-            (async()=>{
-              try{
-                const dictApplied = await applyDictionary(message.guild.id, speechText);
-                const settings = await getVoiceSettings(message.guild.id, message.author.id);
-                console.log(`[VOICEVOX] 読み上げキュー追加: "${dictApplied}" settings=${JSON.stringify(settings)}`);
-                await enqueueSpeech(message.guild.id, dictApplied, settings);
-              }catch(e){ console.error('[VOICEVOX] 読み上げエラー:', e.message); }
-            })();
-          }
-        }
-      }
 
       const content = message.content || '';
       if(!content && !(message.attachments && message.attachments.size>0)) return;
