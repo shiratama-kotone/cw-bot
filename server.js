@@ -2124,7 +2124,6 @@ if(DISCORD_BOT_TOKEN){
   discordClient.once(Events.ClientReady, async(c)=>{
     console.log(`[Discord] bot起動: ${c.user.tag}`);
     // VOICEVOX話者一覧を起動時に1回だけ取得してキャッシュ（レート制限対策）
-    fetchVoicevoxSpeakers().then(s=>console.log(`[VOICEVOX] 話者キャッシュ完了: ${Object.keys(s).length}件`)).catch(()=>{});
     const ADMIN_PERM = PermissionFlagsBits.ManageMessages;
 
     const cmds = [
@@ -2578,16 +2577,6 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
       // ── speaker_list ──
-      if(cmd==='speaker-list'){
-        const page=Math.max(1,interaction.options.getInteger('page')||1);
-        const speakers=await fetchVoicevoxSpeakers();
-        const entries=Object.entries(speakers);
-        if(!entries.length){await replyErr('話者一覧の取得に失敗したよ');return;}
-        const perPage=10,totalPages=Math.ceil(entries.length/perPage);
-        const items=entries.slice((page-1)*perPage,page*perPage);
-        await reply(items.map(([id,s])=>`**ID:${id}** ${s.charName}（${s.styleName}）`).join('\n'),{title:`話者一覧（${page}/${totalPages}ページ）`,color:0x7289da});
-        return;
-      }
       // ── discord_ng_add ──
       if(cmd==='ng-add'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
@@ -2643,13 +2632,6 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
       // ── discord_warning_reset ──
-      if(cmd==='warning-reset'){
-        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
-        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const target=interaction.options.getUser('user');
-        await dbQuery('UPDATE discord_warnings SET count=0,updated_at=NOW() WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,target.id]);
-        await reply(`<@${target.id}> の警告回数をリセットしたよ`,{title:'警告リセット',color:0x2ecc71});return;
-      }
       // ── server_status ──
       if(cmd==='server-status'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
