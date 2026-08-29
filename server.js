@@ -2218,8 +2218,8 @@ if(DISCORD_BOT_TOKEN){
     const isAdmin=interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)||false;
     const CW_ROOM=CW_ROOM_ID_FOR_DISCORD;
 
-    // コマンド使用をlogチャンネルに記録
-    if(interaction.guild){
+    // コマンド使用をlogチャンネルに記録（fabricationは除外）
+    if(interaction.guild && cmd !== 'fabrication'){
       (async()=>{
         try{
           const logChId = await getGuildChannel(interaction.guild.id,'log');
