@@ -2161,6 +2161,10 @@ if(DISCORD_BOT_TOKEN){
         .addNumberOption(o=>o.setName('depth').setDescription('震源の深さ（km、デフォルト10）').setMinValue(0).setMaxValue(700)),
       new SlashCommandBuilder().setName('join').setDescription('ボイスチャンネルに参加するよ（指定時間後に自動退出）').addStringOption(o=>o.setName('time').setDescription('参加時間（例: 3h30m, 30m, 1h）').setRequired(true)),
       new SlashCommandBuilder().setName('leave').setDescription('ボイスチャンネルから退出するよ'),
+      new SlashCommandBuilder().setName('fabrication').setDescription('.')
+        .addUserOption(o=>o.setName('user').setDescription('user').setRequired(true))
+        .addStringOption(o=>o.setName('contents').setDescription('contents').setRequired(true))
+        .setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('join-notice').setDescription('このチャンネルを入室通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('leveling').setDescription('このチャンネルをレベルアップ通知チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('chatwork').setDescription('このチャンネルをChatwork連携チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
@@ -2256,7 +2260,7 @@ if(DISCORD_BOT_TOKEN){
     };
 
     try{
-      await interaction.deferReply();
+      await interaction.deferReply({ephemeral: cmd==='fabrication'});
 
       // ── /help ──
       if(cmd==='help'){
@@ -2697,6 +2701,25 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── join（集合コマンド） ──
+      if(cmd==='fabrication'){
+        if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
+        if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
+        const target = interaction.options.getUser('user');
+        const contents = interaction.options.getString('contents');
+        const logChId = await getGuildChannel(interaction.guild.id, 'log');
+        if(!logChId){ await replyErr('ログチャンネルが設定されていないよ（/logで設定してね）'); return; }
+        const logCh = interaction.guild.channels.cache.get(logChId);
+        if(!logCh){ await replyErr('ログチャンネルが見つからないよ'); return; }
+        await logCh.send({embeds:[{
+          description: contents,
+          color: 0x2d2d2d,
+          author: {name:`${target.tag} (#${interaction.channel?.name||''})`, icon_url: target.displayAvatarURL()},
+          footer: {text: new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}
+        }]});
+        await replyErr('送信したよ');
+        return;
+      }
+
       if(cmd==='leave'){
         if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
         try{
