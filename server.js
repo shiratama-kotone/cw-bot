@@ -1862,7 +1862,7 @@ async function checkAlarms(){
 const jmaSentIds = new Set();
 const jmaStartTime = new Date(); // 起動時刻（これより前のエントリは初回スキップ）
 
-async function checkJmaFeed(){
+async function checkJmaFeed({sendCw=true, sendDiscord=true}={}){
   try{
     const res = await axios.get('https://www.data.jma.go.jp/developer/xml/feed/extra.xml',{
       timeout:10000, headers:{'User-Agent':'ChatworkBot/1.0'}
@@ -1927,14 +1927,16 @@ async function checkJmaFeed(){
         .replace(/ます$/gm, 'たよ');
 
       // CWに送信
-      const cwMsg = `[info][title]${titleStr}[/title]${body}[/info]`;
-      for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){
-        await CW.send(r, cwMsg).catch(()=>{});
-        await new Promise(r=>setTimeout(r,300));
+      if(sendCw){
+        const cwMsg = `[info][title]${titleStr}[/title]${body}[/info]`;
+        for(const r of DIRECT_CHAT_WITH_DATE_CHANGE){
+          await CW.send(r, cwMsg).catch(()=>{});
+          await new Promise(r=>setTimeout(r,300));
+        }
       }
 
       // Discordに送信
-      if(discordClient && nhkRows.length){
+      if(sendDiscord && discordClient && nhkRows.length){
         const embed = {
           title: titleStr,
           description: body,
@@ -2019,7 +2021,9 @@ cron.schedule('* * * * *', async()=>{
   }catch(e){console.error('[ServerStatus] cronエラー:',e.message);}
 });
 
-cron.schedule('*/1 * * * *',  async()=>{ await checkEQ(); await checkAlarms(); await checkNhkNews(); await checkWarnings(); await checkJmaFeed(); },{timezone:'Asia/Tokyo'});
+cron.schedule('*/1 * * * *',  async()=>{ await checkEQ(); await checkAlarms(); await checkNhkNews(); await checkWarnings(); await checkJmaFeed({sendCw:false, sendDiscord:true}); },{timezone:'Asia/Tokyo'});
+// 気象庁CW送信は10分おき（0,10,20,30,40,50分）
+cron.schedule('0,10,20,30,40,50 * * * *', async()=>{ await checkJmaFeed({sendCw:true, sendDiscord:false}); },{timezone:'Asia/Tokyo'});
 cron.schedule('45 14 11 3 *', async()=>await send311(true),  {timezone:'Asia/Tokyo'});
 cron.schedule('46 14 11 3 *', async()=>await send311(false), {timezone:'Asia/Tokyo'});
 
