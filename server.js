@@ -570,6 +570,23 @@ async function initializeDatabase() {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(guild_id, channel_type))`);
 
+    await dbQuery(`CREATE TABLE IF NOT EXISTS youtube_subscriptions (
+      id SERIAL PRIMARY KEY,
+      channel_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      destination_id TEXT NOT NULL,
+      expires_at TIMESTAMP,
+      lease_seconds INT DEFAULT 432000,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(channel_id, platform, destination_id))`);
+    await dbQuery(`ALTER TABLE youtube_subscriptions ADD COLUMN IF NOT EXISTS platform TEXT`);
+    await dbQuery(`ALTER TABLE youtube_subscriptions ADD COLUMN IF NOT EXISTS destination_id TEXT`);
+
+    await dbQuery(`CREATE TABLE IF NOT EXISTS youtube_sent_videos (
+      id SERIAL PRIMARY KEY,
+      video_id TEXT NOT NULL UNIQUE,
+      notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
+
     console.log('[DB] テーブル初期化完了');
   } catch (e) { console.error('[DB] 初期化エラー:', e.message); }
 }
@@ -1342,6 +1359,27 @@ async function processWebHook(data) {
         await CW.send(roomId,ns?`${label}がONになりました。(確率：${prob})`:`${label}がOFFになりました。`); return;
       }
     }
+    if(messageBody.startsWith('/youtube-notice ')){
+      if(!await adminOnly()) return;
+      const ytChId = messageBody.substring(16).trim();
+      if(!ytChId.startsWith('UC')){ await rp('チャンネルIDはUCから始まる形式で入力してね'); return; }
+      if(!BOT_BASE_URL){ await rp('BOT_BASE_URL環境変数が未設定だよ'); return; }
+      // 既存チェック（同じチャンネル×このCWルーム）
+      const existing = await dbQuery(
+        'SELECT 1 FROM youtube_subscriptions WHERE channel_id=$1 AND platform=$2 AND destination_id=$3',
+        [ytChId, 'cw', roomId]);
+      if(existing.rowCount > 0){ await rp(`このYouTubeチャンネルは既にこのルームに登録済みだよ`); return; }
+      // DBに登録
+      const alreadySubed = await dbQuery('SELECT 1 FROM youtube_subscriptions WHERE channel_id=$1', [ytChId]);
+      await dbQuery('INSERT INTO youtube_subscriptions (channel_id, platform, destination_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+        [ytChId, 'cw', roomId]);
+      if(!alreadySubed.rowCount){
+        const ok = await subscribeYoutube(ytChId);
+        if(!ok){ await rp('購読リクエストの送信に失敗したよ。BOT_BASE_URL環境変数を確認してね'); return; }
+      }
+      await rp(`**${ytChId}** の動画通知をこのルームに設定したよ！`); return;
+    }
+
     if(messageBody.startsWith('/event ')){
       const parts=messageBody.substring(7).trim().split(/\s+/);
       const sub=parts[0];
@@ -1717,6 +1755,51 @@ app.get('/api/discord/emojis', async(req,res) => {
 });
 
 // Discord API: メッセージ送信
+// YouTube WebSub コールバックエンドポイント
+// GET: hub.challengeに応答
+app.get('/websub/youtube', (req, res) => {
+  const { 'hub.mode':mode, 'hub.challenge':challenge, 'hub.lease_seconds':leaseSeconds, 'hub.topic':topic } = req.query;
+  if(mode === 'subscribe' && challenge) {
+    // expires_atを更新
+    const channelIdMatch = (topic||'').match(/channel_id=([^&]+)/);
+    if(channelIdMatch){
+      const lease = parseInt(leaseSeconds||432000);
+      const expiresAt = new Date(Date.now() + lease*1000);
+      dbQuery('UPDATE youtube_subscriptions SET expires_at=$1, lease_seconds=$2 WHERE channel_id=$3',
+        [expiresAt.toISOString(), lease, channelIdMatch[1]]).catch(()=>{});
+    }
+    console.log(`[YouTube] WebSub確認: mode=${mode} lease=${leaseSeconds}`);
+    return res.status(200).send(challenge);
+  }
+  res.status(404).send('');
+});
+
+// POST: 新着動画通知受信
+app.post('/websub/youtube', express.text({type:'application/atom+xml'}), async(req, res) => {
+  res.status(200).send('');
+  const channelId = req.query.channel_id || '';
+  const xml = req.body || '';
+  try{
+    // AtomフィードからentryをXMLパース
+    const entries = [];
+    const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+    let m;
+    while((m = entryRe.exec(xml)) !== null){
+      const block = m[1];
+      const videoId   = (block.match(/<yt:videoId>([^<]*)<\/yt:videoId>/))?.[1] ||
+                        (block.match(/<id>[^<]*\/([^/<]+)<\/id>/))?.[1] || '';
+      const title     = (block.match(/<title>([^<]*)<\/title>/))?.[1] || '';
+      const chanName  = (block.match(/<name>([^<]*)<\/name>/))?.[1] || '';
+      const videoUrl  = `https://www.youtube.com/watch?v=${videoId}`;
+      if(videoId) entries.push({videoId, title, channelName:chanName, url:videoUrl, channelId});
+    }
+    for(const entry of entries){
+      console.log(`[YouTube] 新着動画: ${entry.videoId} "${entry.title}"`);
+      await notifyYoutubeVideo(entry);
+    }
+  }catch(e){ console.error('[YouTube] 通知処理エラー:', e.message); }
+});
+
 app.post('/api/discord/send', async(req,res) => {
   const {channelId, content} = req.body;
   if(!channelId||!content) return res.status(400).json({status:'error',message:'channelIdとcontentは必須です'});
@@ -1861,6 +1944,74 @@ async function checkAlarms(){
 // 既送済みJMA情報IDセット（再起動でリセットされるが重複送信は短期間のみ）
 const jmaSentIds = new Set();
 const jmaStartTime = new Date(); // 起動時刻（これより前のエントリは初回スキップ）
+
+// ============================================================
+// YouTube WebSub (PubSubHubbub)
+// ============================================================
+const WEBSUB_HUB = 'https://pubsubhubbub.appspot.com/subscribe';
+const BOT_BASE_URL = process.env.BOT_BASE_URL || '';
+
+async function subscribeYoutube(channelId) {
+  if(!BOT_BASE_URL){ console.error('[YouTube] BOT_BASE_URLが未設定'); return false; }
+  const topic = `https://www.youtube.com/xml/feeds/videos.xml?channel_id=${channelId}`;
+  const callback = `${BOT_BASE_URL}/websub/youtube?channel_id=${channelId}`;
+  try{
+    const params = new URLSearchParams({
+      'hub.mode': 'subscribe',
+      'hub.topic': topic,
+      'hub.callback': callback,
+      'hub.lease_seconds': '432000',
+      'hub.verify': 'async',
+    });
+    const res = await axios.post(WEBSUB_HUB, params.toString(), {
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      timeout: 10000,
+    });
+    console.log(`[YouTube] 購読リクエスト送信: ${channelId} status=${res.status}`);
+    return true;
+  }catch(e){ console.error(`[YouTube] 購読リクエストエラー: ${channelId}`, e.message); return false; }
+}
+
+async function checkYoutubeSubscriptions() {
+  try{
+    // channel_idごとに期限切れ/期限1日以内のものを再購読
+    const r = await dbQuery(`SELECT DISTINCT channel_id FROM youtube_subscriptions WHERE expires_at IS NULL OR expires_at < NOW() + INTERVAL '1 day'`);
+    for(const row of r.rows){
+      console.log(`[YouTube] 再購読: ${row.channel_id}`);
+      await subscribeYoutube(row.channel_id);
+    }
+  }catch(e){ console.error('[YouTube] 購読チェックエラー:', e.message); }
+}
+
+async function notifyYoutubeVideo({videoId, title, channelName, url, channelId}) {
+  const dup = await dbQuery('SELECT 1 FROM youtube_sent_videos WHERE video_id=$1', [videoId]);
+  if(dup.rowCount > 0) return;
+  await dbQuery('INSERT INTO youtube_sent_videos (video_id) VALUES ($1) ON CONFLICT DO NOTHING', [videoId]);
+  await dbQuery('DELETE FROM youtube_sent_videos WHERE id NOT IN (SELECT id FROM youtube_sent_videos ORDER BY notified_at DESC LIMIT 1000)').catch(()=>{});
+
+  // このYouTubeチャンネルの全送信先を取得
+  const subs = await dbQuery('SELECT platform, destination_id FROM youtube_subscriptions WHERE channel_id=$1', [channelId]);
+  if(!subs.rowCount) return;
+
+  for(const s of subs.rows){
+    if(s.platform === 'cw'){
+      // CW送信
+      const msg = `【YouTube新着動画】\n${channelName}\n「${title}」\n${url}`;
+      await CW.send(s.destination_id, msg).catch(()=>{});
+    } else if(s.platform === 'discord' && discordClient){
+      // Discord送信
+      const ch = await discordClient.channels.fetch(s.destination_id).catch(()=>null);
+      if(ch) await ch.send({embeds:[{
+        title: `🎬 ${title}`,
+        url,
+        description: `**${channelName}** が動画を投稿したよ！`,
+        color: 0xff0000,
+        footer: {text: 'YouTube'},
+        timestamp: new Date().toISOString(),
+      }]}).catch(()=>{});
+    }
+  }
+}
 
 async function checkJmaFeed({sendCw=true, sendDiscord=true}={}){
   try{
@@ -2021,7 +2172,7 @@ cron.schedule('* * * * *', async()=>{
   }catch(e){console.error('[ServerStatus] cronエラー:',e.message);}
 });
 
-cron.schedule('*/1 * * * *',  async()=>{ await checkEQ(); await checkAlarms(); await checkNhkNews(); await checkWarnings(); await checkJmaFeed({sendCw:false, sendDiscord:true}); },{timezone:'Asia/Tokyo'});
+cron.schedule('*/1 * * * *',  async()=>{ await checkEQ(); await checkAlarms(); await checkNhkNews(); await checkWarnings(); await checkJmaFeed({sendCw:false, sendDiscord:true}); await checkYoutubeSubscriptions(); },{timezone:'Asia/Tokyo'});
 // 気象庁CW送信は10分おき（0,10,20,30,40,50分）
 cron.schedule('0,10,20,30,40,50 * * * *', async()=>{ await checkJmaFeed({sendCw:true, sendDiscord:false}); },{timezone:'Asia/Tokyo'});
 cron.schedule('45 14 11 3 *', async()=>await send311(true),  {timezone:'Asia/Tokyo'});
@@ -2157,6 +2308,9 @@ if(DISCORD_BOT_TOKEN){
       // チャンネル設定コマンド
       new SlashCommandBuilder().setName('eew').setDescription('このチャンネルを地震情報チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('nhk').setDescription('このチャンネルをNHK速報チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('youtube-notice').setDescription('YouTubeチャンネルの新着動画通知を設定するよ')
+        .addStringOption(o=>o.setName('channel-id').setDescription('YouTubeチャンネルID（UC...）').setRequired(true))
+        .setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('eew-test').setDescription('緊急地震速報のテスト表示をするよ')
         .addNumberOption(o=>o.setName('lat').setDescription('震源の緯度（例: 35.6）').setRequired(true).setMinValue(24).setMaxValue(46))
         .addNumberOption(o=>o.setName('lng').setDescription('震源の経度（例: 137.0）').setRequired(true).setMinValue(122).setMaxValue(150))
@@ -2759,6 +2913,38 @@ if(DISCORD_BOT_TOKEN){
         }catch(e){
           await replyErr(`VCへの参加に失敗したよ…\n${e.message}\n（@discordjs/voiceがインストールされているか確認してね）`);
         }
+        return;
+      }
+
+      // ── youtube-notice ──
+      if(cmd==='youtube-notice'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const ytChId = interaction.options.getString('channel-id');
+        if(!ytChId.startsWith('UC')){await replyErr('チャンネルIDはUCから始まる形式で入力してね');return;}
+        if(!BOT_BASE_URL){await replyErr('BOT_BASE_URL環境変数が未設定だよ（RenderのURLを設定してね）');return;}
+
+        // 既存チェック（同じチャンネル×このDiscordチャンネル）
+        const existing = await dbQuery(
+          'SELECT 1 FROM youtube_subscriptions WHERE channel_id=$1 AND platform=$2 AND destination_id=$3',
+          [ytChId, 'discord', interaction.channelId]);
+        if(existing.rowCount > 0){
+          await replyErr(`このYouTubeチャンネルは既にこのDiscordチャンネルに登録済みだよ`);
+          return;
+        }
+
+        // DBに登録（WebSub購読は未購読の場合のみ送信）
+        const alreadySubed = await dbQuery('SELECT 1 FROM youtube_subscriptions WHERE channel_id=$1', [ytChId]);
+        await dbQuery(
+          'INSERT INTO youtube_subscriptions (channel_id, platform, destination_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+          [ytChId, 'discord', interaction.channelId]);
+
+        // 初めての購読ならWebSubリクエスト送信
+        if(!alreadySubed.rowCount){
+          const ok = await subscribeYoutube(ytChId);
+          if(!ok){ await replyErr('購読リクエストの送信に失敗したよ。BOT_BASE_URL環境変数を確認してね'); return; }
+        }
+        await reply(`**${ytChId}** の動画通知をこのチャンネルに設定したよ！\nYouTubeからの確認が完了したら通知が届くよ`,{title:'YouTube通知設定',color:0xff0000});
         return;
       }
 
