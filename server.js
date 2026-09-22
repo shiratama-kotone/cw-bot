@@ -1373,11 +1373,10 @@ async function processWebHook(data) {
       const alreadySubed = await dbQuery('SELECT 1 FROM youtube_subscriptions WHERE channel_id=$1', [ytChId]);
       await dbQuery('INSERT INTO youtube_subscriptions (channel_id, platform, destination_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
         [ytChId, 'cw', roomId]);
-      if(!alreadySubed.rowCount){
-        const ok = await subscribeYoutube(ytChId);
-        if(!ok){ await rp('購読リクエストの送信に失敗したよ。BOT_BASE_URL環境変数を確認してね'); return; }
-      }
-      await rp(`**${ytChId}** の動画通知をこのルームに設定したよ！`); return;
+      let websubOk = true;
+      if(!alreadySubed.rowCount) websubOk = await subscribeYoutube(ytChId);
+      const note = websubOk ? '' : '\n⚠️ WebSub購読リクエストの送信に失敗したよ。1分後に自動リトライするよ';
+      await rp(`${ytChId} の動画通知をこのルームに設定したよ！${note}`); return;
     }
 
     if(messageBody.startsWith('/event ')){
@@ -1961,15 +1960,19 @@ async function subscribeYoutube(channelId) {
       'hub.topic': topic,
       'hub.callback': callback,
       'hub.lease_seconds': '432000',
-      'hub.verify': 'async',
     });
     const res = await axios.post(WEBSUB_HUB, params.toString(), {
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
       timeout: 10000,
+      // 202 Acceptedも成功扱い（PubSubHubbubの正常レスポンス）
+      validateStatus: (s) => s >= 200 && s < 300,
     });
-    console.log(`[YouTube] 購読リクエスト送信: ${channelId} status=${res.status}`);
+    console.log(`[YouTube] 購読リクエスト成功: ${channelId} status=${res.status}`);
     return true;
-  }catch(e){ console.error(`[YouTube] 購読リクエストエラー: ${channelId}`, e.message); return false; }
+  }catch(e){
+    console.error(`[YouTube] 購読リクエストエラー: ${channelId}`, e.response?.status, e.message);
+    return false;
+  }
 }
 
 async function checkYoutubeSubscriptions() {
@@ -2933,18 +2936,19 @@ if(DISCORD_BOT_TOKEN){
           return;
         }
 
-        // DBに登録（WebSub購読は未購読の場合のみ送信）
+        // DBに登録（まず保存してからWebSub購読）
         const alreadySubed = await dbQuery('SELECT 1 FROM youtube_subscriptions WHERE channel_id=$1', [ytChId]);
         await dbQuery(
           'INSERT INTO youtube_subscriptions (channel_id, platform, destination_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
           [ytChId, 'discord', interaction.channelId]);
 
         // 初めての購読ならWebSubリクエスト送信
+        let websubOk = true;
         if(!alreadySubed.rowCount){
-          const ok = await subscribeYoutube(ytChId);
-          if(!ok){ await replyErr('購読リクエストの送信に失敗したよ。BOT_BASE_URL環境変数を確認してね'); return; }
+          websubOk = await subscribeYoutube(ytChId);
         }
-        await reply(`**${ytChId}** の動画通知をこのチャンネルに設定したよ！\nYouTubeからの確認が完了したら通知が届くよ`,{title:'YouTube通知設定',color:0xff0000});
+        const note = websubOk ? '' : '\n⚠️ WebSub購読リクエストの送信に失敗したよ。1分後に自動リトライするよ';
+        await reply(`**${ytChId}** の動画通知をこのチャンネルに設定したよ！\nYouTubeからの確認が完了したら通知が届くよ${note}`,{title:'YouTube通知設定',color:0xff0000});
         return;
       }
 
