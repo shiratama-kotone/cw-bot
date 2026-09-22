@@ -1370,13 +1370,14 @@ async function processWebHook(data) {
         [ytChId, 'cw', roomId]);
       if(existing.rowCount > 0){ await rp(`このYouTubeチャンネルは既にこのルームに登録済みだよ`); return; }
       // DBに登録
+      const ytChName = await fetchYoutubeChannelName(ytChId);
       const alreadySubed = await dbQuery('SELECT 1 FROM youtube_subscriptions WHERE channel_id=$1', [ytChId]);
       await dbQuery('INSERT INTO youtube_subscriptions (channel_id, platform, destination_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
         [ytChId, 'cw', roomId]);
       let websubOk = true;
       if(!alreadySubed.rowCount) websubOk = await subscribeYoutube(ytChId);
       const note = websubOk ? '' : '\n⚠️ WebSub購読リクエストの送信に失敗したよ。1分後に自動リトライするよ';
-      await rp(`${ytChId} の動画通知をこのルームに設定したよ！${note}`); return;
+      await rp(`${ytChName} の動画通知をこのルームに設定したよ！${note}`); return;
     }
 
     if(messageBody.startsWith('/event ')){
@@ -1949,6 +1950,14 @@ const jmaStartTime = new Date(); // 起動時刻（これより前のエント�
 // ============================================================
 const WEBSUB_HUB = 'https://pubsubhubbub.appspot.com/subscribe';
 const BOT_BASE_URL = process.env.BOT_BASE_URL || '';
+
+async function fetchYoutubeChannelName(channelId) {
+  try{
+    const res = await axios.get(`https://www.youtube.com/xml/feeds/videos.xml?channel_id=${channelId}`, {timeout:8000});
+    const m = res.data.match(/<author>\s*<name>([^<]+)<\/name>/);
+    return m ? m[1].trim() : channelId;
+  }catch{ return channelId; }
+}
 
 async function subscribeYoutube(channelId) {
   if(!BOT_BASE_URL){ console.error('[YouTube] BOT_BASE_URLが未設定'); return false; }
@@ -2936,6 +2945,9 @@ if(DISCORD_BOT_TOKEN){
           return;
         }
 
+        // チャンネル名取得
+        const ytChName = await fetchYoutubeChannelName(ytChId);
+
         // DBに登録（まず保存してからWebSub購読）
         const alreadySubed = await dbQuery('SELECT 1 FROM youtube_subscriptions WHERE channel_id=$1', [ytChId]);
         await dbQuery(
@@ -2944,11 +2956,9 @@ if(DISCORD_BOT_TOKEN){
 
         // 初めての購読ならWebSubリクエスト送信
         let websubOk = true;
-        if(!alreadySubed.rowCount){
-          websubOk = await subscribeYoutube(ytChId);
-        }
+        if(!alreadySubed.rowCount) websubOk = await subscribeYoutube(ytChId);
         const note = websubOk ? '' : '\n⚠️ WebSub購読リクエストの送信に失敗したよ。1分後に自動リトライするよ';
-        await reply(`**${ytChId}** の動画通知をこのチャンネルに設定したよ！\nYouTubeからの確認が完了したら通知が届くよ${note}`,{title:'YouTube通知設定',color:0xff0000});
+        await reply(`**${ytChName}** の動画通知をこのチャンネルに設定したよ！\nYouTubeからの確認が完了したら通知が届くよ${note}`,{title:'YouTube通知設定',color:0xff0000});
         return;
       }
 
