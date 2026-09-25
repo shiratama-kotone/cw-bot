@@ -2902,19 +2902,27 @@ if(DISCORD_BOT_TOKEN){
         const rolesR = await dbQuery('SELECT role_id FROM contact_roles WHERE guild_id=$1',[interaction.guild.id]);
         const adminRoleIds = rolesR.rows.map(r=>r.role_id);
 
-        // チャンネル名生成（内容から、最大80文字、はみ出たら(略)）
-        const rawName = msg.replace(/[^\w\u3000-\u9fff\u30a0-\u30ff\u3041-\u3096ー]/g,'-').replace(/-+/g,'-').substring(0,80);
-        const chName = (rawName.length < msg.length && msg.length > 80)
-          ? rawName.substring(0,76)+'(略)'
-          : (rawName||'contact');
+        // チャンネル名生成（Discordは100文字まで、使えない文字はハイフンに置換）
+        const cleanMsg = msg
+          .replace(/[\s\u3000]+/g, '-')          // 空白→ハイフン
+          .replace(/[^\w\u30a0-\u30ff\u3041-\u309f\u4e00-\u9fff\uff00-\uffefー-]/g, '')  // 使えない文字を削除
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '')
+          .substring(0, 96);
+        const chName = cleanMsg.length < msg.replace(/\s/g,'').length && msg.length > 96
+          ? cleanMsg.substring(0, 92) + '略'
+          : (cleanMsg || 'contact');
 
         // 権限設定: @everyone非表示、本人・管理者ロール・bot閲覧可
         const { PermissionsBitField, ChannelType } = require('discord.js');
+        // ロールキャッシュを最新化して存在するロールIDのみ使用
+        await interaction.guild.roles.fetch();
+        const validRoleIds = adminRoleIds.filter(rid => interaction.guild.roles.cache.has(rid));
         const overwrites = [
           {id: interaction.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel]},
           {id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]},
           {id: discordClient.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]},
-          ...adminRoleIds.map(rid=>({id:rid, allow:[PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]})),
+          ...validRoleIds.map(rid=>({id:rid, allow:[PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]})),
         ];
 
         const newCh = await interaction.guild.channels.create({
