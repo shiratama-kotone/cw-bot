@@ -587,6 +587,12 @@ async function initializeDatabase() {
       video_id TEXT NOT NULL UNIQUE,
       notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
 
+    await dbQuery(`CREATE TABLE IF NOT EXISTS contact_roles (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      UNIQUE(guild_id, role_id))`);
+
     console.log('[DB] テーブル初期化完了');
   } catch (e) { console.error('[DB] 初期化エラー:', e.message); }
 }
@@ -2373,6 +2379,10 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('bank-withdraw').setDescription('銀行から引き出す').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
       (()=>{const cmd=new SlashCommandBuilder().setName('role-panel').setDescription('ロールパネルを作成するよ（最大24ロール）').addStringOption(o=>o.setName('title').setDescription('タイトル').setRequired(true));for(let i=1;i<=24;i++)cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));return cmd.setDefaultMemberPermissions(ADMIN_PERM);})(),
       new SlashCommandBuilder().setName('verify').setDescription('認証パネルを作成するよ').addRoleOption(o=>o.setName('role').setDescription('認証時に付与するロール').setRequired(true)).addStringOption(o=>o.setName('title').setDescription('タイトル（省略可）')).addStringOption(o=>o.setName('description').setDescription('説明文（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('contact').setDescription('管理者に連絡するよ').addStringOption(o=>o.setName('message').setDescription('管理者への内容').setRequired(true)),
+      new SlashCommandBuilder().setName('contact-role').setDescription('問い合わせチャンネルに追加する管理者ロールを設定するよ（複数追加可）').addRoleOption(o=>o.setName('role').setDescription('管理者ロール').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('contact-role-remove').setDescription('問い合わせチャンネルの管理者ロールを削除するよ').addRoleOption(o=>o.setName('role').setDescription('削除するロール').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('contact-role-list').setDescription('問い合わせチャンネルに設定された管理者ロール一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
     ].map(c=>c.toJSON());
 
     try{
@@ -2429,7 +2439,7 @@ if(DISCORD_BOT_TOKEN){
     };
 
     try{
-      await interaction.deferReply({ephemeral: cmd==='fabrication'});
+      await interaction.deferReply({ephemeral: cmd==='fabrication' || cmd==='contact'});
 
       // ── /help ──
       if(cmd==='help'){
@@ -2446,6 +2456,7 @@ if(DISCORD_BOT_TOKEN){
           '`/scratch-project [id]` - Scratchプロジェクト情報',
           '`/song-typing-info [id]` - 歌詞タイピング情報',
           '`/alarm [datetime] [message]` - アラーム設定',
+          '`/contact [message]` - 管理者に問い合わせる（専用チャンネルが作られるよ）',
           '`/event add/list/delete` - イベント管理',
           '',
           '`/join` / `/leave` - VCに参加・退出',
@@ -2853,6 +2864,81 @@ if(DISCORD_BOT_TOKEN){
       }
 
       // ── join（集合コマンド） ──
+      // ── contact-role / contact-role-remove / contact-role-list ──
+      if(cmd==='contact-role'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const role=interaction.options.getRole('role');
+        await dbQuery('INSERT INTO contact_roles (guild_id,role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[interaction.guild.id,role.id]);
+        await reply(`<@&${role.id}> を問い合わせチャンネルの管理者ロールに追加したよ`,{title:'ロール追加',color:0x2ecc71});return;
+      }
+      if(cmd==='contact-role-remove'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const role=interaction.options.getRole('role');
+        const r=await dbQuery('DELETE FROM contact_roles WHERE guild_id=$1 AND role_id=$2 RETURNING role_id',[interaction.guild.id,role.id]);
+        if(!r.rowCount){await replyErr('そのロールは設定されていないよ');return;}
+        await reply(`<@&${role.id}> を管理者ロールから削除したよ`,{title:'ロール削除',color:0xe74c3c});return;
+      }
+      if(cmd==='contact-role-list'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const r=await dbQuery('SELECT role_id FROM contact_roles WHERE guild_id=$1 ORDER BY id',[interaction.guild.id]);
+        if(!r.rowCount){await reply('管理者ロールはまだ設定されていないよ',{title:'問い合わせ管理者ロール一覧'});return;}
+        await reply(r.rows.map(row=>`<@&${row.role_id}>`).join('\n'),{title:'問い合わせ管理者ロール一覧',color:0x7289da});return;
+      }
+
+      // ── contact ──
+      if(cmd==='contact'){
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const msg = interaction.options.getString('message');
+
+        // 管理者用カテゴリを取得（/adminで設定したチャンネルの親カテゴリ）
+        const adminChId = await getGuildChannel(interaction.guild.id, 'admin');
+        const adminCh = adminChId ? interaction.guild.channels.cache.get(adminChId) : null;
+        const categoryId = adminCh?.parentId || null;
+
+        // 管理者ロール一覧を取得
+        const rolesR = await dbQuery('SELECT role_id FROM contact_roles WHERE guild_id=$1',[interaction.guild.id]);
+        const adminRoleIds = rolesR.rows.map(r=>r.role_id);
+
+        // チャンネル名生成（内容から、最大80文字、はみ出たら(略)）
+        const rawName = msg.replace(/[^\w\u3000-\u9fff\u30a0-\u30ff\u3041-\u3096ー]/g,'-').replace(/-+/g,'-').substring(0,80);
+        const chName = (rawName.length < msg.length && msg.length > 80)
+          ? rawName.substring(0,76)+'(略)'
+          : (rawName||'contact');
+
+        // 権限設定: @everyone非表示、本人・管理者ロール・bot閲覧可
+        const { PermissionsBitField, ChannelType } = require('discord.js');
+        const overwrites = [
+          {id: interaction.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel]},
+          {id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]},
+          {id: discordClient.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]},
+          ...adminRoleIds.map(rid=>({id:rid, allow:[PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]})),
+        ];
+
+        const newCh = await interaction.guild.channels.create({
+          name: chName,
+          type: ChannelType.GuildText,
+          parent: categoryId||undefined,
+          permissionOverwrites: overwrites,
+          reason: `問い合わせ: ${interaction.user.tag}`,
+        });
+
+        // チャンネルに内容を投稿
+        await newCh.send({embeds:[{
+          title: '📬 問い合わせ',
+          description: msg,
+          color: 0xf39c12,
+          author: {name:`${interaction.user.tag}（${interaction.member.displayName}）`, icon_url:interaction.user.displayAvatarURL()},
+          footer: {text: new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})},
+        }]});
+        await newCh.send(`<@${interaction.user.id}>${adminRoleIds.map(r=>`<@&${r}>`).join('')}`);
+
+        await reply(`問い合わせチャンネルを作成したよ！ <#${newCh.id}> で管理者と話せるよ`,{title:'問い合わせ受付',color:0x2ecc71});
+        return;
+      }
+
       if(cmd==='fabrication'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
         if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
