@@ -1731,6 +1731,49 @@ loadGuilds();
 </html>`);
 });
 
+// Discord サーバー一覧API
+app.get('/api/discord/guilds', async(req,res)=>{
+  if(!discordClient) return res.status(503).json({status:'error',message:'Discord bot未起動'});
+  try{
+    const guilds=[...discordClient.guilds.cache.values()].map(g=>({id:g.id,name:g.name}));
+    res.json(guilds);
+  }catch(e){res.status(500).json({status:'error',message:e.message});}
+});
+
+// Discord チャンネル一覧API
+app.get('/api/discord/channels', async(req,res)=>{
+  const {guild} = req.query;
+  if(!guild) return res.status(400).json({status:'error',message:'guildが必要です'});
+  if(!discordClient) return res.status(503).json({status:'error',message:'Discord bot未起動'});
+  try{
+    const g=await discordClient.guilds.fetch(guild).catch(()=>null);
+    if(!g) return res.status(404).json({status:'error',message:'サーバーが見つかりません'});
+    await g.channels.fetch();
+    const channels=[...g.channels.cache.values()]
+      .filter(c=>c.type===0||c.type===5) // テキストチャンネル・アナウンスのみ
+      .sort((a,b)=>a.position-b.position)
+      .map(c=>({id:c.id,name:c.name}));
+    res.json(channels);
+  }catch(e){res.status(500).json({status:'error',message:e.message});}
+});
+
+// Discord 絵文字一覧API
+app.get('/api/discord/emojis', async(req,res)=>{
+  const {guild} = req.query;
+  if(!guild) return res.status(400).json({status:'error',message:'guildが必要です'});
+  if(!discordClient) return res.status(503).json({status:'error',message:'Discord bot未起動'});
+  try{
+    const g=discordClient.guilds.cache.get(guild);
+    if(!g) return res.json([]);
+    const emojis=[...g.emojis.cache.values()].map(e=>({
+      id:e.id, name:e.name,
+      url:e.imageURL(),
+      code:`<${e.animated?'a':''}:${e.name}:${e.id}>`,
+    }));
+    res.json(emojis);
+  }catch(e){res.status(500).json({status:'error',message:e.message});}
+});
+
 // CWルーム一覧API
 app.get('/api/cw/rooms', async(req,res)=>{
   try{
