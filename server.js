@@ -1488,375 +1488,290 @@ app.get('/msg-post', (req,res) => {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>メッセージ送信</title>
 <style>
-*{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#1a1a2e;min-height:100vh;display:flex;justify-content:center;align-items:flex-start;padding:30px 20px;}
-.card{background:#16213e;border-radius:16px;padding:32px;width:100%;max-width:640px;box-shadow:0 8px 32px rgba(0,0,0,.4);}
-h1{color:#e2e8f0;font-size:22px;margin-bottom:24px;text-align:center;}
-.tabs{display:flex;gap:8px;margin-bottom:24px;}
-.tab{flex:1;padding:10px;border:2px solid #2d3748;border-radius:10px;background:transparent;color:#a0aec0;cursor:pointer;font-size:14px;transition:.2s;}
-.tab.active{border-color:#667eea;background:#667eea22;color:#e2e8f0;}
-.section{display:none;} .section.active{display:block;}
-label{display:block;color:#a0aec0;font-size:13px;margin-bottom:6px;margin-top:16px;}
-input,select,textarea{width:100%;padding:10px 14px;background:#0f3460;border:1.5px solid #2d3748;border-radius:8px;color:#e2e8f0;font-size:14px;transition:.2s;}
-input:focus,select:focus,textarea:focus{outline:none;border-color:#667eea;}
-select option{background:#0f3460;}
-textarea{min-height:130px;resize:vertical;font-family:inherit;}
-.row{display:flex;gap:10px;}
-.row>*{flex:1;}
-.emoji-bar{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:120px;overflow-y:auto;background:#0f3460;border-radius:8px;padding:8px;}
-.emoji-btn{background:#1a2744;border:1px solid #2d3748;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:18px;transition:.15s;}
-.emoji-btn:hover{background:#2d3748;}
-.send-btn{width:100%;margin-top:20px;padding:13px;background:linear-gradient(135deg,#667eea,#764ba2);border:none;border-radius:10px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;transition:.2s;}
-.send-btn:hover{opacity:.9;transform:translateY(-1px);}
-.send-btn:disabled{opacity:.5;cursor:not-allowed;transform:none;}
-.msg{padding:12px;border-radius:8px;margin-top:14px;font-size:13px;display:none;}
-.msg.ok{background:#1a3a1a;color:#68d391;border:1px solid #2f6a2f;}
-.msg.err{background:#3a1a1a;color:#fc8181;border:1px solid #6a2f2f;}
-.hint{font-size:11px;color:#718096;margin-top:4px;}
-.channel-list{max-height:200px;overflow-y:auto;margin-top:6px;}
-.channel-item{padding:8px 12px;border-radius:6px;cursor:pointer;color:#a0aec0;font-size:13px;transition:.15s;}
-.channel-item:hover{background:#1e3a6e;color:#e2e8f0;}
-.channel-item.selected{background:#667eea33;color:#e2e8f0;}
-.badge{font-size:10px;background:#2d3748;padding:2px 6px;border-radius:4px;margin-left:6px;color:#718096;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#1a202c;color:#e2e8f0;font-family:'Segoe UI',sans-serif;padding:16px}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tab{padding:8px 20px;border-radius:6px;cursor:pointer;background:#2d3748;border:none;color:#e2e8f0;font-size:14px}
+.tab.active{background:#4299e1}
+.section{display:none;flex-direction:column;gap:10px}
+.section.active{display:flex}
+label{font-size:13px;color:#a0aec0;margin-bottom:2px}
+select,input,textarea{width:100%;padding:8px;background:#2d3748;color:#e2e8f0;border:1px solid #4a5568;border-radius:6px;font-size:14px}
+textarea{height:100px;resize:vertical}
+.send-btn{padding:10px;background:#4299e1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:bold}
+.send-btn:hover{background:#3182ce}
+.msg-area{background:#2d3748;border-radius:8px;padding:10px;height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;border:1px solid #4a5568}
+.msg-item{display:flex;gap:8px;align-items:flex-start}
+.msg-avatar{width:32px;height:32px;border-radius:50%;background:#4a5568;object-fit:cover;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#e2e8f0}
+.msg-content{flex:1;min-width:0}
+.msg-name{font-size:11px;color:#a0aec0;margin-bottom:2px}
+.msg-body{font-size:13px;white-space:pre-wrap;word-break:break-word}
+.msg-time{font-size:10px;color:#718096;margin-top:2px}
+.status{font-size:13px;padding:6px;border-radius:4px;display:none}
+.status.ok{background:#2f855a;display:block}
+.status.ng{background:#c53030;display:block}
+.badge{background:#4a5568;font-size:11px;padding:2px 6px;border-radius:4px;margin-left:4px}
+.emoji-bar{display:flex;flex-wrap:wrap;gap:4px;max-height:80px;overflow-y:auto}
+.emoji-btn{background:#2d3748;border:none;cursor:pointer;padding:2px;border-radius:4px}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
 </style>
 </head>
 <body>
-<div class="card">
-  <h1>メッセージ送信</h1>
-  <div class="tabs">
-    <button class="tab active" onclick="switchTab('cw')">Chatwork</button>
-    <button class="tab" onclick="switchTab('dc')">Discord</button>
-  </div>
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('cw')">Chatwork</button>
+  <button class="tab" onclick="switchTab('dc')">Discord</button>
+</div>
+<div id="msg" class="status"></div>
 
-  <!-- Chatwork -->
-  <div id="sec-cw" class="section active">
-    <label>ルームID</label>
-    <input id="cw-room" type="text" placeholder="例: 415060980">
-    <label>メッセージ</label>
-    <textarea id="cw-msg" placeholder="送信内容を入力してください"></textarea>
-    <p class="hint">Chatworkタグも使えるよ（[info][title]...[/title]...[/info] など）</p>
-    <button class="send-btn" onclick="sendCw()">Chatworkに送信</button>
-  </div>
+<!-- Chatwork -->
+<div id="sec-cw" class="section active">
+  <label>ルーム・DM</label>
+  <select id="cw-room" onchange="onCwRoomChange()">
+    <option value="">読み込み中...</option>
+  </select>
+  <div class="msg-area" id="cw-preview"><span style="color:#718096;font-size:12px">ルームを選択するとメッセージが表示されるよ</span></div>
+  <label>メッセージ</label>
+  <textarea id="cw-msg" placeholder="送信内容"></textarea>
+  <button class="send-btn" onclick="sendCw()">Chatworkに送信</button>
+</div>
 
-  <!-- Discord -->
-  <div id="sec-dc" class="section">
-    <label>サーバー</label>
-    <select id="dc-guild" onchange="onGuildChange()">
-      <option value="">-- サーバーを選択 --</option>
-    </select>
-    <label>またはサーバーIDを直接入力 <span class="badge">入力するとこちらが優先</span></label>
-    <input id="dc-guild-manual" type="text" placeholder="サーバーID（例: 1357745161907470336）" oninput="onManualGuildInput()">
-
-    <label>チャンネル</label>
-    <select id="dc-channel">
-      <option value="">-- チャンネルを選択 --</option>
-    </select>
-
-    <label>またはユーザーID（DM送信）<span class="badge">入力するとDM優先</span></label>
-    <input id="dc-user-id" type="text" placeholder="DiscordユーザーID（例: 123456789012345678）">
-
-    <label>メッセージ <span class="badge">スラッシュコマンドも送信可（例: /ban user:123 reason:test）</span></label>
-    <textarea id="dc-msg" placeholder="送信内容を入力してください&#10;コマンドもそのまま入力できるよ（例: /help）"></textarea>
-
-    <label>ファイル添付（任意）</label>
-    <input id="dc-file" type="file" multiple style="background:#2d3748;color:#e2e8f0;border:1px solid #4a5568;border-radius:6px;padding:6px;width:100%;box-sizing:border-box;">
-
-    <label>絵文字 <span class="badge">クリックで挿入</span></label>
-    <div id="emoji-bar" class="emoji-bar"><span style="color:#4a5568;font-size:12px">サーバーを選択すると絵文字が表示されるよ</span></div>
-
-    <button class="send-btn" onclick="sendDc()">Discordに送信</button>
-  </div>
-
-  <div id="msg-box" class="msg"></div>
+<!-- Discord -->
+<div id="sec-dc" class="section">
+  <label>サーバー</label>
+  <select id="dc-guild" onchange="onGuildChange()">
+    <option value="">-- サーバーを選択 --</option>
+  </select>
+  <label>またはサーバーIDを直接入力 <span class="badge">入力するとこちらが優先</span></label>
+  <input id="dc-guild-manual" type="text" placeholder="サーバーID" oninput="onManualGuildInput()">
+  <label>チャンネル</label>
+  <select id="dc-channel" onchange="onDcChannelChange()">
+    <option value="">-- チャンネルを選択 --</option>
+  </select>
+  <label>またはユーザーID（DM送信）<span class="badge">入力するとDM優先</span></label>
+  <input id="dc-user-id" type="text" placeholder="DiscordユーザーID" oninput="onDcUserInput()">
+  <div class="msg-area" id="dc-preview"><span style="color:#718096;font-size:12px">チャンネルを選択するとメッセージが表示されるよ</span></div>
+  <label>メッセージ <span class="badge">コマンドも送信可</span></label>
+  <textarea id="dc-msg" placeholder="送信内容"></textarea>
+  <label>ファイル添付（任意）</label>
+  <input id="dc-file" type="file" multiple>
+  <label>絵文字 <span class="badge">クリックで挿入</span></label>
+  <div id="emoji-bar" class="emoji-bar"><span style="color:#718096;font-size:12px">サーバーを選択すると表示されるよ</span></div>
+  <button class="send-btn" onclick="sendDc()">Discordに送信</button>
 </div>
 
 <script>
-let currentTab = 'cw';
-function switchTab(tab){
-  currentTab = tab;
-  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['cw','dc'][i]===tab));
-  document.getElementById('sec-cw').classList.toggle('active',tab==='cw');
-  document.getElementById('sec-dc').classList.toggle('active',tab==='dc');
+function switchTab(t){
+  document.querySelectorAll('.tab').forEach((b,i)=>b.classList.toggle('active',['cw','dc'][i]===t));
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.getElementById('sec-'+t).classList.add('active');
 }
+function showMsg(m,ok){const el=document.getElementById('msg');el.textContent=m;el.className='status '+(ok?'ok':'ng');setTimeout(()=>el.className='status',4000);}
 
-function showMsg(text, ok){
-  const el = document.getElementById('msg-box');
-  el.textContent = text;
-  el.className = 'msg ' + (ok?'ok':'err');
-  el.style.display = 'block';
-  setTimeout(()=>el.style.display='none', 5000);
-}
-
-// サーバー一覧を取得
-async function loadGuilds(){
-  const sel = document.getElementById('dc-guild');
+// ── Chatwork ──
+async function loadCwRooms(){
+  const sel=document.getElementById('cw-room');
   try{
-    const r = await fetch('/api/discord/guilds');
-    const guilds = await r.json();
-    sel.innerHTML = '<option value="">-- サーバーを選択 --</option>';
-    guilds.forEach(g=>{
-      const o = document.createElement('option');
-      o.value = g.id; o.textContent = g.name;
+    const r=await fetch('/api/cw/rooms'); const rooms=await r.json();
+    sel.innerHTML='<option value="">-- ルームを選択 --</option>';
+    rooms.sort((a,b)=>a.name.localeCompare(b.name,'ja')).forEach(rm=>{
+      const o=document.createElement('option');
+      o.value=rm.id;
+      o.textContent=(rm.type==='direct'?'DM: ':rm.type==='my'?'マイ: ':'')+rm.name+(rm.unread>0?' ('+rm.unread+')':'');
       sel.appendChild(o);
     });
-  }catch(e){ sel.innerHTML = '<option value="">サーバー取得失敗</option>'; }
+  }catch(e){sel.innerHTML='<option value="">取得失敗</option>';}
+}
+async function onCwRoomChange(){
+  const room=document.getElementById('cw-room').value;
+  if(!room)return;
+  await loadCwMessages(room);
+}
+async function loadCwMessages(room){
+  const preview=document.getElementById('cw-preview');
+  preview.innerHTML='<span style="color:#a0aec0;font-size:12px">読み込み中...</span>';
+  try{
+    const r=await fetch('/api/cw/messages?room='+room);
+    const msgs=await r.json();
+    if(!msgs.length){preview.innerHTML='<span style="color:#718096;font-size:12px">メッセージなし</span>';return;}
+    preview.innerHTML='';
+    msgs.forEach(m=>{
+      const d=document.createElement('div');d.className='msg-item';
+      const t=new Date(m.time*1000).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      d.innerHTML='<div class="msg-avatar">'+m.name.charAt(0)+'</div><div class="msg-content"><div class="msg-name">'+escHtml(m.name)+'</div><div class="msg-body">'+escHtml(m.body.substring(0,200))+'</div><div class="msg-time">'+t+'</div></div>';
+      preview.appendChild(d);
+    });
+    preview.scrollTop=preview.scrollHeight;
+  }catch(e){preview.innerHTML='<span style="color:#fc8181;font-size:12px">取得失敗: '+e.message+'</span>';}
+}
+async function sendCw(){
+  const roomid=document.getElementById('cw-room').value;
+  const msg=document.getElementById('cw-msg').value;
+  if(!roomid){showMsg('ルームを選択してね',false);return;}
+  if(!msg){showMsg('メッセージを入力してね',false);return;}
+  const btn=document.querySelector('#sec-cw .send-btn');btn.disabled=true;btn.textContent='送信中...';
+  try{
+    const r=await fetch('/msg-post',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomid,msg})});
+    const d=await r.json();
+    if(d.status==='success'){showMsg('送信したよ！',true);document.getElementById('cw-msg').value='';await loadCwMessages(roomid);}
+    else showMsg('エラー: '+d.message,false);
+  }catch(e){showMsg('エラー: '+e.message,false);}
+  btn.disabled=false;btn.textContent='Chatworkに送信';
 }
 
+// ── Discord ──
+async function loadGuilds(){
+  const sel=document.getElementById('dc-guild');
+  try{
+    const r=await fetch('/api/discord/guilds');const guilds=await r.json();
+    guilds.forEach(g=>{const o=document.createElement('option');o.value=g.id;o.textContent=g.name;sel.appendChild(o);});
+  }catch{}
+}
 async function onGuildChange(){
-  document.getElementById('dc-guild-manual').value = ''; // プルダウン選択時は手入力をクリア
+  document.getElementById('dc-guild-manual').value='';
   await loadGuildDetails(document.getElementById('dc-guild').value);
 }
-
-let manualGuildTimer = null;
+let manualTimer=null;
 function onManualGuildInput(){
-  clearTimeout(manualGuildTimer);
-  const val = document.getElementById('dc-guild-manual').value.trim();
-  manualGuildTimer = setTimeout(()=>{
-    if(val){ document.getElementById('dc-guild').value=''; loadGuildDetails(val); }
-  }, 500);
+  clearTimeout(manualTimer);
+  const v=document.getElementById('dc-guild-manual').value.trim();
+  manualTimer=setTimeout(()=>{if(v){document.getElementById('dc-guild').value='';loadGuildDetails(v);}},500);
 }
-
+function onDcUserInput(){
+  // ユーザーID入力時はプレビューをDM不可表示
+  const uid=document.getElementById('dc-user-id').value.trim();
+  if(uid){document.getElementById('dc-preview').innerHTML='<span style="color:#718096;font-size:12px">DM送信はプレビュー非対応だよ</span>';}
+}
 async function loadGuildDetails(guildId){
-  const chSel = document.getElementById('dc-channel');
-  const emojiBar = document.getElementById('emoji-bar');
-  chSel.innerHTML = '<option value="">読み込み中...</option>';
-  emojiBar.innerHTML = '<span style="color:#4a5568;font-size:12px">読み込み中...</span>';
-  if(!guildId){ chSel.innerHTML='<option value="">-- チャンネルを選択 --</option>'; emojiBar.innerHTML='<span style="color:#4a5568;font-size:12px">サーバーを選択すると絵文字が表示されるよ</span>'; return; }
-  // チャンネル取得
+  const chSel=document.getElementById('dc-channel');
+  const emojiBar=document.getElementById('emoji-bar');
+  chSel.innerHTML='<option value="">読み込み中...</option>';
+  if(!guildId){chSel.innerHTML='<option value="">-- チャンネルを選択 --</option>';return;}
   try{
-    const r = await fetch('/api/discord/channels?guild='+guildId);
-    const channels = await r.json();
-    chSel.innerHTML = '<option value="">-- チャンネルを選択 --</option>';
-    channels.forEach(c=>{
-      const o = document.createElement('option');
-      o.value = c.id; o.textContent = '#'+c.name;
-      chSel.appendChild(o);
-    });
-  }catch(e){ chSel.innerHTML='<option value="">チャンネル取得失敗</option>'; }
-  // 絵文字取得
+    const r=await fetch('/api/discord/channels?guild='+guildId);
+    const channels=await r.json();
+    chSel.innerHTML='<option value="">-- チャンネルを選択 --</option>';
+    channels.forEach(c=>{const o=document.createElement('option');o.value=c.id;o.textContent='#'+c.name;chSel.appendChild(o);});
+  }catch{chSel.innerHTML='<option value="">取得失敗</option>';}
   try{
-    const r = await fetch('/api/discord/emojis?guild='+guildId);
-    const emojis = await r.json();
-    if(!emojis.length){ emojiBar.innerHTML='<span style="color:#4a5568;font-size:12px">絵文字なし</span>'; return; }
-    emojiBar.innerHTML = '';
+    const r=await fetch('/api/discord/emojis?guild='+guildId);const emojis=await r.json();
+    emojiBar.innerHTML='';
+    if(!emojis.length){emojiBar.innerHTML='<span style="color:#718096;font-size:12px">絵文字なし</span>';return;}
     emojis.forEach(e=>{
-      const btn = document.createElement('button');
-      btn.className = 'emoji-btn';
-      btn.title = e.name;
-      if(e.url){ const img=document.createElement('img');img.src=e.url;img.style.width='20px';img.style.height='20px';img.style.verticalAlign='middle';btn.appendChild(img); }
-      else btn.textContent = e.char;
-      btn.onclick = ()=>{
-        const ta = document.getElementById('dc-msg');
-        const ins = e.code || e.char;
-        const pos = ta.selectionStart;
-        ta.value = ta.value.slice(0,pos)+ins+ta.value.slice(ta.selectionEnd);
-        ta.selectionStart = ta.selectionEnd = pos+ins.length;
-        ta.focus();
-      };
+      const btn=document.createElement('button');btn.className='emoji-btn';btn.title=e.name;
+      if(e.url){const img=document.createElement('img');img.src=e.url;img.style.cssText='width:20px;height:20px;vertical-align:middle';btn.appendChild(img);}
+      else btn.textContent=e.char;
+      btn.onclick=()=>{const ta=document.getElementById('dc-msg');const ins=e.code||e.char;const s=ta.selectionStart;ta.value=ta.value.substring(0,s)+ins+ta.value.substring(ta.selectionEnd);ta.selectionStart=ta.selectionEnd=s+ins.length;ta.focus();};
       emojiBar.appendChild(btn);
     });
-  }catch(e){ emojiBar.innerHTML='<span style="color:#4a5568;font-size:12px">絵文字取得失敗</span>'; }
+  }catch{}
 }
-
-async function sendCw(){
-  const roomid = document.getElementById('cw-room').value.trim();
-  const msg = document.getElementById('cw-msg').value;
-  if(!roomid||!msg){ showMsg('ルームIDとメッセージを入力してね', false); return; }
-  const btn = document.querySelector('#sec-cw .send-btn');
-  btn.disabled = true; btn.textContent = '送信中...';
+async function onDcChannelChange(){
+  const ch=document.getElementById('dc-channel').value;
+  if(!ch)return;
+  await loadDcMessages(ch);
+}
+async function loadDcMessages(channelId){
+  const preview=document.getElementById('dc-preview');
+  preview.innerHTML='<span style="color:#a0aec0;font-size:12px">読み込み中...</span>';
   try{
-    const r = await fetch('/msg-post', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roomid,msg})});
-    const d = await r.json();
-    if(d.status==='success') showMsg('Chatworkに送信したよ！(ID:'+d.messageId+')', true);
-    else showMsg('エラー: '+d.message, false);
-  }catch(e){ showMsg('エラー: '+e.message, false); }
-  btn.disabled = false; btn.textContent = 'Chatworkに送信';
+    const r=await fetch('/api/discord/messages?channel='+channelId);
+    const msgs=await r.json();
+    if(!msgs.length){preview.innerHTML='<span style="color:#718096;font-size:12px">メッセージなし</span>';return;}
+    preview.innerHTML='';
+    [...msgs].reverse().forEach(m=>{
+      const d=document.createElement('div');d.className='msg-item';
+      const t=new Date(m.time*1000).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      const avatarHtml=m.avatar?'<img class="msg-avatar" src="'+m.avatar+'" onerror="this.style.display=\'none\'">':'<div class="msg-avatar">'+escHtml((m.name||'?').charAt(0))+'</div>';
+      d.innerHTML=avatarHtml+'<div class="msg-content"><div class="msg-name">'+escHtml(m.name)+'</div><div class="msg-body">'+escHtml((m.body||'').substring(0,200))+'</div><div class="msg-time">'+t+'</div></div>';
+      preview.appendChild(d);
+    });
+    preview.scrollTop=preview.scrollHeight;
+  }catch(e){preview.innerHTML='<span style="color:#fc8181;font-size:12px">取得失敗: '+e.message+'</span>';}
 }
-
 async function sendDc(){
-  const channelId = document.getElementById('dc-channel').value;
-  const userId = document.getElementById('dc-user-id').value.trim();
-  const msg = document.getElementById('dc-msg').value;
-  const files = document.getElementById('dc-file').files;
-
-  if(!msg && files.length===0){ showMsg('メッセージかファイルを入力してね', false); return; }
-  if(!userId && !channelId){ showMsg('チャンネルかユーザーIDを入力してね', false); return; }
-
-  const btn = document.querySelector('#sec-dc .send-btn');
-  btn.disabled = true; btn.textContent = '送信中...';
+  const channelId=document.getElementById('dc-channel').value;
+  const userId=document.getElementById('dc-user-id').value.trim();
+  const msg=document.getElementById('dc-msg').value;
+  const files=document.getElementById('dc-file').files;
+  if(!msg&&files.length===0){showMsg('メッセージかファイルを入力してね',false);return;}
+  if(!userId&&!channelId){showMsg('チャンネルかユーザーIDを入力してね',false);return;}
+  const btn=document.querySelector('#sec-dc .send-btn');btn.disabled=true;btn.textContent='送信中...';
   try{
-    // ファイルがある場合はFormDataで送信
-    if(files.length > 0){
-      const fd = new FormData();
-      if(userId) fd.append('userId', userId);
-      else fd.append('channelId', channelId);
-      if(msg) fd.append('content', msg);
-      for(const f of files) fd.append('files', f);
-      const r = await fetch('/api/discord/send-with-files', {method:'POST', body:fd});
-      const d = await r.json();
-      if(d.status==='success') showMsg('Discordに送信したよ！', true);
-      else showMsg('エラー: '+d.message, false);
-    } else if(userId){
-      // DM送信
-      const r = await fetch('/api/discord/dm', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,content:msg})});
-      const d = await r.json();
-      if(d.status==='success') showMsg('DMを送信したよ！', true);
-      else showMsg('エラー: '+d.message, false);
-    } else {
-      // チャンネル送信（コマンド含む）
-      const r = await fetch('/api/discord/send', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channelId,content:msg})});
-      const d = await r.json();
-      if(d.status==='success') showMsg('Discordに送信したよ！', true);
-      else showMsg('エラー: '+d.message, false);
+    if(files.length>0){
+      const fd=new FormData();
+      if(userId)fd.append('userId',userId);else fd.append('channelId',channelId);
+      if(msg)fd.append('content',msg);
+      for(const f of files)fd.append('files',f);
+      const r=await fetch('/api/discord/send-with-files',{method:'POST',body:fd});
+      const d=await r.json();
+      if(d.status==='success'){showMsg('送信したよ！',true);document.getElementById('dc-msg').value='';if(channelId)await loadDcMessages(channelId);}
+      else showMsg('エラー: '+d.message,false);
+    }else if(userId){
+      const r=await fetch('/api/discord/dm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,content:msg})});
+      const d=await r.json();
+      if(d.status==='success'){showMsg('DMを送信したよ！',true);document.getElementById('dc-msg').value='';}
+      else showMsg('エラー: '+d.message,false);
+    }else{
+      const r=await fetch('/api/discord/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channelId,content:msg})});
+      const d=await r.json();
+      if(d.status==='success'){showMsg('送信したよ！',true);document.getElementById('dc-msg').value='';await loadDcMessages(channelId);}
+      else showMsg('エラー: '+d.message,false);
     }
-  }catch(e){ showMsg('エラー: '+e.message, false); }
-  btn.disabled = false; btn.textContent = 'Discordに送信';
+  }catch(e){showMsg('エラー: '+e.message,false);}
+  btn.disabled=false;btn.textContent='Discordに送信';
 }
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
+// 初期化
+loadCwRooms();
 loadGuilds();
 </script>
 </body>
 </html>`);
 });
 
-// Discord API: サーバー一覧
-app.get('/api/discord/guilds', (req,res) => {
-  if(!discordClient){ return res.json([]); }
-  const guilds = discordClient.guilds.cache.map(g=>({id:g.id, name:g.name}));
-  res.json(guilds);
+// CWルーム一覧API
+app.get('/api/cw/rooms', async(req,res)=>{
+  try{
+    const r=await axios.get('https://api.chatwork.com/v2/rooms',{headers:{'X-ChatWorkToken':CHATWORK_API_TOKEN}});
+    res.json(r.data.map(rm=>({id:rm.room_id,name:rm.name,type:rm.type,unread:rm.unread_num})));
+  }catch(e){res.status(500).json({status:'error',message:e.message});}
 });
 
-// Discord API: チャンネル一覧（テキストチャンネルのみ）
-app.get('/api/discord/channels', async(req,res) => {
-  const {guild:guildId} = req.query;
-  if(!discordClient||!guildId) return res.json([]);
+// CWメッセージ取得API（最新30件）
+app.get('/api/cw/messages', async(req,res)=>{
+  const {room} = req.query;
+  if(!room) return res.status(400).json({status:'error',message:'roomが必要です'});
   try{
-    const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId).catch(()=>null);
-    if(!guild) return res.json([]);
-    await guild.channels.fetch().catch(()=>{});
-    const channels = guild.channels.cache
-      .filter(c => c.type === 0) // GUILD_TEXT
-      .sort((a,b) => a.position - b.position)
-      .map(c => ({id:c.id, name:c.name}));
-    res.json(channels);
-  }catch(e){ res.status(500).json([]); }
-});
-
-// Discord API: 絵文字一覧
-app.get('/api/discord/emojis', async(req,res) => {
-  const {guild:guildId} = req.query;
-  if(!discordClient||!guildId) return res.json([]);
-  try{
-    const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId).catch(()=>null);
-    if(!guild) return res.json([]);
-    await guild.emojis.fetch().catch(()=>{});
-    const emojis = guild.emojis.cache.map(e=>({
-      id: e.id, name: e.name,
-      url: e.imageURL({size:32}),
-      code: `<${e.animated?'a':''}:${e.name}:${e.id}>`,
-      char: ''
+    const r=await axios.get(`https://api.chatwork.com/v2/rooms/${room}/messages?force=1`,{headers:{'X-ChatWorkToken':CHATWORK_API_TOKEN}});
+    const msgs=(r.data||[]).slice(-30).map(m=>({
+      id:m.message_id,
+      name:m.account.name,
+      body:m.body,
+      time:m.send_time,
     }));
-    res.json(emojis);
-  }catch(e){ res.status(500).json([]); }
+    res.json(msgs);
+  }catch(e){res.status(500).json({status:'error',message:e.message});}
 });
 
-// Discord API: メッセージ送信
-// YouTube WebSub コールバックエンドポイント
-// GET: hub.challengeに応答
-app.get('/websub/youtube', (req, res) => {
-  const { 'hub.mode':mode, 'hub.challenge':challenge, 'hub.lease_seconds':leaseSeconds, 'hub.topic':topic } = req.query;
-  if(mode === 'subscribe' && challenge) {
-    // expires_atを更新
-    const channelIdMatch = (topic||'').match(/channel_id=([^&]+)/);
-    if(channelIdMatch){
-      const lease = parseInt(leaseSeconds||432000);
-      const expiresAt = new Date(Date.now() + lease*1000);
-      dbQuery('UPDATE youtube_subscriptions SET expires_at=$1, lease_seconds=$2 WHERE channel_id=$3',
-        [expiresAt.toISOString(), lease, channelIdMatch[1]]).catch(()=>{});
-    }
-    console.log(`[YouTube] WebSub確認: mode=${mode} lease=${leaseSeconds}`);
-    return res.status(200).send(challenge);
-  }
-  res.status(404).send('');
-});
-
-// POST: 新着動画通知受信
-app.post('/websub/youtube', express.text({type:'application/atom+xml'}), async(req, res) => {
-  res.status(200).send('');
-  const channelId = req.query.channel_id || '';
-  const xml = req.body || '';
+// Discordメッセージ取得API（最新30件）
+app.get('/api/discord/messages', async(req,res)=>{
+  const {channel} = req.query;
+  if(!channel) return res.status(400).json({status:'error',message:'channelが必要です'});
+  if(!discordClient) return res.status(503).json({status:'error',message:'Discord bot未起動'});
   try{
-    // AtomフィードからentryをXMLパース
-    const entries = [];
-    const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
-    let m;
-    while((m = entryRe.exec(xml)) !== null){
-      const block = m[1];
-      const videoId   = (block.match(/<yt:videoId>([^<]*)<\/yt:videoId>/))?.[1] ||
-                        (block.match(/<id>[^<]*\/([^/<]+)<\/id>/))?.[1] || '';
-      const title     = (block.match(/<title>([^<]*)<\/title>/))?.[1] || '';
-      const chanName  = (block.match(/<name>([^<]*)<\/name>/))?.[1] || '';
-      const videoUrl  = `https://www.youtube.com/watch?v=${videoId}`;
-      if(videoId) entries.push({videoId, title, channelName:chanName, url:videoUrl, channelId});
-    }
-    for(const entry of entries){
-      console.log(`[YouTube] 新着動画: ${entry.videoId} "${entry.title}"`);
-      await notifyYoutubeVideo(entry);
-    }
-  }catch(e){ console.error('[YouTube] 通知処理エラー:', e.message); }
-});
-
-app.post('/api/discord/send', async(req,res) => {
-  const {channelId, content} = req.body;
-  if(!channelId||!content) return res.status(400).json({status:'error',message:'channelIdとcontentは必須です'});
-  if(!discordClient) return res.status(503).json({status:'error',message:'Discord botが起動していません'});
-  try{
-    const ch = await discordClient.channels.fetch(channelId).catch(()=>null);
+    const ch=await discordClient.channels.fetch(channel).catch(()=>null);
     if(!ch) return res.status(404).json({status:'error',message:'チャンネルが見つかりません'});
-    await ch.send(content);
-    res.json({status:'success'});
-  }catch(e){ res.status(500).json({status:'error',message:e.message}); }
-});
-
-// Discord DM送信API
-app.post('/api/discord/dm', async(req,res) => {
-  const {userId, content} = req.body;
-  if(!userId||!content) return res.status(400).json({status:'error',message:'userIdとcontentは必須です'});
-  if(!discordClient) return res.status(503).json({status:'error',message:'Discord botが起動していません'});
-  try{
-    const user = await discordClient.users.fetch(userId).catch(()=>null);
-    if(!user) return res.status(404).json({status:'error',message:'ユーザーが見つかりません'});
-    await user.send(content);
-    res.json({status:'success'});
-  }catch(e){ res.status(500).json({status:'error',message:e.message}); }
-});
-
-// ファイル付き送信API（multipart/form-data）
-const multer = require('multer');
-const multerUpload = multer({storage: multer.memoryStorage(), limits:{fileSize:25*1024*1024}});
-app.post('/api/discord/send-with-files', multerUpload.array('files',10), async(req,res) => {
-  if(!discordClient) return res.status(503).json({status:'error',message:'Discord botが起動していません'});
-  const {channelId, userId, content} = req.body;
-  const files = req.files||[];
-  try{
-    const { AttachmentBuilder:AB } = require('discord.js');
-    const attachments = files.map(f=>new AB(f.buffer,{name:f.originalname}));
-    const payload = {};
-    if(content) payload.content = content;
-    if(attachments.length) payload.files = attachments;
-    if(userId){
-      const user = await discordClient.users.fetch(userId).catch(()=>null);
-      if(!user) return res.status(404).json({status:'error',message:'ユーザーが見つかりません'});
-      await user.send(payload);
-    } else if(channelId){
-      const ch = await discordClient.channels.fetch(channelId).catch(()=>null);
-      if(!ch) return res.status(404).json({status:'error',message:'チャンネルが見つかりません'});
-      await ch.send(payload);
-    } else {
-      return res.status(400).json({status:'error',message:'channelIdまたはuserIdが必要です'});
-    }
-    res.json({status:'success'});
-  }catch(e){ res.status(500).json({status:'error',message:e.message}); }
+    const msgs=await ch.messages.fetch({limit:30});
+    res.json([...msgs.values()].map(m=>({
+      id:m.id,
+      name:m.author.tag,
+      avatar:m.author.displayAvatarURL(),
+      body:m.content||(m.embeds.length?'[Embed]':'')|(m.attachments.size?'[添付ファイル]':''),
+      time:Math.floor(m.createdTimestamp/1000),
+    })));
+  }catch(e){res.status(500).json({status:'error',message:e.message});}
 });
 
 app.post('/msg-post', async (req,res) => {
