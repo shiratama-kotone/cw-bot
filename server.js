@@ -1493,8 +1493,7 @@ body{background:#1a202c;color:#e2e8f0;font-family:'Segoe UI',sans-serif;padding:
 .tabs{display:flex;gap:8px;margin-bottom:16px}
 .tab{padding:8px 20px;border-radius:6px;cursor:pointer;background:#2d3748;border:none;color:#e2e8f0;font-size:14px}
 .tab.active{background:#4299e1}
-.section{display:none;flex-direction:column;gap:10px}
-.section.active{display:flex}
+.section{flex-direction:column;gap:10px}
 label{font-size:13px;color:#a0aec0;margin-bottom:2px}
 select,input,textarea{width:100%;padding:8px;background:#2d3748;color:#e2e8f0;border:1px solid #4a5568;border-radius:6px;font-size:14px}
 textarea{height:100px;resize:vertical}
@@ -1525,7 +1524,7 @@ textarea{height:100px;resize:vertical}
 <div id="msg" class="status"></div>
 
 <!-- Chatwork -->
-<div id="sec-cw" class="section active">
+<div id="sec-cw" class="section" style="display:flex">
   <label>ルーム・DM</label>
   <select id="cw-room" onchange="onCwRoomChange()">
     <option value="">読み込み中...</option>
@@ -1537,7 +1536,7 @@ textarea{height:100px;resize:vertical}
 </div>
 
 <!-- Discord -->
-<div id="sec-dc" class="section">
+<div id="sec-dc" class="section" style="display:none">
   <label>サーバー</label>
   <select id="dc-guild" onchange="onGuildChange()">
     <option value="">-- サーバーを選択 --</option>
@@ -1563,8 +1562,8 @@ textarea{height:100px;resize:vertical}
 <script>
 function switchTab(t){
   document.querySelectorAll('.tab').forEach((b,i)=>b.classList.toggle('active',['cw','dc'][i]===t));
-  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
-  document.getElementById('sec-'+t).classList.add('active');
+  ['cw','dc'].forEach(id=>document.getElementById('sec-'+id).style.display='none');
+  document.getElementById('sec-'+t).style.display='flex';
 }
 function showMsg(m,ok){const el=document.getElementById('msg');el.textContent=m;el.className='status '+(ok?'ok':'ng');setTimeout(()=>el.className='status',4000);}
 
