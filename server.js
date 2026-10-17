@@ -51,77 +51,33 @@ const DISCORD_LEVEL_UP_CHANNEL_ID     = '1501654246234390598';
 const XP_TABLE=[[0,0],[10,100],[50,1000],[100,3000],[200,8000],[300,15000],[400,25000],[500,40000],[600,60000],[700,85000],[800,120000],[900,170000],[1000,250000]];
 function totalXpForLevel(lv){if(lv<=0)return 0;for(let i=1;i<XP_TABLE.length;i++){const[l0,x0]=XP_TABLE[i-1],[l1,x1]=XP_TABLE[i];if(lv<=l1)return Math.round(x0+(lv-l0)/(l1-l0)*(x1-x0));}return Math.round(250000+(lv-1000)*800);}
 function calcLevel(xp){let lo=0,hi=10000;while(lo<hi){const mid=(lo+hi+1)>>1;totalXpForLevel(mid)<=xp?lo=mid:hi=mid-1;}return lo;}
-const LEVEL_ROLES=[{level:10,roleId:'1512803149772226652'},{level:50,roleId:'1512803414042476617'},{level:100,roleId:'1512804446013358090'},{level:200,roleId:'1512804689744498688'},{level:300,roleId:'1512805503271571536'},{level:400,roleId:'1512805730829205675'},{level:500,roleId:'1512805854217371668'},{level:600,roleId:'1512805977924042802'},{level:700,roleId:'1512806132161450024'},{level:800,roleId:'1512806266047561758'},{level:900,roleId:'1512806383899119657'},{level:1000,roleId:'1512806527805952000'}];
-function getRoleForLevel(lv){let r=null;for(const lr of LEVEL_ROLES){if(lv>=lr.level)r=lr;}return r;}
-function baseXpForLevel(lv){if(lv>=1000)return 5;if(lv>=500)return 3;if(lv>=100)return 2;return 1;}
-async function addDiscordXp(member,guildId){
-  if(!member||member.user.bot||!dbAvailable)return;
-  const userId=member.user.id;
-  const cur=await dbQuery('SELECT xp,level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[guildId,userId]);
-  const curLev=cur.rows.length?parseInt(cur.rows[0].level):0;
-  const fv=await dbQuery('SELECT ends_at FROM fever WHERE room_id=$1 AND ends_at>NOW()',[CW_ROOM_ID_FOR_DISCORD]);
-  const xpGain=baseXpForLevel(curLev)*(fv.rowCount>0?10:1);
-  const res=await dbQuery(`INSERT INTO discord_levels (guild_id,user_id,xp,level) VALUES ($1,$2,$3,0) ON CONFLICT (guild_id,user_id) DO UPDATE SET xp=discord_levels.xp+$3,updated_at=NOW() RETURNING xp,level`,[guildId,userId,xpGain]);
-  if(!res?.rows?.length)return;
-  const newXp=parseInt(res.rows[0].xp),oldLev=parseInt(res.rows[0].level),newLev=calcLevel(newXp);
-  if(newLev<=oldLev)return;
-  await dbQuery('UPDATE discord_levels SET level=$1 WHERE guild_id=$2 AND user_id=$3',[newLev,guildId,userId]);
-  const oldRole=getRoleForLevel(oldLev),newRole=getRoleForLevel(newLev);let roleMsg='';
-  if(newRole&&oldRole?.roleId!==newRole.roleId){try{if(oldRole)await member.roles.remove(oldRole.roleId).catch(()=>{});const ar=await member.guild.roles.fetch(newRole.roleId).catch(()=>null);if(ar){await member.roles.add(ar).catch(()=>{});roleMsg=`\n${ar.name}が付与されました。`;}}catch(e){console.error('[Level]ロール:',e.message);}}
-  try{if(!discordClient)return;const ch=await discordClient.channels.fetch(DISCORD_LEVEL_UP_CHANNEL_ID).catch(()=>null);if(ch)await ch.send({embeds:[{description:`<@${userId}>さんは**レベル${newLev}**になりました！${roleMsg}`,color:newRole?0xf39c12:0x7289da,footer:{text:`XP: ${newXp.toLocaleString()} | 次のLvまで: ${(totalXpForLevel(newLev+1)-newXp).toLocaleString()} XP`}}]});}catch(e){console.error('[Level]通知:',e.message);}
-}
-function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min;}
-function fmt(n){return Number(n).toLocaleString()+'円';}
-// ============================================================
-const JOBS={
-  'コンビニアルバイト':{tier:'初級',cost:0,desc:'安定して少額稼げる',
-    work:(_eco)=>{const b=rand(1057,1300);return{earned:b,msg:`🏪 レジ打ちをした。**${b}円**稼いだ！`};}},
-  '新聞配達':{tier:'初級',cost:30000,desc:'朝限定ボーナスあり',
-    work:(_eco)=>{const b=rand(1200,1600);const h=parseInt(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo',hour:'numeric',hour12:false}));const bo=(h>=5&&h<=8)?rand(100,500):0;return{earned:b+bo,msg:`📰 新聞を配達した。**${b}円**${bo?` + 朝ボーナス**${bo}円**`:''}稼いだ！`};}},
-  '清掃員':{tier:'初級',cost:50000,desc:'安定収入',
-    work:(_eco)=>{const b=rand(1400,1800);return{earned:b,msg:`🧹 施設を清掃した。**${b}円**稼いだ！`};}},
-  'カフェ店員':{tier:'中級',cost:200000,desc:'接客成功で追加報酬。クレームリスクあり',
-    work:(_eco)=>{const b=rand(1600,2500);const r=Math.random();let bo=0,extra='';if(r<0.3){bo=rand(500,2000);extra=` + 接客成功ボーナス**${bo}円**`;}else if(r<0.4){bo=-500;extra=` クレーム発生 **500円**損した…`;}return{earned:b+bo,msg:`☕ カフェで接客した。**${b}円**${extra}稼いだ！`};}},
-  '工場作業員':{tier:'中級',cost:300000,desc:'安定寄り。生産目標達成ボーナスあり',
-    work:(_eco)=>{const b=rand(2000,3000);const bo=Math.random()<0.25?rand(1000,3000):0;return{earned:b+bo,msg:`🏭 工場ラインで作業した。**${b}円**${bo?` + 目標達成**${bo}円**`:''}稼いだ！`};}},
-  'プログラマー':{tier:'中級',cost:500000,desc:'収入のブレ大きめ。大型案件で爆発的収入',
-    work:(_eco)=>{const r=Math.random();if(r<0.03){const v=rand(20000,100000);return{earned:v,msg:`💻 🚀 大型案件を受注！！**${v}円**の大金！`};}if(r<0.35){const v=rand(3000,8000);return{earned:v,msg:`💻 📦 開発案件をこなした。**${v}円**稼いだ！`};}const b=rand(500,2000);return{earned:b,msg:`💻 🐛 バグを修正した。**${b}円**稼いだ！`};}},
-  '配信者':{tier:'中級',cost:700000,desc:'バズると超高収入。炎上・隠しイベントあり',
-    work:(eco)=>{
-      const videos=parseInt(eco?.video_count||0);
-      let hiddenMult=1;
-      if(videos>=500)hiddenMult=2;
-      else if(videos>=100)hiddenMult=1.5;
-      else if(videos>=50)hiddenMult=1.25;
-      else if(videos>=10)hiddenMult=1.1;
-      const r=Math.random();
-      if(videos>=1){
-        const hr=Math.random();
-        if(hr<0.00005*hiddenMult){const v=rand(500000,5000000);return{earned:v,msg:`📹 🌟 過去の動画がミーム化した！！**${v}円**の超収入！！！`,videoAdd:0};}
-        if(hr<0.0002*hiddenMult){const v=rand(50000,500000);return{earned:v,msg:`📹 🎬 切り抜き動画が話題になった！**${v}円**の収入！！`,videoAdd:0};}
-        if(hr<0.0005*hiddenMult){const v=rand(10000,100000);return{earned:v,msg:`📹 📈 過去動画がおすすめに掲載された！**${v}円**の収入！`,videoAdd:0};}
-      }
-      if(r<0.05){const v=rand(10000,50000);return{earned:v,msg:`📹 🔥 動画がバズった！！**${v}円**の収入！`,videoAdd:1};}
-      if(r<0.1){const v=rand(5000,20000);return{earned:-v,msg:`📹 💥 炎上した…**${v}円**の損失…`,videoAdd:1};}
-      if(r<0.25){const v=rand(3000,8000);return{earned:v,msg:`📹 👀⭐ 動画が視聴されてチャンネル登録もされた！**${v}円**！`,videoAdd:1};}
-      if(r<0.45){const v=rand(2000,5000);return{earned:v,msg:`📹 ⭐ チャンネル登録された！**${v}円**！`,videoAdd:1};}
-      if(r<0.65){const v=rand(500,2000);return{earned:v,msg:`📹 👀 動画が視聴された。**${v}円**！`,videoAdd:1};}
-      return{earned:0,msg:`📹 🎥 動画を投稿した。(動画本数+1)`,videoAdd:1};
-    }},
-  '投資家':{tier:'上級',cost:1500000,desc:'運要素強め。大成功・暴落あり',
-    work:(_eco)=>{const r=Math.random();if(r<0.05){const v=rand(100000,500000);return{earned:v,msg:`🎲 📈 大成功！**${v}円**の利益！`};}if(r<0.15){const v=rand(20000,100000);return{earned:v,msg:`🎲 📈 株が急騰！**${v}円**の利益！`};}if(r<0.35){const v=rand(10000,50000);return{earned:-v,msg:`🎲 📉 暴落…**${v}円**の大損失…`};}if(r<0.5){const v=rand(1000,10000);return{earned:-v,msg:`🎲 📉 下落…**${v}円**の損失…`};}const b=rand(5000,20000);return{earned:b,msg:`🎲 📊 ポートフォリオ順調。**${b}円**の利益！`};}},
-  '医者':{tier:'上級',cost:3000000,desc:'超安定高収入。緊急手術成功ボーナスあり',
-    work:(_eco)=>{const b=rand(5000,8000);const bo=Math.random()<0.2?rand(5000,20000):0;return{earned:b+bo,msg:`🩺 患者を診察した。**${b}円**${bo?` + 緊急手術成功**${bo}円**`:''}の報酬！`};}},
-  '会社社長':{tier:'上級',cost:5000000,desc:'高収入。大成功で爆発的利益、経営失敗で大損失',
-    work:(_eco)=>{const r=Math.random();if(r<0.15){const v=rand(20000,200000);return{earned:v,msg:`🏢 📈 事業大成功！**${v}円**の収益！`};}if(r<0.4){const v=rand(10000,100000);return{earned:-v,msg:`🏢 📉 経営失敗…**${v}円**の損失…`};}const b=rand(3000,15000);return{earned:b,msg:`🏢 事業が順調。**${b}円**の収益！`};}},
-  'ギャンブラー':{tier:'特殊',cost:1000000,desc:'完全ランダム。ジャックポットで100万円！',
-    work:(_eco)=>{const r=Math.random();if(r<0.001){return{earned:1000000,msg:`🎰 👑 ジャックポット！！！**1,000,000円**！！！！！`};}if(r<0.05){const v=rand(20000,50000);return{earned:v,msg:`🎰 😎 大勝ち！**${v}円**！！`};}if(r<0.2){const v=rand(2000,5000);return{earned:v,msg:`🎰 🙂 小勝ち。**${v}円**！`};}if(r<0.5){const v=rand(1000,5000);return{earned:-v,msg:`🎰 😐 小負け。**${v}円**失った…`};}const v=rand(10000,50000);return{earned:-v,msg:`🎰 💀 大敗！**${v}円**失った…`};}},
-  'ニート':{tier:'特殊',cost:0,desc:'お金は稼げないけど特殊効果あり（月曜朝6時に生活保護1000円支給）',
-    work:(_eco)=>({earned:0,msg:'ゴロゴロしていた。'})},
-};
-function workLimitForLevel(lv){if(lv>=1000)return 25;if(lv>=500)return 20;if(lv>=100)return 15;if(lv>=50)return 10;if(lv>=10)return 7;return 5;}
 
 // ============================================================
+// ============================================================
+// レベリングシステム（addDiscordXp）
+// ============================================================
+
+async function addDiscordXp(member, guildId){
+  if(!member||member.user.bot) return;
+  const userId = member.user.id;
+  const xpGain = 1;
+  const r = await dbQuery(`INSERT INTO discord_levels (guild_id,user_id,xp,level) VALUES ($1,$2,$3,0)
+    ON CONFLICT (guild_id,user_id) DO UPDATE SET xp=discord_levels.xp+$3,updated_at=NOW() RETURNING xp,level`,
+    [guildId, userId, xpGain]);
+  if(!r.rows.length) return;
+  const {xp, level} = r.rows[0];
+  const newLevel = calcLevel(xp);
+  if(newLevel > level){
+    await dbQuery('UPDATE discord_levels SET level=$1 WHERE guild_id=$2 AND user_id=$3',[newLevel,guildId,userId]);
+    const lvChId = await getGuildChannel(guildId,'leveling');
+    const ch = lvChId ? (member.guild?.channels.cache.get(lvChId)) : null;
+    if(ch) await ch.send({embeds:[{
+      description:`<@${userId}> レベルアップ！ **Lv${newLevel}** になったよ！`,
+      color:0xf1c40f
+    }]}).catch(()=>{});
+  }
+}
+
 // チャンネル設定ヘルパー
 // ============================================================
 async function getGuildChannel(guildId, type) {
@@ -492,10 +448,6 @@ async function initializeDatabase() {
       cw_account_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
     await dbQuery(`ALTER TABLE discord_bridge ADD COLUMN IF NOT EXISTS cw_account_id TEXT`);
 
-    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_levels (id SERIAL PRIMARY KEY,guild_id TEXT NOT NULL,user_id TEXT NOT NULL,xp BIGINT DEFAULT 0,level INT DEFAULT 0,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE(guild_id,user_id))`);
-    await dbQuery(`CREATE INDEX IF NOT EXISTS idx_dl ON discord_levels(guild_id,xp DESC)`);
-    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_economy (id SERIAL PRIMARY KEY,guild_id TEXT NOT NULL,user_id TEXT NOT NULL,wallet BIGINT DEFAULT 0,bank BIGINT DEFAULT 0,job TEXT DEFAULT 'ニート',work_count INT DEFAULT 0,work_reset_date DATE DEFAULT CURRENT_DATE,last_work_at TIMESTAMP,video_count INT DEFAULT 0,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE(guild_id,user_id))`);
-    await dbQuery(`ALTER TABLE discord_economy ADD COLUMN IF NOT EXISTS video_count INT DEFAULT 0`);
 
     await dbQuery(`CREATE TABLE IF NOT EXISTS events (
       id SERIAL PRIMARY KEY, event_date TEXT NOT NULL, content TEXT NOT NULL,
@@ -592,6 +544,15 @@ async function initializeDatabase() {
       guild_id TEXT NOT NULL,
       role_id TEXT NOT NULL,
       UNIQUE(guild_id, role_id))`);
+
+    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_levels (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      xp BIGINT DEFAULT 0,
+      level INT DEFAULT 0,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(guild_id, user_id))`);
 
     console.log('[DB] テーブル初期化完了');
   } catch (e) { console.error('[DB] 初期化エラー:', e.message); }
@@ -1851,8 +1812,6 @@ cron.schedule('0 59 23 * * *',async()=>await sendDailyRanking('今日のコメ�
 cron.schedule('0 0 6 * * *',  async()=>await sendMorningMsg(),                            {timezone:'Asia/Tokyo'});
 cron.schedule('0 0 18 * * *', async()=>await sendTomorrowWeather(),                       {timezone:'Asia/Tokyo'});
 
-cron.schedule('0 0 6 * * 1',async()=>{try{const r=await dbQuery("SELECT guild_id,user_id FROM discord_economy WHERE job='ニート'");for(const row of r.rows){await dbQuery('UPDATE discord_economy SET wallet=wallet+1000,updated_at=NOW() WHERE guild_id=$1 AND user_id=$2',[row.guild_id,row.user_id]);if(discordClient){const ch=await discordClient.channels.fetch(DISCORD_LEVEL_UP_CHANNEL_ID).catch(()=>null);if(ch)await ch.send({embeds:[{description:`<@${row.user_id}> 生活保護が支給されたよ！（1,000円）`,color:0x95a5a6}]}).catch(()=>{});}}}catch(e){console.error('[Economy]生活保護:',e.message);}},{timezone:'Asia/Tokyo'});
-
 // 1分毎: サーバーステータス更新
 cron.schedule('* * * * *', async()=>{
   if(!discordClient) return;
@@ -2042,17 +2001,8 @@ if(DISCORD_BOT_TOKEN){
         .addSubcommand(s=>s.setName('delete').setDescription('イベントを削除するよ').addIntegerOption(o=>o.setName('id').setDescription('イベントID').setRequired(true)))
         .setDefaultMemberPermissions(ADMIN_PERM),
       // VOICEVOX読み上げ
-      new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
-      new SlashCommandBuilder().setName('work').setDescription('働いてお金を稼ぐよ（クールダウン30分）'),
-      new SlashCommandBuilder().setName('job').setDescription('職一覧を見る'),
-      new SlashCommandBuilder().setName('job-set').setDescription('職につく・転職する').addStringOption(o=>o.setName('job').setDescription('職名').setRequired(true)),
-      new SlashCommandBuilder().setName('job-info').setDescription('職の詳細を見る').addStringOption(o=>o.setName('job').setDescription('職名').setRequired(true)),
-      new SlashCommandBuilder().setName('money').setDescription('所持金を見る'),
-      new SlashCommandBuilder().setName('money-send').setDescription('お金を送る').addUserOption(o=>o.setName('user').setDescription('送り先').setRequired(true)).addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
-      new SlashCommandBuilder().setName('bank').setDescription('銀行残高を見る'),
-      new SlashCommandBuilder().setName('bank-deposit').setDescription('銀行に預ける').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
-      new SlashCommandBuilder().setName('bank-withdraw').setDescription('銀行から引き出す').addIntegerOption(o=>o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
       (()=>{const cmd=new SlashCommandBuilder().setName('role-panel').setDescription('ロールパネルを作成するよ（最大24ロール）').addStringOption(o=>o.setName('title').setDescription('タイトル').setRequired(true));for(let i=1;i<=24;i++)cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));return cmd.setDefaultMemberPermissions(ADMIN_PERM);})(),
+      new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
       new SlashCommandBuilder().setName('verify').setDescription('認証パネルを作成するよ').addRoleOption(o=>o.setName('role').setDescription('認証時に付与するロール').setRequired(true)).addStringOption(o=>o.setName('title').setDescription('タイトル（省略可）')).addStringOption(o=>o.setName('description').setDescription('説明文（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('contact').setDescription('管理者に連絡するよ').addStringOption(o=>o.setName('message').setDescription('管理者への内容').setRequired(true)),
       new SlashCommandBuilder().setName('contact-role').setDescription('問い合わせチャンネルに追加する管理者ロールを設定するよ（複数追加可）').addRoleOption(o=>o.setName('role').setDescription('管理者ロール').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
@@ -2141,7 +2091,6 @@ if(DISCORD_BOT_TOKEN){
           '`/dictionary-add` / `/dictionary-list` / `/dictionary-remove` - 読み上げ辞書',
           '',
           '**経済（指定サーバーのみ）**',
-          '`/rank` - レベル・XP確認',
           '`/work` - 仕事をする',
           '`/job` / `/job-set` / `/job-info` - 職業確認・変更',
           '`/money` / `/money-send` - 所持金確認・送金',
@@ -2351,50 +2300,6 @@ if(DISCORD_BOT_TOKEN){
       // ── fever ──
 
       // ── ng_add ──
-      if(cmd==='rank'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const uid=interaction.user.id;const r=await dbQuery('SELECT xp,level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,uid]);const xp=r.rows.length?parseInt(r.rows[0].xp):0,lv=r.rows.length?parseInt(r.rows[0].level):0;const nextXp=totalXpForLevel(lv+1),role=getRoleForLevel(lv),ar=role?interaction.guild.roles.cache.get(role.roleId):null;await reply(null,{title:`${interaction.member.displayName} のランク`,fields:[{name:'レベル',value:`**${lv}**`,inline:true},{name:'XP',value:`${xp.toLocaleString()}`,inline:true},{name:'次のLvまで',value:`${(nextXp-xp).toLocaleString()} XP`,inline:true},{name:'現在のロール',value:ar?ar.name:'なし',inline:true}],color:role?0xf39c12:0x7289da,footer:`次のLv${lv+1}に必要な累計XP: ${nextXp.toLocaleString()}`});return;}
-      if(cmd==='work'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid),lvRow=await dbQuery('SELECT level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[gid,uid]),lv=lvRow.rows.length?parseInt(lvRow.rows[0].level):0,limit=workLimitForLevel(lv),today=new Date().toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}),resetDate=eco.work_reset_date?new Date(eco.work_reset_date).toLocaleDateString('ja-JP',{timeZone:'Asia/Tokyo'}):null;let count=resetDate!==today?0:(eco.work_count||0);if(count>=limit){await replyErr(`今日の仕事回数上限（${limit}回）に達したよ！明日また来てね`);return;}if(eco.last_work_at){const diff=(Date.now()-new Date(eco.last_work_at).getTime())/60000;if(diff<30){await replyErr(`クールダウン中！あと**${Math.ceil(30-diff)}分**待ってね`);return;}}const job=JOBS[eco.job]||JOBS['ニート'],result=job.work(),newWallet=Math.max(0,parseInt(eco.wallet)+result.earned);await dbQuery('UPDATE discord_economy SET wallet=$1,work_count=$2,work_reset_date=CURRENT_DATE,last_work_at=NOW(),updated_at=NOW() WHERE guild_id=$3 AND user_id=$4',[newWallet,count+1,gid,uid]);await reply(result.msg+`\n\n所持金: **${fmt(newWallet)}** | 今日: ${count+1}/${limit}回`,{title:`${interaction.member.displayName} が${eco.job}として働いた！`,color:result.earned>0?0x2ecc71:result.earned<0?0xe74c3c:0x95a5a6,footer:`残りwork回数: ${limit-(count+1)}回`});return;}
-      if(cmd==='job'){if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const tiers=['初級','中級','上級','特殊'];const fields=tiers.map(tier=>{const jobs=Object.entries(JOBS).filter(([,v])=>v.tier===tier);return{name:`【${tier}職】`,value:jobs.map(([n,v])=>`**${n}**（${v.cost>0?fmt(v.cost):'無料'}）\n${v.desc}`).join('\n\n'),inline:false};});await reply(null,{title:'職一覧',fields,color:0x7289da,footer:'転職は /job_set で。転職コストは所持金＋銀行の合計から判定'});return;}
-      if(cmd==='job-info'){if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const jobName=interaction.options.getString('job'),job=JOBS[jobName];if(!job){await replyErr(`「${jobName}」という職は存在しないよ`);return;}await reply(job.desc,{title:job.tier+'職：'+jobName,fields:[{name:'転職コスト',value:job.cost>0?fmt(job.cost):'無料',inline:true},{name:'カテゴリ',value:job.tier,inline:true}],color:0x7289da});return;}
-      if(cmd==='job-set'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const jobName=interaction.options.getString('job'),job=JOBS[jobName];if(!job){await replyErr(`「${jobName}」という職は存在しないよ\n/job で職一覧を確認してね`);return;}const uid=interaction.user.id,gid=interaction.guild.id,eco=await getEconomy(gid,uid);if(eco.job===jobName){await replyErr(`すでに${jobName}だよ`);return;}const total=parseInt(eco.wallet)+parseInt(eco.bank);if(total<job.cost){await replyErr(`転職コストが足りないよ！\n必要: ${fmt(job.cost)} / 所持: ${fmt(total)}`);return;}await dbQuery('UPDATE discord_economy SET job=$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[jobName,gid,uid]);await reply(`**${jobName}**に転職したよ！\n${job.desc}`,{title:'転職完了',color:0x2ecc71});return;}
-      if(cmd==='money'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const eco=await getEconomy(interaction.guild.id,interaction.user.id);await reply(null,{title:`${interaction.member.displayName} の所持金`,fields:[{name:'財布',value:`**${fmt(eco.wallet)}**`,inline:true},{name:'銀行',value:`**${fmt(eco.bank)}**`,inline:true},{name:'合計',value:`**${fmt(parseInt(eco.wallet)+parseInt(eco.bank))}**`,inline:true},{name:'職業',value:eco.job,inline:true}],color:0xf39c12});return;}
-      if(cmd==='money-send'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const target=interaction.options.getUser('user'),amount=interaction.options.getInteger('amount'),gid=interaction.guild.id;if(target.id===interaction.user.id){await replyErr('自分には送れないよ');return;}if(target.bot){await replyErr('botには送れないよ');return;}const myEco=await getEconomy(gid,interaction.user.id);if(parseInt(myEco.wallet)<amount){await replyErr(`財布の残高が足りないよ！財布: ${fmt(myEco.wallet)}`);return;}await dbQuery('UPDATE discord_economy SET wallet=wallet-$1 WHERE guild_id=$2 AND user_id=$3',[amount,gid,interaction.user.id]);await getEconomy(gid,target.id);await dbQuery('UPDATE discord_economy SET wallet=wallet+$1 WHERE guild_id=$2 AND user_id=$3',[amount,gid,target.id]);await reply(`<@${target.id}> に **${fmt(amount)}** 送ったよ！`,{title:'送金完了',color:0x2ecc71});return;}
-      if(cmd==='bank'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const eco=await getEconomy(interaction.guild.id,interaction.user.id);await reply(null,{title:`${interaction.member.displayName} の銀行`,fields:[{name:'銀行残高',value:`**${fmt(eco.bank)}**`,inline:true},{name:'財布',value:`**${fmt(eco.wallet)}**`,inline:true}],color:0x3498db});return;}
-      if(cmd==='bank-deposit'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const amount=interaction.options.getInteger('amount'),gid=interaction.guild.id,uid=interaction.user.id,eco=await getEconomy(gid,uid);if(parseInt(eco.wallet)<amount){await replyErr(`財布の残高が足りないよ！財布: ${fmt(eco.wallet)}`);return;}await dbQuery('UPDATE discord_economy SET wallet=wallet-$1,bank=bank+$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[amount,gid,uid]);await reply(`**${fmt(amount)}** を銀行に預けたよ！`,{title:'預け入れ完了',color:0x3498db});return;}
-      if(cmd==='bank-withdraw'){if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}if(interaction.guild&&interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}const amount=interaction.options.getInteger('amount'),gid=interaction.guild.id,uid=interaction.user.id,eco=await getEconomy(gid,uid);if(parseInt(eco.bank)<amount){await replyErr(`銀行残高が足りないよ！銀行: ${fmt(eco.bank)}`);return;}await dbQuery('UPDATE discord_economy SET wallet=wallet+$1,bank=bank-$1,updated_at=NOW() WHERE guild_id=$2 AND user_id=$3',[amount,gid,uid]);await reply(`**${fmt(amount)}** を銀行から引き出したよ！`,{title:'引き出し完了',color:0x3498db});return;}
-      if(cmd==='role-panel'){if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}const title=interaction.options.getString('title');const options=[];for(let i=1;i<=24;i++){const role=interaction.options.getRole(`role${i}`);if(role)options.push({label:role.name,value:role.id});}if(!options.length){await replyErr('ロールを1つ以上指定してね');return;}const{ActionRowBuilder,StringSelectMenuBuilder}=require('discord.js');const menu=new StringSelectMenuBuilder().setCustomId('role_panel_select').setPlaceholder('ロールを選択してね（複数選択可）').setMinValues(0).setMaxValues(options.length).addOptions(options);await interaction.editReply({embeds:[{title,description:'メニューからロールを選択するとロールが付与・解除されるよ！',color:0x7289da}],components:[new ActionRowBuilder().addComponents(menu)],content:''});return;}
-      if(cmd==='verify'){if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}const role=interaction.options.getRole('role'),title=interaction.options.getString('title')||'認証',desc=interaction.options.getString('description')||'ボタンを押すと認証されてロールが付与されるよ！';const{ActionRowBuilder,ButtonBuilder,ButtonStyle}=require('discord.js');const btn=new ButtonBuilder().setCustomId(`verify_btn:${role.id}`).setLabel('認証する').setStyle(ButtonStyle.Primary);await interaction.editReply({embeds:[{title,description:desc,color:0x2ecc71,footer:{text:`付与されるロール: ${role.name}`}}],components:[new ActionRowBuilder().addComponents(btn)],content:''});return;}
-      if(cmd==='event'){
-        const sub=interaction.options.getSubcommand();
-        if(sub==='add'){
-          if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
-          const date=interaction.options.getString('date'),content=interaction.options.getString('content');
-          if(!/^\d{2}-\d{2}$/.test(date)){await replyErr('日付はMM-DD形式で入力してね（例: 06-15）');return;}
-          await dbQuery('INSERT INTO events (event_date,content) VALUES ($1,$2) ON CONFLICT DO NOTHING',[date,content]);
-          await reply(`**${date}** に「${content}」を登録したよ！`,{title:'イベント登録完了',color:0x2ecc71});return;
-        }
-        if(sub==='list'){
-          const date=interaction.options.getString('date')||(()=>{const jst=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));return `${String(jst.getMonth()+1).padStart(2,'0')}-${String(jst.getDate()).padStart(2,'0')}`;})();
-          const r=await dbQuery('SELECT id,content FROM events WHERE event_date=$1 ORDER BY created_at',[date]);
-          if(!r.rows.length){await reply(`**${date}** にイベントはないよ`,{title:'イベント一覧'});return;}
-          await reply(r.rows.map(row=>`ID:${row.id} ${row.content}`).join('\n'),{title:`${date} のイベント一覧`,color:0x7289da});return;
-        }
-        if(sub==='delete'){
-          if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
-          const id=interaction.options.getInteger('id');
-          const r=await dbQuery('DELETE FROM events WHERE id=$1 RETURNING event_date,content',[id]);
-          if(!r.rows.length){await replyErr(`ID:${id} のイベントは見つからなかったよ`);return;}
-          await reply(`「${r.rows[0].content}」（${r.rows[0].event_date}）を削除したよ`,{title:'イベント削除完了',color:0xe74c3c});return;
-        }
-        return;
-      }
-      // ── dictionary_add ──
-      if(cmd==='dictionary-add'){
-        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const word=interaction.options.getString('word'),reading=interaction.options.getString('reading');
-        await dbQuery('INSERT INTO voice_dictionary (guild_id,word,reading) VALUES ($1,$2,$3) ON CONFLICT (guild_id,word) DO UPDATE SET reading=$3',[interaction.guild.id,word,reading]);
-        await reply(`「${word}」→「${reading}」を辞書に追加したよ！`,{title:'辞書登録完了',color:0x2ecc71});
-        return;
-      }
       // ── dictionary_list ──
       if(cmd==='dictionary-list'){
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
@@ -2622,6 +2527,19 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
 
+      // ── rank ──
+      if(cmd==='rank'){
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        if(interaction.guild.id!==ALLOWED_GUILD_ID){await replyErr('このコマンドは指定サーバーでのみ使えるよ');return;}
+        const r=await dbQuery('SELECT xp,level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,interaction.user.id]);
+        if(!r.rowCount){await reply('まだXPがないよ！メッセージを送るとXPが貯まるよ',{title:'ランク',color:0x7289da});return;}
+        const {xp,level}=r.rows[0];
+        const nextXp=totalXpForLevel(level+1);
+        const curXp=totalXpForLevel(level);
+        await reply(`レベル: **${level}**\nXP: **${xp}** / ${nextXp}（次のレベルまで ${nextXp-xp} XP）`,{title:`${interaction.member.displayName} のランク`,color:0xf1c40f});
+        return;
+      }
+
       if(cmd==='fabrication'){
         if(!isAdmin){ await replyErr('管理者しか実行できないコマンドだよ！'); return; }
         if(!interaction.guild){ await replyErr('サーバー内でのみ使えるよ'); return; }
@@ -2803,12 +2721,14 @@ if(DISCORD_BOT_TOKEN){
           ON CONFLICT (guild_id) DO UPDATE SET count=discord_message_counts.count+1`,
           [message.guild.id]).catch(()=>{});
 
+        // XP加算
+        addDiscordXp(message.member, message.guild.id).catch(()=>{});
+
         // Discord NGワードチェック（全サーバー対象）
         await checkDiscordNgWords(message).catch(()=>{});
         // メッセージが削除されていたら後続処理をスキップ
         if(!message.channel) return;
 
-        addDiscordXp(message.member, message.guild.id).catch(()=>{});
         if(!isAdmin){
           const pr=await dbQuery('SELECT ends_at FROM discord_prohibit WHERE channel_id=$1 AND ends_at>NOW()',[message.channel.id]);
           if(pr.rowCount>0){
@@ -2925,6 +2845,27 @@ if(DISCORD_BOT_TOKEN){
       }
     }catch(e){ console.error('[LOG]',e.message); }
   });
+
+  // メッセージ編集ログ
+  discordClient.on(Events.MessageUpdate, async(oldMsg, newMsg)=>{
+    if(!newMsg.guild||newMsg.author?.bot||newMsg.author?.id===DISCORD_BOT_USER_ID) return;
+    if(oldMsg.content===newMsg.content) return; // 内容変化なし（embed展開等）はスキップ
+    try{
+      const logChId = await getGuildChannel(newMsg.guild.id,'log');
+      if(!logChId||logChId===newMsg.channel.id) return;
+      const logCh = newMsg.guild.channels.cache.get(logChId);
+      if(!logCh) return;
+      const before = oldMsg.content||'(取得不可)';
+      const after = newMsg.content||'(空)';
+      await logCh.send({embeds:[{
+        description: `**編集前:**\n${before.substring(0,1024)}\n\n**編集後:**\n${after.substring(0,1024)}`,
+        color: 0xf39c12,
+        author: {name:`${newMsg.author?.tag||'?'} (#${newMsg.channel.name})`, icon_url:newMsg.author?.displayAvatarURL()},
+        footer: {text:`編集 | ${new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}`},
+      }]});
+    }catch(e){ console.error('[LOG編集]',e.message); }
+  });
+
   discordClient.on(Events.InteractionCreate,async(interaction)=>{if(!interaction.isStringSelectMenu()||interaction.customId!=='role_panel_select')return;try{await interaction.deferReply({ephemeral:true});const member=interaction.member,guild=interaction.guild,selected=new Set(interaction.values),allOpts=interaction.component.options.map(o=>o.value),added=[],removed=[];for(const roleId of allOpts){const role=guild.roles.cache.get(roleId);if(!role)continue;const has=member.roles.cache.has(roleId);if(selected.has(roleId)&&!has){await member.roles.add(role).catch(()=>{});added.push(role.name);}else if(!selected.has(roleId)&&has){await member.roles.remove(role).catch(()=>{});removed.push(role.name);}}const lines=[];if(added.length)lines.push(`付与：${added.join('、')}`);if(removed.length)lines.push(`解除：${removed.join('、')}`);await interaction.editReply({embeds:[{title:'ロール更新完了',description:lines.length?lines.join('\n'):'変更なし',color:0x2ecc71}]});}catch(e){console.error('[Discord]ロールパネル:',e.message);try{await interaction.editReply({embeds:[{title:'エラー',description:'ロールの更新に失敗したよ',color:0xe74c3c}]});}catch{}}});
   discordClient.on(Events.InteractionCreate,async(interaction)=>{if(!interaction.isButton()||!interaction.customId.startsWith('verify_btn:'))return;try{await interaction.deferReply({ephemeral:true});const roleId=interaction.customId.split(':')[1],member=interaction.member;if(member.roles.cache.has(roleId)){await interaction.editReply({embeds:[{description:'すでに認証済みだよ！',color:0x2ecc71}]});return;}const role=interaction.guild.roles.cache.get(roleId)||await interaction.guild.roles.fetch(roleId).catch(()=>null);if(!role){await interaction.editReply({embeds:[{description:'ロールが見つからなかったよ',color:0xe74c3c}]});return;}await member.roles.add(role);await interaction.editReply({embeds:[{description:`認証完了！**${role.name}**が付与されたよ！`,color:0x2ecc71}]});}catch(e){console.error('[Discord]認証ボタン:',e.message);try{await interaction.editReply({embeds:[{description:'認証に失敗したよ…',color:0xe74c3c}]});}catch{}}});
 
