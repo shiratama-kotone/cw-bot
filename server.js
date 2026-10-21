@@ -2394,6 +2394,36 @@ if(DISCORD_BOT_TOKEN){
       }
       // ── discord_warning_reset ──
       // ── server_status ──
+      // ── role-panel ──
+      if(cmd==='role-panel'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const title=interaction.options.getString('title')||'ロール選択';
+        const opts=[];
+        for(let i=1;i<=24;i++){
+          const r=interaction.options.getRole(`role${i}`);
+          if(r)opts.push({label:r.name,value:r.id});
+        }
+        if(!opts.length){await replyErr('ロールを最低1つ指定してね');return;}
+        const {ActionRowBuilder,StringSelectMenuBuilder}=require('discord.js');
+        const menu=new StringSelectMenuBuilder().setCustomId('role_panel_select').setPlaceholder('ロールを選択してね（複数選択可）').setMinValues(0).setMaxValues(opts.length).addOptions(opts);
+        await interaction.channel.send({embeds:[{title,description:'以下からロールを選択してね',color:0x7289da}],components:[new ActionRowBuilder().addComponents(menu)]});
+        await reply('ロールパネルを作成したよ！',{color:0x2ecc71});return;
+      }
+
+      // ── verify ──
+      if(cmd==='verify'){
+        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
+        const role=interaction.options.getRole('role');
+        const title=interaction.options.getString('title')||'認証';
+        const desc=interaction.options.getString('description')||'ボタンを押して認証してね';
+        const {ActionRowBuilder,ButtonBuilder,ButtonStyle}=require('discord.js');
+        const btn=new ButtonBuilder().setCustomId(`verify_btn:${role.id}`).setLabel('認証する').setStyle(ButtonStyle.Success);
+        await interaction.channel.send({embeds:[{title,description:desc,color:0x2ecc71}],components:[new ActionRowBuilder().addComponents(btn)]});
+        await reply('認証パネルを作成したよ！',{color:0x2ecc71});return;
+      }
+
       if(cmd==='server-status'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
