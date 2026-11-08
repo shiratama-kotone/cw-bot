@@ -1981,33 +1981,18 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('admin').setDescription('このチャンネルを管理者チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('log').setDescription('このチャンネルでログを受け取るように設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       // Discord NGワード（サーバーごと）
-      new SlashCommandBuilder().setName('ng-add').setDescription('DiscordのNGワードを追加するよ')
-        .addStringOption(o=>o.setName('pattern').setDescription('NG文字列または正規表現').setRequired(true))
-        .addBooleanOption(o=>o.setName('is-regex').setDescription('正規表現として扱う（デフォルト:false）'))
+      new SlashCommandBuilder().setName('ng').setDescription('NGワードを管理するよ')
+        .addSubcommand(s=>s.setName('add').setDescription('NGワードを追加するよ').addStringOption(o=>o.setName('pattern').setDescription('NG文字列（スペース・カンマ区切りで複数可）').setRequired(true)).addBooleanOption(o=>o.setName('is-regex').setDescription('正規表現として扱う')))
+        .addSubcommand(s=>s.setName('list').setDescription('NGワード一覧を表示するよ'))
+        .addSubcommand(s=>s.setName('remove').setDescription('NGワードを削除するよ').addIntegerOption(o=>o.setName('id').setDescription('NGワードのID').setRequired(true)))
+        .addSubcommand(s=>s.setName('exclude').setDescription('このチャンネルをNGワードチェックから除外・解除するよ'))
+        .addSubcommand(s=>s.setName('warning-reset').setDescription('ユーザーの警告回数をリセットするよ').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)))
         .setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng-list').setDescription('DiscordのNGワード一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng-remove').setDescription('DiscordのNGワードを削除するよ')
-        .addIntegerOption(o=>o.setName('id').setDescription('NGワードのID（一覧で確認）').setRequired(true))
+      new SlashCommandBuilder().setName('contact-role').setDescription('問い合わせ管理者ロールを管理するよ')
+        .addSubcommand(s=>s.setName('add').setDescription('管理者ロールを追加するよ').addRoleOption(o=>o.setName('role').setDescription('管理者ロール').setRequired(true)))
+        .addSubcommand(s=>s.setName('remove').setDescription('管理者ロールを削除するよ').addRoleOption(o=>o.setName('role').setDescription('削除するロール').setRequired(true)))
+        .addSubcommand(s=>s.setName('list').setDescription('管理者ロール一覧を表示するよ'))
         .setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('ng-exclude').setDescription('NGワードチェックをこのチャンネルで除外・解除するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('warning-reset').setDescription('ユーザーの警告回数をリセットするよ')
-        .addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true))
-        .setDefaultMemberPermissions(ADMIN_PERM),
-      // サーバーステータス
-      new SlashCommandBuilder().setName('server-status').setDescription('サーバー概要カテゴリを作成して1分毎に更新するよ').setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('event').setDescription('イベントを登録・一覧・削除するよ')
-        .addSubcommand(s=>s.setName('add').setDescription('イベントを登録するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、例: 06-15）').setRequired(true)).addStringOption(o=>o.setName('content').setDescription('イベント内容').setRequired(true)))
-        .addSubcommand(s=>s.setName('list').setDescription('指定日のイベント一覧を表示するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、省略で今日）')))
-        .addSubcommand(s=>s.setName('delete').setDescription('イベントを削除するよ').addIntegerOption(o=>o.setName('id').setDescription('イベントID').setRequired(true)))
-        .setDefaultMemberPermissions(ADMIN_PERM),
-      // VOICEVOX読み上げ
-      (()=>{const cmd=new SlashCommandBuilder().setName('role-panel').setDescription('ロールパネルを作成するよ（最大24ロール）').addStringOption(o=>o.setName('title').setDescription('タイトル').setRequired(true));for(let i=1;i<=24;i++)cmd.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));return cmd.setDefaultMemberPermissions(ADMIN_PERM);})(),
-      new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
-      new SlashCommandBuilder().setName('verify').setDescription('認証パネルを作成するよ').addRoleOption(o=>o.setName('role').setDescription('認証時に付与するロール').setRequired(true)).addStringOption(o=>o.setName('title').setDescription('タイトル（省略可）')).addStringOption(o=>o.setName('description').setDescription('説明文（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('contact').setDescription('管理者に連絡するよ').addStringOption(o=>o.setName('message').setDescription('管理者への内容').setRequired(true)),
-      new SlashCommandBuilder().setName('contact-role').setDescription('問い合わせチャンネルに追加する管理者ロールを設定するよ（複数追加可）').addRoleOption(o=>o.setName('role').setDescription('管理者ロール').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('contact-role-remove').setDescription('問い合わせチャンネルの管理者ロールを削除するよ').addRoleOption(o=>o.setName('role').setDescription('削除するロール').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
-      new SlashCommandBuilder().setName('contact-role-list').setDescription('問い合わせチャンネルに設定された管理者ロール一覧を表示するよ').setDefaultMemberPermissions(ADMIN_PERM),
     ].map(c=>c.toJSON());
 
     try{
@@ -2107,10 +2092,7 @@ if(DISCORD_BOT_TOKEN){
           '`/mute [user] [minutes]` - タイムアウト',
           '`/role-panel` - ロールパネル作成',
           '`/verify` - 認証パネル作成',
-          '`/ng-add [pattern]` - NGワード登録（スペース・カンマ区切りで複数可、正規表現モード時は1件）',
-          '`/ng-list` / `/ng-remove [id]` - NGワード一覧・削除',
-          '`/ng-exclude` - NGワード除外チャンネル設定（トグル）',
-          '`/warning-reset [user]` - 警告回数リセット',
+          '`/ng add/list/remove/exclude/warning-reset` - NGワード管理（addはスペース・カンマ区切りで複数可）',
           '`/server-status` - サーバー概要チャンネル作成・更新',
           '`/eew` - 地震情報チャンネル設定',
           '`/eew-test` - EEWテスト地図生成',
@@ -2339,56 +2321,56 @@ if(DISCORD_BOT_TOKEN){
       }
       // ── speaker_list ──
       // ── discord_ng_add ──
-      if(cmd==='ng-add'){
+      // ── ng（サブコマンド: add/list/remove/exclude/warning-reset） ──
+      if(cmd==='ng'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const raw=interaction.options.getString('pattern');
-        const isRegex=interaction.options.getBoolean('is-regex')||false;
-        // スペースかカンマで分割（正規表現モードの場合は分割しない）
-        const patterns=isRegex?[raw]:raw.split(/[\s,，、]+/).map(p=>p.trim()).filter(Boolean);
-        if(isRegex){try{new RegExp(raw);}catch{await replyErr('正規表現の書式が正しくないよ');return;}}
-        const added=[],skipped=[];
-        for(const p of patterns){
-          const r=await dbQuery('INSERT INTO discord_ng_words (guild_id,pattern,is_regex) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING pattern',[interaction.guild.id,p,isRegex]);
-          r.rowCount>0?added.push(p):skipped.push(p);
+        const sub=interaction.options.getSubcommand();
+        if(sub==='add'){
+          const raw=interaction.options.getString('pattern');
+          const isRegex=interaction.options.getBoolean('is-regex')||false;
+          const patterns=isRegex?[raw]:raw.split(/[\s,，、]+/).map(p=>p.trim()).filter(Boolean);
+          if(isRegex){try{new RegExp(raw);}catch{await replyErr('正規表現の書式が正しくないよ');return;}}
+          const added=[],skipped=[];
+          for(const p of patterns){
+            const r=await dbQuery('INSERT INTO discord_ng_words (guild_id,pattern,is_regex) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING pattern',[interaction.guild.id,p,isRegex]);
+            r.rowCount>0?added.push(p):skipped.push(p);
+          }
+          const msg=[];
+          if(added.length) msg.push(`「${added.join('」「')}」を登録したよ！${isRegex?' (正規表現)':''}`);
+          if(skipped.length) msg.push(`「${skipped.join('」「')}」は既に登録済みだよ`);
+          await reply(msg.join('\n')||'登録したよ',{title:'NGワード登録',color:0xe74c3c});return;
         }
-        const msg=[];
-        if(added.length) msg.push(`「${added.join('」「')}」を登録したよ！${isRegex?' (正規表現)':''}`);
-        if(skipped.length) msg.push(`「${skipped.join('」「')}」は既に登録済みだよ`);
-        await reply(msg.join('\n')||'登録したよ',{title:'Discord NGワード登録',color:0xe74c3c});return;
-      }
-      // ── discord_ng_list ──
-      if(cmd==='ng-list'){
-        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
-        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const r=await dbQuery('SELECT id,pattern,is_regex FROM discord_ng_words WHERE guild_id=$1 ORDER BY id',[interaction.guild.id]);
-        const ex=await dbQuery('SELECT channel_id FROM discord_ng_exclude_channels WHERE guild_id=$1',[interaction.guild.id]);
-        if(!r.rowCount){await reply('NGワードはまだないよ',{title:'Discord NGワード一覧'});return;}
-        const list=r.rows.map(row=>`ID:${row.id} ${row.is_regex?'[正規表現]':''} \`${row.pattern}\``).join('\n');
-        const exList=ex.rows.map(row=>`<#${row.channel_id}>`).join(' ')||'なし';
-        await reply(`${list}\n\n**除外チャンネル：** ${exList}`,{title:'Discord NGワード一覧'});return;
-      }
-      // ── discord_ng_remove ──
-      if(cmd==='ng-remove'){
-        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
-        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const id=interaction.options.getInteger('id');
-        const r=await dbQuery('DELETE FROM discord_ng_words WHERE id=$1 AND guild_id=$2 RETURNING pattern',[id,interaction.guild.id]);
-        if(!r.rowCount){await replyErr(`ID:${id} のNGワードは見つからなかったよ`);return;}
-        await reply(`「${r.rows[0].pattern}」を削除したよ`,{title:'Discord NGワード削除',color:0x2ecc71});return;
-      }
-      // ── discord_ng_exclude ──
-      if(cmd==='ng-exclude'){
-        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
-        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const chId=interaction.channelId;
-        const ex=await dbQuery('SELECT 1 FROM discord_ng_exclude_channels WHERE guild_id=$1 AND channel_id=$2',[interaction.guild.id,chId]);
-        if(ex.rowCount>0){
-          await dbQuery('DELETE FROM discord_ng_exclude_channels WHERE guild_id=$1 AND channel_id=$2',[interaction.guild.id,chId]);
-          await reply('このチャンネルの除外設定を解除したよ',{title:'除外解除',color:0x2ecc71});
-        }else{
-          await dbQuery('INSERT INTO discord_ng_exclude_channels (guild_id,channel_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[interaction.guild.id,chId]);
-          await reply('このチャンネルをNGワードチェックから除外したよ',{title:'除外設定',color:0xf39c12});
+        if(sub==='list'){
+          const r=await dbQuery('SELECT id,pattern,is_regex FROM discord_ng_words WHERE guild_id=$1 ORDER BY id',[interaction.guild.id]);
+          const ex=await dbQuery('SELECT channel_id FROM discord_ng_exclude_channels WHERE guild_id=$1',[interaction.guild.id]);
+          if(!r.rowCount){await reply('NGワードはまだないよ',{title:'NGワード一覧'});return;}
+          const list=r.rows.map(row=>`ID:${row.id} ${row.is_regex?'[正規表現]':''} \`${row.pattern}\``).join('\n');
+          const exList=ex.rows.map(row=>`<#${row.channel_id}>`).join(' ')||'なし';
+          await reply(`${list}\n\n**除外チャンネル：** ${exList}`,{title:'NGワード一覧'});return;
+        }
+        if(sub==='remove'){
+          const id=interaction.options.getInteger('id');
+          const r=await dbQuery('DELETE FROM discord_ng_words WHERE id=$1 AND guild_id=$2 RETURNING pattern',[id,interaction.guild.id]);
+          if(!r.rowCount){await replyErr(`ID:${id} のNGワードは見つからなかったよ`);return;}
+          await reply(`「${r.rows[0].pattern}」を削除したよ`,{title:'NGワード削除',color:0x2ecc71});return;
+        }
+        if(sub==='exclude'){
+          const chId=interaction.channelId;
+          const ex=await dbQuery('SELECT 1 FROM discord_ng_exclude_channels WHERE guild_id=$1 AND channel_id=$2',[interaction.guild.id,chId]);
+          if(ex.rowCount>0){
+            await dbQuery('DELETE FROM discord_ng_exclude_channels WHERE guild_id=$1 AND channel_id=$2',[interaction.guild.id,chId]);
+            await reply('このチャンネルの除外設定を解除したよ',{title:'除外解除',color:0x2ecc71});
+          }else{
+            await dbQuery('INSERT INTO discord_ng_exclude_channels (guild_id,channel_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[interaction.guild.id,chId]);
+            await reply('このチャンネルをNGワードチェックから除外したよ',{title:'除外設定',color:0xf39c12});
+          }
+          return;
+        }
+        if(sub==='warning-reset'){
+          const target=interaction.options.getUser('user');
+          await dbQuery('UPDATE discord_warnings SET count=0,updated_at=NOW() WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,target.id]);
+          await reply(`<@${target.id}> の警告回数をリセットしたよ`,{title:'警告リセット',color:0x2ecc71});return;
         }
         return;
       }
@@ -2478,24 +2460,24 @@ if(DISCORD_BOT_TOKEN){
       if(cmd==='contact-role'){
         if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const role=interaction.options.getRole('role');
-        await dbQuery('INSERT INTO contact_roles (guild_id,role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[interaction.guild.id,role.id]);
-        await reply(`<@&${role.id}> を問い合わせチャンネルの管理者ロールに追加したよ`,{title:'ロール追加',color:0x2ecc71});return;
-      }
-      if(cmd==='contact-role-remove'){
-        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
-        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const role=interaction.options.getRole('role');
-        const r=await dbQuery('DELETE FROM contact_roles WHERE guild_id=$1 AND role_id=$2 RETURNING role_id',[interaction.guild.id,role.id]);
-        if(!r.rowCount){await replyErr('そのロールは設定されていないよ');return;}
-        await reply(`<@&${role.id}> を管理者ロールから削除したよ`,{title:'ロール削除',color:0xe74c3c});return;
-      }
-      if(cmd==='contact-role-list'){
-        if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
-        if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
-        const r=await dbQuery('SELECT role_id FROM contact_roles WHERE guild_id=$1 ORDER BY id',[interaction.guild.id]);
-        if(!r.rowCount){await reply('管理者ロールはまだ設定されていないよ',{title:'問い合わせ管理者ロール一覧'});return;}
-        await reply(r.rows.map(row=>`<@&${row.role_id}>`).join('\n'),{title:'問い合わせ管理者ロール一覧',color:0x7289da});return;
+        const sub=interaction.options.getSubcommand();
+        if(sub==='add'){
+          const role=interaction.options.getRole('role');
+          await dbQuery('INSERT INTO contact_roles (guild_id,role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[interaction.guild.id,role.id]);
+          await reply(`<@&${role.id}> を問い合わせチャンネルの管理者ロールに追加したよ`,{title:'ロール追加',color:0x2ecc71});return;
+        }
+        if(sub==='remove'){
+          const role=interaction.options.getRole('role');
+          const r=await dbQuery('DELETE FROM contact_roles WHERE guild_id=$1 AND role_id=$2 RETURNING role_id',[interaction.guild.id,role.id]);
+          if(!r.rowCount){await replyErr('そのロールは設定されていないよ');return;}
+          await reply(`<@&${role.id}> を管理者ロールから削除したよ`,{title:'ロール削除',color:0xe74c3c});return;
+        }
+        if(sub==='list'){
+          const r=await dbQuery('SELECT role_id FROM contact_roles WHERE guild_id=$1 ORDER BY id',[interaction.guild.id]);
+          if(!r.rowCount){await reply('管理者ロールはまだ設定されていないよ',{title:'問い合わせ管理者ロール一覧'});return;}
+          await reply(r.rows.map(row=>`<@&${row.role_id}>`).join('\n'),{title:'問い合わせ管理者ロール一覧',color:0x7289da});return;
+        }
+        return;
       }
 
       // ── contact ──
