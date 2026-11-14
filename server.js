@@ -57,20 +57,39 @@ function calcLevel(xp){let lo=0,hi=10000;while(lo<hi){const mid=(lo+hi+1)>>1;tot
 // レベリングシステム（addDiscordXp）
 // ============================================================
 
+const LEVEL_ROLES=[
+  {level:10,roleId:'1512803149772226652'},{level:50,roleId:'1512803414042476617'},
+  {level:100,roleId:'1512804446013358090'},{level:200,roleId:'1512804689744498688'},
+  {level:300,roleId:'1512805503271571536'},{level:400,roleId:'1512805730829205675'},
+  {level:500,roleId:'1512805854217371668'},{level:600,roleId:'1512805977924042802'},
+  {level:700,roleId:'1512806132161450024'},{level:800,roleId:'1512806266047561758'},
+  {level:900,roleId:'1512806383899119657'},{level:1000,roleId:'1512806527805952000'},
+];
+function getRoleForLevel(lv){let r=null;for(const lr of LEVEL_ROLES){if(lv>=lr.level)r=lr;}return r;}
+function baseXpForLevel(lv){if(lv>=1000)return 5;if(lv>=500)return 3;if(lv>=100)return 2;return 1;}
+
 async function addDiscordXp(member, guildId){
   if(!member||member.user.bot) return;
   const userId = member.user.id;
-  const xpGain = 1;
+  const cur = await dbQuery('SELECT xp,level FROM discord_levels WHERE guild_id=$1 AND user_id=$2',[guildId,userId]);
+  const curLevel = cur.rows[0]?.level||0;
+  let xpGain = baseXpForLevel(curLevel);
+  try{ const fv=await dbQuery('SELECT 1 FROM fever WHERE room_id=$1 AND ends_at>NOW()',[CW_ROOM_ID_FOR_DISCORD]); if(fv.rowCount>0) xpGain*=10; }catch{}
   const r = await dbQuery(`INSERT INTO discord_levels (guild_id,user_id,xp,level) VALUES ($1,$2,$3,0)
     ON CONFLICT (guild_id,user_id) DO UPDATE SET xp=discord_levels.xp+$3,updated_at=NOW() RETURNING xp,level`,
     [guildId, userId, xpGain]);
-  if(!r.rows.length) return;
   const {xp, level} = r.rows[0];
   const newLevel = calcLevel(xp);
   if(newLevel > level){
     await dbQuery('UPDATE discord_levels SET level=$1 WHERE guild_id=$2 AND user_id=$3',[newLevel,guildId,userId]);
-    const lvChId = await getGuildChannel(guildId,'leveling');
-    const ch = lvChId ? (member.guild?.channels.cache.get(lvChId)) : null;
+    const lr = getRoleForLevel(newLevel);
+    if(lr && !member.roles.cache.has(lr.roleId)){
+      await member.roles.add(lr.roleId).catch(()=>{});
+      const old = LEVEL_ROLES.filter(x=>x.roleId!==lr.roleId && member.roles.cache.has(x.roleId)).map(x=>x.roleId);
+      if(old.length) await member.roles.remove(old).catch(()=>{});
+    }
+    const lvChId = await getGuildChannel(guildId,'leveling') || DISCORD_LEVEL_UP_CHANNEL_ID;
+    const ch = member.guild?.channels.cache.get(lvChId);
     if(ch) await ch.send({embeds:[{
       description:`<@${userId}> レベルアップ！ **Lv${newLevel}** になったよ！`,
       color:0xf1c40f
@@ -1593,6 +1612,89 @@ const jmaStartTime = new Date(); // 起動時刻（これより前のエント�
 const WEBSUB_HUB = 'https://pubsubhubbub.appspot.com/subscribe';
 const BOT_BASE_URL = process.env.BOT_BASE_URL || '';
 
+// ============================================================
+// CHUNITHM 楽曲情報
+// ============================================================
+const CHUNITHM_SONGS_URL = 'https://static.chunisupport.net/v1/songs.json';
+const CHUNITHM_DIFFS = ['BASIC','ADVANCED','EXPERT','MASTER','ULTIMA'];
+const CHUNITHM_DIFF_COLORS = {BASIC:0x2ecc71,ADVANCED:0xf39c12,EXPERT:0xe74c3c,MASTER:0x9b59b6,ULTIMA:0x2c2c2c};
+let chunithmSongs = [];
+let chunithmLoading = null;
+
+function chunithmNormalize(s){
+  return String(s||'').toLowerCase().replace(/[\s\u3000]+/g,'').replace(/[\u30A1-\u30F6]/g,c=>String.fromCharCode(c.charCodeAt(0)-0x60));
+}
+
+async function loadChunithmSongs(){
+  if(chunithmSongs.length) return chunithmSongs;
+  if(chunithmLoading) return chunithmLoading;
+  chunithmLoading = (async()=>{
+    try{
+      const res = await axios.get(CHUNITHM_SONGS_URL,{timeout:30000});
+      const list = Array.isArray(res.data) ? res.data : res.data?.songs;
+      if(!Array.isArray(list)) throw new Error('songs配列が見つかりません');
+      chunithmSongs = list.map(s=>({...s, _t:chunithmNormalize(s.title), _r:chunithmNormalize(s.reading)}));
+      console.log(`[CHUNITHM] 楽曲キャッシュ完了: ${chunithmSongs.length}件`);
+    }catch(e){ console.error('[CHUNITHM] 楽曲データ取得エラー:', e.message); }
+    chunithmLoading = null;
+    return chunithmSongs;
+  })();
+  return chunithmLoading;
+}
+
+// 入力文字列から候補を検索（前方一致を優先、最大25件）
+function searchChunithmSongs(query){
+  const q = chunithmNormalize(query);
+  if(!q) return chunithmSongs.slice(0,25);
+  const starts=[], contains=[];
+  for(const s of chunithmSongs){
+    if(s._t.startsWith(q)||s._r.startsWith(q)) starts.push(s);
+    else if(s._t.includes(q)||s._r.includes(q)) contains.push(s);
+    if(starts.length>=25) break;
+  }
+  return starts.concat(contains).slice(0,25);
+}
+
+// 選択された値（楽曲ID）または入力された曲名から楽曲を特定
+function findChunithmSong(value){
+  const byId = chunithmSongs.find(s=>s.id===value);
+  if(byId) return byId;
+  const q = chunithmNormalize(value);
+  return chunithmSongs.find(s=>s._t===q) || chunithmSongs.find(s=>s._t.includes(q)||s._r.includes(q)) || null;
+}
+
+// 譜面定数からレベル表記（小数第1位が0〜4ならそのまま、5〜9なら+付き）
+function chunithmLevelLabel(c){
+  if(typeof c!=='number') return '不明';
+  const t = Math.round(c*10);
+  const base = Math.floor(t/10);
+  return (t%10)>=5 ? `${base}+` : `${base}`;
+}
+
+function buildChunithmEmbed(song, diff){
+  const chart = song.charts?.[diff];
+  if(!chart) return null;
+  const constText = typeof chart.const==='number'
+    ? chart.const.toFixed(1)+(chart.is_const_unknown?'（未確定）':'')
+    : '不明';
+  const embed = {
+    title: song.title,
+    description: `**${diff}**`,
+    color: CHUNITHM_DIFF_COLORS[diff]||0x7289da,
+    fields: [
+      {name:'アーティスト', value:song.artist||'不明', inline:false},
+      {name:'ジャンル', value:song.genre||'不明', inline:true},
+      {name:'BPM', value:song.bpm!=null?String(song.bpm):'不明', inline:true},
+      {name:'レベル', value:chunithmLevelLabel(chart.const), inline:true},
+      {name:'譜面定数', value:constText, inline:true},
+      {name:'ノーツ数', value:chart.notes!=null?String(chart.notes):'不明', inline:true},
+      {name:'譜面作者', value:chart.notes_designer||'-', inline:false},
+    ],
+  };
+  if(song.jacket) embed.thumbnail = {url:`https://image.chunisupport.net/jackets/chunithm/${song.jacket}.webp`};
+  return embed;
+}
+
 async function fetchYoutubeChannelName(channelId) {
   try{
     const res = await axios.get(`https://www.youtube.com/xml/feeds/videos.xml?channel_id=${channelId}`, {timeout:8000});
@@ -1930,7 +2032,8 @@ if(DISCORD_BOT_TOKEN){
 
   discordClient.once(Events.ClientReady, async(c)=>{
     console.log(`[Discord] bot起動: ${c.user.tag}`);
-    // VOICEVOX話者一覧を起動時に1回だけ取得してキャッシュ（レート制限対策）
+    // CHUNITHM楽曲データを起動時にキャッシュ
+    loadChunithmSongs().catch(()=>{});
     const ADMIN_PERM = PermissionFlagsBits.ManageMessages;
 
     const cmds = [
@@ -1947,7 +2050,6 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('scratch-project').setDescription('Scratchプロジェクト情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('プロジェクトID').setRequired(true)),
       new SlashCommandBuilder().setName('song-typing-info').setDescription('歌詞タイピング情報を表示するよ').addStringOption(o=>o.setName('id').setDescription('曲ID').setRequired(true)),
       new SlashCommandBuilder().setName('alarm').setDescription('このチャンネルにアラームを設定するよ').addStringOption(o=>o.setName('datetime').setDescription('日時（YYYY-MM-DD HH:MM）').setRequired(true)).addStringOption(o=>o.setName('message').setDescription('メッセージ').setRequired(true)),
-      new SlashCommandBuilder().setName('miaq').setDescription('メッセージをMake it a Quoteにするよ').addStringOption(o=>o.setName('message-id').setDescription('対象のメッセージID').setRequired(true)),
       // ━━ 管理者専用コマンド ━━
       new SlashCommandBuilder().setName('clear').setDescription('メッセージを指定数削除するよ').addIntegerOption(o=>o.setName('count').setDescription('削除数（1〜100）').setRequired(true).setMinValue(1).setMaxValue(100)).setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('prohibit').setDescription('このチャンネルで発言禁止にするよ').addStringOption(o=>o.setName('duration').setDescription('時間（例: 5m, 1h、最大3h）').setRequired(true)).setDefaultMemberPermissions(ADMIN_PERM),
@@ -1981,6 +2083,19 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('admin').setDescription('このチャンネルを管理者チャンネルに設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('log').setDescription('このチャンネルでログを受け取るように設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       // Discord NGワード（サーバーごと）
+      new SlashCommandBuilder().setName('rank').setDescription('自分のレベルとXPを確認するよ'),
+      new SlashCommandBuilder().setName('event').setDescription('イベントを登録・一覧・削除するよ')
+        .addSubcommand(s=>s.setName('add').setDescription('イベントを登録するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、例: 06-15）').setRequired(true)).addStringOption(o=>o.setName('content').setDescription('イベント内容').setRequired(true)))
+        .addSubcommand(s=>s.setName('list').setDescription('指定日のイベント一覧を表示するよ').addStringOption(o=>o.setName('date').setDescription('日付（MM-DD形式、省略で今日）')))
+        .addSubcommand(s=>s.setName('delete').setDescription('イベントを削除するよ').addIntegerOption(o=>o.setName('id').setDescription('イベントID').setRequired(true)))
+        .setDefaultMemberPermissions(ADMIN_PERM),
+      (()=>{const b=new SlashCommandBuilder().setName('role-panel').setDescription('ロールパネルを作成するよ').addStringOption(o=>o.setName('title').setDescription('パネルのタイトル').setRequired(true));for(let i=1;i<=24;i++)b.addRoleOption(o=>o.setName(`role${i}`).setDescription(`ロール${i}`).setRequired(i===1));return b.setDefaultMemberPermissions(ADMIN_PERM);})(),
+      new SlashCommandBuilder().setName('verify').setDescription('認証パネルを作成するよ').addRoleOption(o=>o.setName('role').setDescription('認証時に付与するロール').setRequired(true)).addStringOption(o=>o.setName('title').setDescription('タイトル（省略可）')).addStringOption(o=>o.setName('description').setDescription('説明文（省略可）')).setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('server-status').setDescription('サーバー概要カテゴリを作成して1分毎に更新するよ').setDefaultMemberPermissions(ADMIN_PERM),
+      new SlashCommandBuilder().setName('contact').setDescription('管理者に連絡するよ').addStringOption(o=>o.setName('message').setDescription('管理者への内容').setRequired(true)),
+      new SlashCommandBuilder().setName('chunithm-info').setDescription('CHUNITHMの譜面情報を表示するよ')
+        .addStringOption(o=>o.setName('music').setDescription('楽曲名').setRequired(true).setAutocomplete(true))
+        .addStringOption(o=>o.setName('difficulty').setDescription('難易度').setRequired(true).addChoices(...CHUNITHM_DIFFS.map(d=>({name:d,value:d})))),
       new SlashCommandBuilder().setName('ng').setDescription('NGワードを管理するよ')
         .addSubcommand(s=>s.setName('add').setDescription('NGワードを追加するよ').addStringOption(o=>o.setName('pattern').setDescription('NG文字列（スペース・カンマ区切りで複数可）').setRequired(true)).addBooleanOption(o=>o.setName('is-regex').setDescription('正規表現として扱う')))
         .addSubcommand(s=>s.setName('list').setDescription('NGワード一覧を表示するよ'))
@@ -2066,6 +2181,7 @@ if(DISCORD_BOT_TOKEN){
           '`/scratch-project [id]` - Scratchプロジェクト情報',
           '`/song-typing-info [id]` - 歌詞タイピング情報',
           '`/alarm [datetime] [message]` - アラーム設定',
+          '`/chunithm-info [music] [difficulty]` - CHUNITHMの譜面情報（レベル・譜面定数・ノーツ数など）',
           '`/contact [message]` - 管理者に問い合わせる（専用チャンネルが作られるよ）',
           '`/event add/list/delete` - イベント管理',
           '',
@@ -2539,6 +2655,45 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
 
+      // ── event ──
+      if(cmd==='event'){
+        const sub=interaction.options.getSubcommand();
+        if(sub==='add'){
+          if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+          const date=interaction.options.getString('date'),content=interaction.options.getString('content');
+          if(!/^\d{2}-\d{2}$/.test(date)){await replyErr('日付はMM-DD形式で入力してね（例: 06-15）');return;}
+          await dbQuery('INSERT INTO events (event_date,content) VALUES ($1,$2) ON CONFLICT DO NOTHING',[date,content]);
+          await reply(`**${date}** に「${content}」を登録したよ！`,{title:'イベント登録完了',color:0x2ecc71});return;
+        }
+        if(sub==='list'){
+          const date=interaction.options.getString('date')||(()=>{const jst=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));return `${String(jst.getMonth()+1).padStart(2,'0')}-${String(jst.getDate()).padStart(2,'0')}`;})();
+          const r=await dbQuery('SELECT id,content FROM events WHERE event_date=$1 ORDER BY created_at',[date]);
+          if(!r.rows.length){await reply(`**${date}** にイベントはないよ`,{title:'イベント一覧'});return;}
+          await reply(r.rows.map(row=>`ID:${row.id} ${row.content}`).join('\n'),{title:`${date} のイベント一覧`,color:0x7289da});return;
+        }
+        if(sub==='delete'){
+          if(!isAdmin){await replyErr('管理者しか実行できないコマンドだよ！');return;}
+          const id=interaction.options.getInteger('id');
+          const r=await dbQuery('DELETE FROM events WHERE id=$1 RETURNING event_date,content',[id]);
+          if(!r.rows.length){await replyErr(`ID:${id} のイベントは見つからなかったよ`);return;}
+          await reply(`「${r.rows[0].content}」（${r.rows[0].event_date}）を削除したよ`,{title:'イベント削除完了',color:0xe74c3c});return;
+        }
+        return;
+      }
+
+      // ── chunithm-info ──
+      if(cmd==='chunithm-info'){
+        await loadChunithmSongs();
+        if(!chunithmSongs.length){await replyErr('楽曲データを取得できなかったよ。少し待ってからもう一度試してね');return;}
+        const song=findChunithmSong(interaction.options.getString('music'));
+        if(!song){await replyErr('その楽曲は見つからなかったよ。候補から選んでね');return;}
+        const diff=interaction.options.getString('difficulty');
+        const embed=buildChunithmEmbed(song,diff);
+        if(!embed){await replyErr(`**${song.title}** には ${diff} の譜面がないよ`);return;}
+        await interaction.editReply({embeds:[embed],content:''});
+        return;
+      }
+
       // ── rank ──
       if(cmd==='rank'){
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
@@ -2548,7 +2703,8 @@ if(DISCORD_BOT_TOKEN){
         const {xp,level}=r.rows[0];
         const nextXp=totalXpForLevel(level+1);
         const curXp=totalXpForLevel(level);
-        await reply(`レベル: **${level}**\nXP: **${xp}** / ${nextXp}（次のレベルまで ${nextXp-xp} XP）`,{title:`${interaction.member.displayName} のランク`,color:0xf1c40f});
+        const lrr=getRoleForLevel(level);
+        await reply(`レベル: **${level}**${lrr?`（<@&${lrr.roleId}>）`:''}\nXP: **${xp}** / ${nextXp}（次のレベルまで ${nextXp-xp} XP）`,{title:`${interaction.member.displayName} のランク`,color:0xf1c40f});
         return;
       }
 
@@ -2859,6 +3015,22 @@ if(DISCORD_BOT_TOKEN){
   });
 
   // メッセージ編集ログ
+  // CHUNITHM 楽曲名のオートコンプリート
+  discordClient.on(Events.InteractionCreate, async(interaction)=>{
+    if(!interaction.isAutocomplete()||interaction.commandName!=='chunithm-info') return;
+    try{
+      if(!chunithmSongs.length) await loadChunithmSongs();
+      const focused = interaction.options.getFocused();
+      const found = searchChunithmSongs(focused);
+      const titleCount = {};
+      for(const s of found) titleCount[s.title]=(titleCount[s.title]||0)+1;
+      await interaction.respond(found.map(s=>({
+        name: (titleCount[s.title]>1 ? `${s.title} (${s.artist||''})` : s.title).substring(0,100),
+        value: s.id,
+      })));
+    }catch(e){ console.error('[CHUNITHM] オートコンプリートエラー:', e.message); }
+  });
+
   discordClient.on(Events.MessageUpdate, async(oldMsg, newMsg)=>{
     if(!newMsg.guild||newMsg.author?.bot||newMsg.author?.id===DISCORD_BOT_USER_ID) return;
     if(oldMsg.content===newMsg.content) return; // 内容変化なし（embed展開等）はスキップ
