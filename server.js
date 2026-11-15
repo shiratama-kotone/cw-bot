@@ -1625,16 +1625,24 @@ function chunithmNormalize(s){
   return String(s||'').toLowerCase().replace(/[\s\u3000]+/g,'').replace(/[\u30A1-\u30F6]/g,c=>String.fromCharCode(c.charCodeAt(0)-0x60));
 }
 
-async function loadChunithmSongs(){
-  if(chunithmSongs.length) return chunithmSongs;
+// BOM付きJSONにも対応して取得（失敗時は例外）
+async function fetchJsonLoose(url){
+  const res = await axios.get(url,{timeout:30000,responseType:'text',transformResponse:[d=>d]});
+  const text = typeof res.data==='string' ? res.data : JSON.stringify(res.data);
+  return JSON.parse(text.replace(/^\uFEFF/,''));
+}
+
+// force=true で再取得。取得に失敗した場合は古いキャッシュを残す
+async function loadChunithmSongs(force=false){
+  if(!force && chunithmSongs.length) return chunithmSongs;
   if(chunithmLoading) return chunithmLoading;
   chunithmLoading = (async()=>{
     try{
-      const res = await axios.get(CHUNITHM_SONGS_URL,{timeout:30000});
-      const list = Array.isArray(res.data) ? res.data : res.data?.songs;
-      if(!Array.isArray(list)) throw new Error('songs配列が見つかりません');
+      const data = await fetchJsonLoose(CHUNITHM_SONGS_URL);
+      const list = Array.isArray(data) ? data : data?.songs;
+      if(!Array.isArray(list)||!list.length) throw new Error('songs配列が見つかりません');
       chunithmSongs = list.map(s=>({...s, _t:chunithmNormalize(s.title), _r:chunithmNormalize(s.reading)}));
-      console.log(`[CHUNITHM] 楽曲キャッシュ完了: ${chunithmSongs.length}件`);
+      console.log(`[CHUNITHM] 楽曲キャッシュ更新: ${chunithmSongs.length}件`);
     }catch(e){ console.error('[CHUNITHM] 楽曲データ取得エラー:', e.message); }
     chunithmLoading = null;
     return chunithmSongs;
@@ -1693,6 +1701,84 @@ function buildChunithmEmbed(song, diff){
   };
   if(song.jacket) embed.thumbnail = {url:`https://image.chunisupport.net/jackets/chunithm/${song.jacket}.webp`};
   return embed;
+}
+
+// ============================================================
+// オンゲキ 楽曲情報
+// ============================================================
+const ONGEKI_SONGS_URL = 'https://reiwa.f5.si/ongeki_all.json';
+const ONGEKI_DIFF_KEYS = {BASIC:'BAS',ADVANCED:'ADV',EXPERT:'EXP',MASTER:'MAS',LUNATIC:'LUN'};
+const ONGEKI_DIFF_COLORS = {BASIC:0x2ecc71,ADVANCED:0xf39c12,EXPERT:0xe74c3c,MASTER:0x9b59b6,LUNATIC:0xbdc3c7};
+let ongekiSongs = [];
+let ongekiLoading = null;
+
+// 同じ曲(meta.id)が複数エントリに分かれているため（LUNATIC専用エントリなど）IDで統合する
+function mergeOngekiEntries(list){
+  const map = new Map();
+  for(const e of list){
+    const id = e?.meta?.id;
+    if(id==null || !e.meta) continue;
+    const cur = map.get(id);
+    if(!cur){ map.set(id,{id:String(id),meta:e.meta,data:{...(e.data||{})}}); continue; }
+    const hasNormal = Object.keys(e.data||{}).some(k=>k!=='LUN');
+    const curHasNormal = Object.keys(cur.data).some(k=>k!=='LUN');
+    if(hasNormal && !curHasNormal) cur.meta = e.meta;
+    Object.assign(cur.data, e.data||{});
+  }
+  return [...map.values()].map(s=>({...s,_t:chunithmNormalize(s.meta.title)}));
+}
+
+async function loadOngekiSongs(force=false){
+  if(!force && ongekiSongs.length) return ongekiSongs;
+  if(ongekiLoading) return ongekiLoading;
+  ongekiLoading = (async()=>{
+    try{
+      const data = await fetchJsonLoose(ONGEKI_SONGS_URL);
+      if(!Array.isArray(data)||!data.length) throw new Error('楽曲配列が見つかりません');
+      ongekiSongs = mergeOngekiEntries(data);
+      console.log(`[ONGEKI] 楽曲キャッシュ更新: ${ongekiSongs.length}件`);
+    }catch(e){ console.error('[ONGEKI] 楽曲データ取得エラー:', e.message); }
+    ongekiLoading = null;
+    return ongekiSongs;
+  })();
+  return ongekiLoading;
+}
+
+function searchOngekiSongs(query){
+  const q = chunithmNormalize(query);
+  if(!q) return ongekiSongs.slice(0,25);
+  const starts=[], contains=[];
+  for(const s of ongekiSongs){
+    if(s._t.startsWith(q)) starts.push(s);
+    else if(s._t.includes(q)) contains.push(s);
+    if(starts.length>=25) break;
+  }
+  return starts.concat(contains).slice(0,25);
+}
+
+function findOngekiSong(value){
+  const byId = ongekiSongs.find(s=>s.id===value);
+  if(byId) return byId;
+  const q = chunithmNormalize(value);
+  return ongekiSongs.find(s=>s._t===q) || ongekiSongs.find(s=>s._t.includes(q)) || null;
+}
+
+function buildOngekiEmbed(song, diff){
+  const chart = song.data?.[ONGEKI_DIFF_KEYS[diff]];
+  if(!chart) return null;
+  const fmt = n => typeof n==='number' ? n.toFixed(1) : '不明';
+  const unknown = chart.is_const_unknown===1 || chart.is_const_unknown===true || chart.is_const_unknown==='1';
+  return {
+    title: song.meta.title,
+    description: `**${diff}**`,
+    color: ONGEKI_DIFF_COLORS[diff]||0x7289da,
+    fields: [
+      {name:'アーティスト', value:song.meta.artist||'不明', inline:false},
+      {name:'ジャンル', value:song.meta.genre||'不明', inline:true},
+      {name:'レベル', value:fmt(chart.level), inline:true},
+      {name:'譜面定数', value:fmt(chart.const)+(unknown?'（未確定）':''), inline:true},
+    ],
+  };
 }
 
 async function fetchYoutubeChannelName(channelId) {
@@ -1914,6 +2000,9 @@ cron.schedule('0 59 23 * * *',async()=>await sendDailyRanking('今日のコメ�
 cron.schedule('0 0 6 * * *',  async()=>await sendMorningMsg(),                            {timezone:'Asia/Tokyo'});
 cron.schedule('0 0 18 * * *', async()=>await sendTomorrowWeather(),                       {timezone:'Asia/Tokyo'});
 
+// 1時間おき: CHUNITHM・オンゲキの楽曲データを再取得（失敗時は古いキャッシュを維持）
+cron.schedule('0 * * * *', async()=>{ await Promise.allSettled([loadChunithmSongs(true), loadOngekiSongs(true)]); },{timezone:'Asia/Tokyo'});
+
 // 1分毎: サーバーステータス更新
 cron.schedule('* * * * *', async()=>{
   if(!discordClient) return;
@@ -2034,6 +2123,7 @@ if(DISCORD_BOT_TOKEN){
     console.log(`[Discord] bot起動: ${c.user.tag}`);
     // CHUNITHM楽曲データを起動時にキャッシュ
     loadChunithmSongs().catch(()=>{});
+    loadOngekiSongs().catch(()=>{});
     const ADMIN_PERM = PermissionFlagsBits.ManageMessages;
 
     const cmds = [
@@ -2096,6 +2186,9 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('chunithm-info').setDescription('CHUNITHMの譜面情報を表示するよ')
         .addStringOption(o=>o.setName('music').setDescription('楽曲名').setRequired(true).setAutocomplete(true))
         .addStringOption(o=>o.setName('difficulty').setDescription('難易度').setRequired(true).addChoices(...CHUNITHM_DIFFS.map(d=>({name:d,value:d})))),
+      new SlashCommandBuilder().setName('ongeki-info').setDescription('オンゲキの譜面情報を表示するよ')
+        .addStringOption(o=>o.setName('music').setDescription('楽曲名').setRequired(true).setAutocomplete(true))
+        .addStringOption(o=>o.setName('difficulty').setDescription('難易度').setRequired(true).addChoices(...Object.keys(ONGEKI_DIFF_KEYS).map(d=>({name:d,value:d})))),
       new SlashCommandBuilder().setName('ng').setDescription('NGワードを管理するよ')
         .addSubcommand(s=>s.setName('add').setDescription('NGワードを追加するよ').addStringOption(o=>o.setName('pattern').setDescription('NG文字列（スペース・カンマ区切りで複数可）').setRequired(true)).addBooleanOption(o=>o.setName('is-regex').setDescription('正規表現として扱う')))
         .addSubcommand(s=>s.setName('list').setDescription('NGワード一覧を表示するよ'))
@@ -2182,6 +2275,7 @@ if(DISCORD_BOT_TOKEN){
           '`/song-typing-info [id]` - 歌詞タイピング情報',
           '`/alarm [datetime] [message]` - アラーム設定',
           '`/chunithm-info [music] [difficulty]` - CHUNITHMの譜面情報（レベル・譜面定数・ノーツ数など）',
+          '`/ongeki-info [music] [difficulty]` - オンゲキの譜面情報（レベル・譜面定数）',
           '`/contact [message]` - 管理者に問い合わせる（専用チャンネルが作られるよ）',
           '`/event add/list/delete` - イベント管理',
           '',
@@ -2694,6 +2788,19 @@ if(DISCORD_BOT_TOKEN){
         return;
       }
 
+      // ── ongeki-info ──
+      if(cmd==='ongeki-info'){
+        await loadOngekiSongs();
+        if(!ongekiSongs.length){await replyErr('楽曲データを取得できなかったよ。少し待ってからもう一度試してね');return;}
+        const song=findOngekiSong(interaction.options.getString('music'));
+        if(!song){await replyErr('その楽曲は見つからなかったよ。候補から選んでね');return;}
+        const diff=interaction.options.getString('difficulty');
+        const embed=buildOngekiEmbed(song,diff);
+        if(!embed){await replyErr(`**${song.meta.title}** には ${diff} の譜面がないよ`);return;}
+        await interaction.editReply({embeds:[embed],content:''});
+        return;
+      }
+
       // ── rank ──
       if(cmd==='rank'){
         if(!interaction.guild){await replyErr('サーバー内でのみ使えるよ');return;}
@@ -3015,20 +3122,24 @@ if(DISCORD_BOT_TOKEN){
   });
 
   // メッセージ編集ログ
-  // CHUNITHM 楽曲名のオートコンプリート
+  // CHUNITHM / オンゲキ 楽曲名のオートコンプリート
   discordClient.on(Events.InteractionCreate, async(interaction)=>{
-    if(!interaction.isAutocomplete()||interaction.commandName!=='chunithm-info') return;
+    if(!interaction.isAutocomplete()) return;
+    const name = interaction.commandName;
+    if(name!=='chunithm-info' && name!=='ongeki-info') return;
     try{
-      if(!chunithmSongs.length) await loadChunithmSongs();
-      const focused = interaction.options.getFocused();
-      const found = searchChunithmSongs(focused);
+      const isOngeki = name==='ongeki-info';
+      if(isOngeki ? !ongekiSongs.length : !chunithmSongs.length) await (isOngeki?loadOngekiSongs():loadChunithmSongs());
+      const found = isOngeki ? searchOngekiSongs(interaction.options.getFocused()) : searchChunithmSongs(interaction.options.getFocused());
+      const titleOf = s => isOngeki ? s.meta.title : s.title;
+      const artistOf = s => isOngeki ? s.meta.artist : s.artist;
       const titleCount = {};
-      for(const s of found) titleCount[s.title]=(titleCount[s.title]||0)+1;
+      for(const s of found) titleCount[titleOf(s)]=(titleCount[titleOf(s)]||0)+1;
       await interaction.respond(found.map(s=>({
-        name: (titleCount[s.title]>1 ? `${s.title} (${s.artist||''})` : s.title).substring(0,100),
+        name: (titleCount[titleOf(s)]>1 ? `${titleOf(s)} (${artistOf(s)||''})` : titleOf(s)).substring(0,100),
         value: s.id,
       })));
-    }catch(e){ console.error('[CHUNITHM] オートコンプリートエラー:', e.message); }
+    }catch(e){ console.error('[楽曲検索] オートコンプリートエラー:', e.message); }
   });
 
   discordClient.on(Events.MessageUpdate, async(oldMsg, newMsg)=>{
