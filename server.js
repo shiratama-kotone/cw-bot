@@ -1707,6 +1707,7 @@ function buildChunithmEmbed(song, diff){
 // オンゲキ 楽曲情報
 // ============================================================
 const ONGEKI_SONGS_URL = 'https://reiwa.f5.si/ongeki_all.json';
+const ONGEKI_JACKET_URL = 'https://reiwa.f5.si/jackets/ongeki/';
 const ONGEKI_DIFF_KEYS = {BASIC:'BAS',ADVANCED:'ADV',EXPERT:'EXP',MASTER:'MAS',LUNATIC:'LUN'};
 const ONGEKI_DIFF_COLORS = {BASIC:0x2ecc71,ADVANCED:0xf39c12,EXPERT:0xe74c3c,MASTER:0x9b59b6,LUNATIC:0xbdc3c7};
 let ongekiSongs = [];
@@ -1719,11 +1720,15 @@ function mergeOngekiEntries(list){
     const id = e?.meta?.id;
     if(id==null || !e.meta) continue;
     const cur = map.get(id);
-    if(!cur){ map.set(id,{id:String(id),meta:e.meta,data:{...(e.data||{})}}); continue; }
+    // 難易度ごとのジャケット(img)を保持（LUNATIC専用エントリは通常譜面と別の画像を持つ）
+    const imgs = {};
+    for(const k of Object.keys(e.data||{})) imgs[k] = e.meta.img;
+    if(!cur){ map.set(id,{id:String(id),meta:e.meta,data:{...(e.data||{})},imgs}); continue; }
     const hasNormal = Object.keys(e.data||{}).some(k=>k!=='LUN');
     const curHasNormal = Object.keys(cur.data).some(k=>k!=='LUN');
     if(hasNormal && !curHasNormal) cur.meta = e.meta;
     Object.assign(cur.data, e.data||{});
+    Object.assign(cur.imgs, imgs);
   }
   return [...map.values()].map(s=>({...s,_t:chunithmNormalize(s.meta.title)}));
 }
@@ -1768,7 +1773,8 @@ function buildOngekiEmbed(song, diff){
   if(!chart) return null;
   const fmt = n => typeof n==='number' ? n.toFixed(1) : '不明';
   const unknown = chart.is_const_unknown===1 || chart.is_const_unknown===true || chart.is_const_unknown==='1';
-  return {
+  const img = song.imgs?.[ONGEKI_DIFF_KEYS[diff]] || song.meta.img;
+  const embed = {
     title: song.meta.title,
     description: `**${diff}**`,
     color: ONGEKI_DIFF_COLORS[diff]||0x7289da,
@@ -1779,6 +1785,8 @@ function buildOngekiEmbed(song, diff){
       {name:'譜面定数', value:fmt(chart.const)+(unknown?'（未確定）':''), inline:true},
     ],
   };
+  if(img) embed.thumbnail = {url:`${ONGEKI_JACKET_URL}${img}.webp`};
+  return embed;
 }
 
 async function fetchYoutubeChannelName(channelId) {
