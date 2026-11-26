@@ -253,9 +253,12 @@ async function checkDiscordNgWords(message) {
   const count = res.rows[0]?.count || 1;
 
   let actionMsg = `NGワードが含まれていたよ！（警告${count}回目）`;
+  // 処罰除外ユーザーは警告のみ（タイムアウト/BANはスキップ）
+  const punishExempt = (await dbQuery('SELECT 1 FROM discord_punish_exempt WHERE guild_id=$1 AND user_id=$2',[message.guild.id,message.author.id])).rowCount>0;
+  if (punishExempt && count >= 6) actionMsg += '\n処罰除外ユーザーのため、タイムアウト/BANはスキップしました。';
   try {
     const member = await message.guild.members.fetch(message.author.id).catch(() => null);
-    if (member) {
+    if (member && !punishExempt) {
       if (count >= 21) {
         await member.ban({ reason: `NGワード違反 ${count}回` });
         actionMsg += '\n21回以上のため**BAN**しました。';
@@ -446,6 +449,17 @@ async function initializeDatabase() {
       id SERIAL PRIMARY KEY, room_id BIGINT NOT NULL, account_id BIGINT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(room_id, account_id))`);
     await dbQuery(`CREATE INDEX IF NOT EXISTS idx_bl ON black_list(room_id, account_id)`);
+    // ブラックリスト判定の除外ユーザー（Chatwork: ルームごと / Discord: サーバーごと）
+    await dbQuery(`CREATE TABLE IF NOT EXISTS black_list_exempt (
+      id SERIAL PRIMARY KEY,
+      room_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      UNIQUE(room_id, account_id))`);
+    await dbQuery(`CREATE TABLE IF NOT EXISTS discord_punish_exempt (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      UNIQUE(guild_id, user_id))`);
 
     await dbQuery(`CREATE TABLE IF NOT EXISTS points (
       id SERIAL PRIMARY KEY, room_id BIGINT NOT NULL, account_id BIGINT NOT NULL,
@@ -739,6 +753,11 @@ const CW = {
     const r = await dbQuery('SELECT 1 FROM black_list WHERE room_id=$1 AND account_id=$2',[roomId,accountId]);
     return r.rowCount>0;
   },
+  // ブラックリスト判定の除外ユーザーか（除外ユーザーは自動フィルターの対象外・入室時の強制閲覧のみも無効）
+  async isBlackExempt(roomId, accountId) {
+    const r = await dbQuery('SELECT 1 FROM black_list_exempt WHERE room_id=$1 AND account_id=$2',[String(roomId),String(accountId)]);
+    return r.rowCount>0;
+  },
   async forceReadOnly(roomId, targetId, members) {
     try {
       const admins  = members.filter(m=>m.role==='admin').map(m=>String(m.account_id));
@@ -949,7 +968,7 @@ async function processWebHook(data) {
             const normWord = r.word.toLowerCase().replace(/[\u30A1-\u30F6]/g,c=>String.fromCharCode(c.charCodeAt(0)-0x60));
             return normMsg.includes(normWord);
           });
-          if(hit){
+          if(hit && !(await CW.isBlackExempt(roomId,accountId))){
             await CW.addBlackList(roomId,accountId);
             await CW.forceReadOnly(roomId,accountId,mems);
             const n=await CW.nameById(accountId,mems,roomId);
@@ -978,7 +997,7 @@ async function processWebHook(data) {
       const m=messageBody.match(/\[piconname:(\d+)\]/);
       if(m?.[1]){
         const uid=m[1];
-        if(await CW.isBlackListed(String(roomId),uid)){
+        if(await CW.isBlackListed(String(roomId),uid) && !(await CW.isBlackExempt(roomId,uid))){
           await new Promise(r=>setTimeout(r,1500));
           const fm=await CW.members(roomId);
           await CW.forceReadOnly(roomId,uid,fm);
@@ -994,7 +1013,7 @@ async function processWebHook(data) {
     // 権限変更ブラックリストチェック
     if(messageBody.includes('[dtext:chatroom_member_is]')&&messageBody.includes('[dtext:chatroom_priv_changed]')){
       const m=messageBody.match(/\[piconname:(\d+)\]/);
-      if(m?.[1]&&await CW.isBlackListed(String(roomId),m[1])){
+      if(m?.[1]&&await CW.isBlackListed(String(roomId),m[1])&&!(await CW.isBlackExempt(roomId,m[1]))){
         await new Promise(r=>setTimeout(r,1500));
         const fm=await CW.members(roomId);
         const mem=fm.find(x=>String(x.account_id)===m[1]);
@@ -1051,7 +1070,7 @@ async function processWebHook(data) {
     }
 
     // TOALL
-    if(!isDirectChat&&messageBody.toLowerCase().includes('toall')&&!isSenderAdmin){
+    if(!isDirectChat&&messageBody.toLowerCase().includes('toall')&&!isSenderAdmin&&!(await CW.isBlackExempt(roomId,accountId))){
       await CW.send(roomId,'[info]TOALLを検知したよ！\nフィルターが作動するよ！[/info]');
       const p=new URLSearchParams();
       const ad=currentMembers.filter(m=>m.role==='admin').map(m=>String(m.account_id));
@@ -1080,7 +1099,7 @@ async function processWebHook(data) {
     // 絵文字大量
     if(!isDirectChat){
       const ec=countEmojis(messageBody);
-      if(ec>=50&&!isSenderAdmin){
+      if(ec>=50&&!isSenderAdmin&&!(await CW.isBlackExempt(roomId,accountId))){
         await CW.send(roomId,`[info]Chatworkの絵文字を${ec}個検知したよ！\nフィルターが作動するよ！[/info]`);
         const p=new URLSearchParams();
         const ad=currentMembers.filter(m=>m.role==='admin').map(m=>String(m.account_id));
@@ -1190,6 +1209,27 @@ async function processWebHook(data) {
       const ids=messageBody.substring(15).trim().split(/\s+/).filter(Boolean);
       const del=[]; for(const id of ids){ await dbQuery('DELETE FROM black_list WHERE room_id=$1 AND account_id=$2',[roomId,id]); del.push(`[picon:${id}]${await CW.nameById(id,currentMembers,roomId)}`); }
       await rp(`${del.join('、')}をブラックリストから削除したよ`); return;
+    }
+    if(messageBody==='/blacklist-exempt-list'){
+      if(!await adminOnly()) return;
+      const r=await dbQuery('SELECT account_id FROM black_list_exempt WHERE room_id=$1 ORDER BY account_id',[String(roomId)]);
+      if(!r.rows.length){ await rp('ブラックリスト判定の除外ユーザーはいないよ'); return; }
+      let t=''; for(const row of r.rows) t+=`・[picon:${row.account_id}]${await CW.nameById(row.account_id,currentMembers,roomId)}\n`;
+      await rp(`${userName}ちゃん\n[info][title]ブラックリスト判定の除外ユーザー[/title]\n${t}[/info]`); return;
+    }
+    if(messageBody.startsWith('/blacklist-exempt-del ')){
+      if(!await adminOnly()) return;
+      const ids=messageBody.substring(22).trim().split(/[\s,，、]+/).filter(x=>/^\d+$/.test(x));
+      if(!ids.length){ await rp('使い方: /blacklist-exempt-del {アカウントID}...'); return; }
+      const del=[]; for(const id of ids){ const r=await dbQuery('DELETE FROM black_list_exempt WHERE room_id=$1 AND account_id=$2 RETURNING account_id',[String(roomId),id]); if(r.rowCount) del.push(`[picon:${id}]${await CW.nameById(id,currentMembers,roomId)}`); }
+      await rp(del.length?`${del.join('、')}をブラックリスト判定の除外から外したよ`:'指定したユーザーは除外されていなかったよ'); return;
+    }
+    if(messageBody.startsWith('/blacklist-exempt ')){
+      if(!await adminOnly()) return;
+      const ids=messageBody.substring(18).trim().split(/[\s,，、]+/).filter(x=>/^\d+$/.test(x));
+      if(!ids.length){ await rp('使い方: /blacklist-exempt {アカウントID}...'); return; }
+      const added=[]; for(const id of ids){ await dbQuery('INSERT INTO black_list_exempt (room_id,account_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[String(roomId),id]); added.push(`[picon:${id}]${await CW.nameById(id,currentMembers,roomId)}`); }
+      await rp(`${added.join('、')}をブラックリスト判定から除外したよ\n（NGワード・TOALL・絵文字大量での自動追加と、入室時の閲覧のみ強制が対象外になるよ）`); return;
     }
     if(messageBody==='/today'){
       const jst=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));
@@ -1394,7 +1434,7 @@ async function processWebHook(data) {
     }
     if(messageBody==='/help'){
       const common='[info][title]コマンド一覧だよっ！[/title]/help - このヘルプを表示\n[hr]/today - 今日の日付とイベント\n[hr]/test - あなたとこの部屋の情報\n[hr]/info - この部屋の情報\n[hr]/member - メンバー一覧\n[hr]/member-name - メンバー名一覧\n[hr]/romera - 今日のメッセージ数ランキング\n[hr]/message-total - 累計発言数ランキング\n[hr]/points - 自分のポイントを確認\n[hr]/points-all - 全員のポイントランキング\n[hr]/send {ID} {pt} - ポイントを送る\n[hr]/yes-or-no - yes/noをランダム回答\n[hr]/wiki 検索ワード - Wikipedia検索\n[hr]/lyric URL - 歌詞を取得\n[hr]/song-typing-info 曲ID - 歌詞タイピング情報\n[hr]/alarm YYYY-MM-DD HH:MM メッセージ - アラーム設定\n[hr]/scratch-user ユーザー名 - Scratchユーザー情報\n[hr]/scratch-project プロジェクトID - Scratch作品情報\n[hr]/event add MM-DD 内容 - イベント登録\n[hr]/event list [MM-DD] - イベント一覧\n[hr]/event del {ID} - イベント削除\n[hr]/komekasegi - 過疎対策コメ連打\n[hr]/disself - 自分の権限を下げる\n[hr]/normal-omikuji - 普通のおみくじ\n[hr]おみくじ / おみくじXX連 / /yes-or-no - 運試し[/info]';
-      const admin=isSenderAdmin?'\n[info][title]管理者専用コマンドだよっ！[/title]/info {ルームID} - 別ルームの情報を取得\n[hr]/kick {ID}... - キック\n[hr]/mute {ID}... - 閲覧のみに変更\n[hr]/blacklist - ブラックリスト確認\n[hr]/blacklist-add {ID}... - ブラックリストに追加\n[hr]/blacklist-del {ID}... - ブラックリストから削除\n[hr]/fever {時間} - フィーバータイム（例: 5m, 1h）\n[hr]/ng {言葉1} {言葉2}... - NGワード登録（スペース・カンマ区切りで複数可）\n[hr]/ok {言葉1} {言葉2}... - NGワード削除（スペース・カンマ区切りで複数可）\n[hr]/ng-check - NGワード一覧[/info]':'';
+      const admin=isSenderAdmin?'\n[info][title]管理者専用コマンドだよっ！[/title]/info {ルームID} - 別ルームの情報を取得\n[hr]/kick {ID}... - キック\n[hr]/mute {ID}... - 閲覧のみに変更\n[hr]/blacklist - ブラックリスト確認\n[hr]/blacklist-add {ID}... - ブラックリストに追加\n[hr]/blacklist-del {ID}... - ブラックリストから削除\n[hr]/blacklist-exempt {ID}... - ブラックリスト判定から除外\n[hr]/blacklist-exempt-del {ID}... - 除外を解除\n[hr]/blacklist-exempt-list - 除外ユーザー一覧\n[hr]/fever {時間} - フィーバータイム（例: 5m, 1h）\n[hr]/ng {言葉1} {言葉2}... - NGワード登録（スペース・カンマ区切りで複数可）\n[hr]/ok {言葉1} {言葉2}... - NGワード削除（スペース・カンマ区切りで複数可）\n[hr]/ng-check - NGワード一覧[/info]':'';
       await rp(`${userName}ちゃん\n${common}${admin}`); return;
     }
     const responses={'はんせい':`[To:10911090] はんせい\n${userName}に呼ばれてるよっ！`,'ゆゆゆ':`[To:10911090] ゆゆゆ\n${userName}に呼ばれてるよっ！`,'古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'古古古古古古古古古古古古古古古古古古古古米':`[To:10870480] 男の娘\n${userName}に呼ばれてるよっ！`,'学生':`[To:11086798] かわいこちゃん\n${userName}に呼ばれてるよっ！`,'みおん':'はーい！','いろいろあぷり':'https://shiratama-kotone.github.io/any-app/\nどーぞ！','喘いでください湊音様':'そう簡単に喘ぐとでも思った？残念！ぼくは喘ぎません...っ♡///','おやすみ':'おやすみ！','おはよう':'おはよう！','プロセカやってくる':'がんばれ！','せっ':'くす','精':'子','114':'514','ちん':'ちんㅤ','富士山':'3776m!','TOALL':'[toall...するわけないじゃん！','botのコードください':'https://github.com/shiratama-kotone/cw-bot\nどーぞ！','1+1=':'1!','トイレいってくる':'漏らさないでねっ！','6':'9','Git':'hub'};
@@ -2202,6 +2242,7 @@ if(DISCORD_BOT_TOKEN){
         .addSubcommand(s=>s.setName('list').setDescription('NGワード一覧を表示するよ'))
         .addSubcommand(s=>s.setName('remove').setDescription('NGワードを削除するよ').addIntegerOption(o=>o.setName('id').setDescription('NGワードのID').setRequired(true)))
         .addSubcommand(s=>s.setName('exclude').setDescription('このチャンネルをNGワードチェックから除外・解除するよ'))
+        .addSubcommand(s=>s.setName('exempt').setDescription('ユーザーを処罰（タイムアウト/BAN）の対象から除外・解除するよ').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)))
         .addSubcommand(s=>s.setName('warning-reset').setDescription('ユーザーの警告回数をリセットするよ').addUserOption(o=>o.setName('user').setDescription('対象ユーザー').setRequired(true)))
         .setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('contact-role').setDescription('問い合わせ管理者ロールを管理するよ')
@@ -2310,7 +2351,7 @@ if(DISCORD_BOT_TOKEN){
           '`/mute [user] [minutes]` - タイムアウト',
           '`/role-panel` - ロールパネル作成',
           '`/verify` - 認証パネル作成',
-          '`/ng add/list/remove/exclude/warning-reset` - NGワード管理（addはスペース・カンマ区切りで複数可）',
+          '`/ng add/list/remove/exclude/exempt/warning-reset` - NGワード管理（addはスペース・カンマ区切りで複数可、exemptは処罰除外ユーザーの設定・解除）',
           '`/server-status` - サーバー概要チャンネル作成・更新',
           '`/eew` - 地震情報チャンネル設定',
           '`/eew-test` - EEWテスト地図生成',
@@ -2562,10 +2603,12 @@ if(DISCORD_BOT_TOKEN){
         if(sub==='list'){
           const r=await dbQuery('SELECT id,pattern,is_regex FROM discord_ng_words WHERE guild_id=$1 ORDER BY id',[interaction.guild.id]);
           const ex=await dbQuery('SELECT channel_id FROM discord_ng_exclude_channels WHERE guild_id=$1',[interaction.guild.id]);
-          if(!r.rowCount){await reply('NGワードはまだないよ',{title:'NGワード一覧'});return;}
+          const exu=await dbQuery('SELECT user_id FROM discord_punish_exempt WHERE guild_id=$1',[interaction.guild.id]);
+          const exuList=exu.rows.map(row=>`<@${row.user_id}>`).join(' ')||'なし';
+          if(!r.rowCount){await reply(`NGワードはまだないよ\n\n**処罰除外ユーザー：** ${exuList}`,{title:'NGワード一覧'});return;}
           const list=r.rows.map(row=>`ID:${row.id} ${row.is_regex?'[正規表現]':''} \`${row.pattern}\``).join('\n');
           const exList=ex.rows.map(row=>`<#${row.channel_id}>`).join(' ')||'なし';
-          await reply(`${list}\n\n**除外チャンネル：** ${exList}`,{title:'NGワード一覧'});return;
+          await reply(`${list}\n\n**除外チャンネル：** ${exList}\n**処罰除外ユーザー：** ${exuList}`,{title:'NGワード一覧'});return;
         }
         if(sub==='remove'){
           const id=interaction.options.getInteger('id');
@@ -2582,6 +2625,18 @@ if(DISCORD_BOT_TOKEN){
           }else{
             await dbQuery('INSERT INTO discord_ng_exclude_channels (guild_id,channel_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[interaction.guild.id,chId]);
             await reply('このチャンネルをNGワードチェックから除外したよ',{title:'除外設定',color:0xf39c12});
+          }
+          return;
+        }
+        if(sub==='exempt'){
+          const target=interaction.options.getUser('user');
+          const ex=await dbQuery('SELECT 1 FROM discord_punish_exempt WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,target.id]);
+          if(ex.rowCount>0){
+            await dbQuery('DELETE FROM discord_punish_exempt WHERE guild_id=$1 AND user_id=$2',[interaction.guild.id,target.id]);
+            await reply(`<@${target.id}> の処罰除外を解除したよ`,{title:'処罰除外 解除',color:0x2ecc71});
+          }else{
+            await dbQuery('INSERT INTO discord_punish_exempt (guild_id,user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',[interaction.guild.id,target.id]);
+            await reply(`<@${target.id}> を処罰（タイムアウト/BAN）の対象から除外したよ\nNGワードの削除と警告は今まで通り行うよ`,{title:'処罰除外 設定',color:0xf39c12});
           }
           return;
         }
