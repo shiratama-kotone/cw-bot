@@ -8,7 +8,7 @@ const { Pool } = require('pg');
 const cheerio = require('cheerio');
 const {
   Client, GatewayIntentBits, Events, REST, Routes,
-  SlashCommandBuilder, AttachmentBuilder, PermissionFlagsBits, Partials
+  SlashCommandBuilder, ContextMenuCommandBuilder, ApplicationCommandType, AttachmentBuilder, PermissionFlagsBits, Partials
 } = require('discord.js');
 
 const app = express();
@@ -211,6 +211,149 @@ async function updateServerStatus(guild) {
 // ============================================================
 // Discord NGワード処理
 // ============================================================
+// ============================================================
+// メッセージの「こっそり報告」（メッセージ長押し → アプリ → 管理者にこっそり報告）
+// ============================================================
+const REPORT_CTX_NAME = '管理者にこっそり報告';
+const REPORT_TIMEOUTS = [{minutes:10,label:'10分'},{minutes:60,label:'1時間'},{minutes:1440,label:'1日'},{minutes:10080,label:'7日'}];
+
+function buildReportComponents(targetUserId){
+  const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+  const row1 = new ActionRowBuilder().addComponents(
+    ...REPORT_TIMEOUTS.map(t=>new ButtonBuilder().setCustomId(`rpt:to:${targetUserId}:${t.minutes}`).setLabel(`タイムアウト ${t.label}`).setStyle(ButtonStyle.Secondary)));
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`rpt:kick:${targetUserId}`).setLabel('キック').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`rpt:ban:${targetUserId}`).setLabel('BAN').setStyle(ButtonStyle.Danger));
+  return [row1,row2];
+}
+
+function buildReportEmbed(msg, reporterIds){
+  const sentTs = Math.floor(msg.createdTimestamp/1000);
+  const nowTs = Math.floor(Date.now()/1000);
+  const atts = [...(msg.attachments?.values()||[])];
+  const stickers = [...(msg.stickers?.values()||[])];
+  const fields = [
+    {name:'メッセージ送信者', value:`<@${msg.author.id}>\n${msg.author.tag}`, inline:true},
+    {name:'チャンネル', value:`<#${msg.channelId}>`, inline:true},
+    {name:'メッセージ', value:`[メッセージへ移動](${msg.url})`, inline:true},
+    {name:'送信時刻', value:`<t:${sentTs}:F>`, inline:true},
+    {name:'報告時刻', value:`<t:${nowTs}:F>`, inline:true},
+    {name:'報告回数', value:`${reporterIds.length}回`, inline:true},
+    {name:'報告者', value:reporterIds.map(id=>`<@${id}>`).join(' ').substring(0,1024)},
+  ];
+  if(atts.length) fields.push({name:'添付ファイル', value:atts.map(a=>`[${a.name}](${a.url})`).join('\n').substring(0,1024)});
+  if(stickers.length) fields.push({name:'スタンプ', value:stickers.map(s=>s.name).join(', ').substring(0,1024)});
+  const embed = {
+    title: '報告されたメッセージ',
+    description: ((msg.content||'').trim() || '(本文なし)').substring(0,3500),
+    color: 0xe67e22,
+    author: {name: msg.author.tag, icon_url: msg.author.displayAvatarURL()},
+    fields,
+    timestamp: new Date().toISOString(),
+  };
+  const img = atts.find(a=>a.contentType?.startsWith('image/'));
+  if(img) embed.image = {url: img.url};
+  return embed;
+}
+
+// 「管理者にこっそり報告」: 報告者には自分にだけ見える返信をする
+async function handleMessageReport(interaction){
+  await interaction.deferReply({ephemeral:true});
+  const reply = text => interaction.editReply({content:text});
+  try{
+    if(!interaction.guild){ await reply('サーバー内でのみ使えるよ'); return; }
+    const msg = interaction.targetMessage;
+    if(msg.author.id === interaction.user.id){ await reply('自分のメッセージは報告できないよ'); return; }
+    const guildId = interaction.guild.id;
+    const reportChId = await getGuildChannel(guildId,'report');
+    const reportCh = reportChId ? await interaction.guild.channels.fetch(reportChId).catch(()=>null) : null;
+    if(!reportCh){ await reply('報告の受付先が設定されていないよ。管理者に伝えてね'); return; }
+
+    // 同じ人が同じメッセージを何度報告しても1回として数える
+    const ins = await dbQuery('INSERT INTO message_report_entries (guild_id,message_id,reporter_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING id',[guildId,msg.id,interaction.user.id]);
+    if(!ins.rowCount){ await reply('このメッセージはすでに報告済みだよ'); return; }
+    const rep = await dbQuery('SELECT reporter_id FROM message_report_entries WHERE guild_id=$1 AND message_id=$2 ORDER BY id',[guildId,msg.id]);
+    const reporterIds = rep.rows.map(r=>r.reporter_id);
+
+    let sent;
+    try{
+      sent = await reportCh.send({embeds:[buildReportEmbed(msg,reporterIds)], components:buildReportComponents(msg.author.id)});
+    }catch(e){
+      // 送れなかったときは記録を戻して、もう一度報告できるようにする
+      await dbQuery('DELETE FROM message_report_entries WHERE guild_id=$1 AND message_id=$2 AND reporter_id=$3',[guildId,msg.id,interaction.user.id]).catch(()=>{});
+      console.error('[報告] 送信エラー:', e.message);
+      await reply('報告の送信に失敗したよ。もう一度試してね');
+      return;
+    }
+
+    // 前回の報告メッセージからボタンを外す（ボタンは最新の報告にだけ付ける）
+    const prev = await dbQuery('SELECT last_report_channel_id,last_report_message_id FROM message_reports WHERE guild_id=$1 AND message_id=$2',[guildId,msg.id]);
+    if(prev.rowCount && prev.rows[0].last_report_message_id){
+      const pc = await interaction.guild.channels.fetch(prev.rows[0].last_report_channel_id).catch(()=>null);
+      const pm = pc ? await pc.messages.fetch(prev.rows[0].last_report_message_id).catch(()=>null) : null;
+      if(pm) await pm.edit({components:[]}).catch(()=>{});
+    }
+    await dbQuery(`INSERT INTO message_reports (guild_id,message_id,author_id,last_report_channel_id,last_report_message_id) VALUES ($1,$2,$3,$4,$5)
+      ON CONFLICT (guild_id,message_id) DO UPDATE SET last_report_channel_id=$4,last_report_message_id=$5`,
+      [guildId,msg.id,msg.author.id,reportCh.id,sent.id]);
+
+    await reply('管理者にこっそり報告したよ。報告したことは他の人には見えないよ');
+  }catch(e){
+    console.error('[報告] エラー:', e.message);
+    await interaction.editReply({content:'報告に失敗したよ…'}).catch(()=>{});
+  }
+}
+
+// 報告メッセージのボタン（タイムアウト/キック/BAN）
+async function handleReportButton(interaction){
+  const parts = interaction.customId.split(':'); // rpt:to:<userId>:<minutes> / rpt:kick:<userId> / rpt:ban:<userId>
+  const action = parts[1], userId = parts[2];
+  const PF = PermissionFlagsBits;
+  const need = action==='ban' ? PF.BanMembers : action==='kick' ? PF.KickMembers : PF.ModerateMembers;
+  if(!interaction.guild || !interaction.memberPermissions?.has(need)){
+    await interaction.reply({content:'この操作をする権限がないよ', ephemeral:true});
+    return;
+  }
+  await interaction.deferReply({ephemeral:true});
+  const guild = interaction.guild;
+  const by = `報告メッセージへの対応: ${interaction.user.tag}`;
+  let doneText = '', dmText = '';
+  try{
+    if(action==='ban'){
+      await guild.members.ban(userId,{reason:by});
+      doneText = 'BAN'; dmText = `**${guild.name}** からBANされたよ（管理者による対応）`;
+    }else{
+      const member = await guild.members.fetch(userId).catch(()=>null);
+      if(!member){ await interaction.editReply({content:'そのユーザーはもうサーバーにいないみたい'}); return; }
+      if(action==='kick'){
+        await member.kick(by);
+        doneText = 'キック'; dmText = `**${guild.name}** からキックされたよ（管理者による対応）`;
+      }else if(action==='to'){
+        const t = REPORT_TIMEOUTS.find(x=>String(x.minutes)===parts[3]);
+        if(!t){ await interaction.editReply({content:'不明な操作だよ'}); return; }
+        await member.timeout(t.minutes*60*1000, by);
+        doneText = `タイムアウト（${t.label}）`; dmText = `**${guild.name}** でタイムアウトされたよ（${t.label}・管理者による対応）`;
+      }else{ await interaction.editReply({content:'不明な操作だよ'}); return; }
+    }
+  }catch(e){
+    console.error('[報告] 対応エラー:', e.message);
+    await interaction.editReply({content:`実行に失敗したよ: ${e.message}\n（botの権限と、対象より上のロールかを確認してね）`});
+    return;
+  }
+  // 対象ユーザーへのDM（報告があったことは伝えない）
+  const target = await interaction.client.users.fetch(userId).catch(()=>null);
+  if(target) target.send(dmText).catch(()=>{});
+  // 報告メッセージを更新: ボタンを外して対応内容を追記
+  try{
+    const { EmbedBuilder } = require('discord.js');
+    const embed = EmbedBuilder.from(interaction.message.embeds[0])
+      .addFields({name:'対応', value:`${doneText}（実行者: <@${interaction.user.id}>・<t:${Math.floor(Date.now()/1000)}:F>）`})
+      .setColor(0x95a5a6);
+    await interaction.message.edit({embeds:[embed], components:[]});
+  }catch(e){ console.error('[報告] 表示更新エラー:', e.message); }
+  await interaction.editReply({content:`${doneText}を実行したよ`});
+}
+
 async function checkDiscordNgWords(message) {
   if (!message.guild) return;
   const excl = await dbQuery('SELECT 1 FROM discord_ng_exclude_channels WHERE guild_id=$1 AND channel_id=$2', [message.guild.id, message.channel.id]);
@@ -460,6 +603,22 @@ async function initializeDatabase() {
       guild_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       UNIQUE(guild_id, user_id))`);
+    // メッセージの「こっそり報告」: 報告者ごとの記録（回数は人数で数える）と、最新の報告メッセージの位置
+    await dbQuery(`CREATE TABLE IF NOT EXISTS message_report_entries (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      reporter_id TEXT NOT NULL,
+      reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(guild_id, message_id, reporter_id))`);
+    await dbQuery(`CREATE TABLE IF NOT EXISTS message_reports (
+      id SERIAL PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      author_id TEXT NOT NULL,
+      last_report_channel_id TEXT,
+      last_report_message_id TEXT,
+      UNIQUE(guild_id, message_id))`);
 
     await dbQuery(`CREATE TABLE IF NOT EXISTS points (
       id SERIAL PRIMARY KEY, room_id BIGINT NOT NULL, account_id BIGINT NOT NULL,
@@ -2237,6 +2396,7 @@ if(DISCORD_BOT_TOKEN){
       new SlashCommandBuilder().setName('ongeki-info').setDescription('オンゲキの譜面情報を表示するよ')
         .addStringOption(o=>o.setName('music').setDescription('楽曲名').setRequired(true).setAutocomplete(true))
         .addStringOption(o=>o.setName('difficulty').setDescription('難易度').setRequired(true).addChoices(...Object.keys(ONGEKI_DIFF_KEYS).map(d=>({name:d,value:d})))),
+      new SlashCommandBuilder().setName('report-channel').setDescription('このチャンネルを報告されたメッセージの送信先に設定するよ').setDefaultMemberPermissions(ADMIN_PERM),
       new SlashCommandBuilder().setName('ng').setDescription('NGワードを管理するよ')
         .addSubcommand(s=>s.setName('add').setDescription('NGワードを追加するよ').addStringOption(o=>o.setName('pattern').setDescription('NG文字列（スペース・カンマ区切りで複数可）').setRequired(true)).addBooleanOption(o=>o.setName('is-regex').setDescription('正規表現として扱う')))
         .addSubcommand(s=>s.setName('list').setDescription('NGワード一覧を表示するよ'))
@@ -2250,6 +2410,7 @@ if(DISCORD_BOT_TOKEN){
         .addSubcommand(s=>s.setName('remove').setDescription('管理者ロールを削除するよ').addRoleOption(o=>o.setName('role').setDescription('削除するロール').setRequired(true)))
         .addSubcommand(s=>s.setName('list').setDescription('管理者ロール一覧を表示するよ'))
         .setDefaultMemberPermissions(ADMIN_PERM),
+      new ContextMenuCommandBuilder().setName(REPORT_CTX_NAME).setType(ApplicationCommandType.Message).setDMPermission(false),
     ].map(c=>c.toJSON());
 
     try{
@@ -2326,6 +2487,7 @@ if(DISCORD_BOT_TOKEN){
           '`/chunithm-info [music] [difficulty]` - CHUNITHMの譜面情報（レベル・譜面定数・ノーツ数など）',
           '`/ongeki-info [music] [difficulty]` - オンゲキの譜面情報（レベル・譜面定数）',
           '`/contact [message]` - 管理者に問い合わせる（専用チャンネルが作られるよ）',
+          '「メッセージを長押し → アプリ → 管理者にこっそり報告」 - 問題のあるメッセージを管理者にだけ報告する（報告したことは他の人には見えないよ）',
           '`/event add/list/delete` - イベント管理',
           '',
           '`/join` / `/leave` - VCに参加・退出',
@@ -2356,6 +2518,7 @@ if(DISCORD_BOT_TOKEN){
           '`/eew` - 地震情報チャンネル設定',
           '`/eew-test` - EEWテスト地図生成',
           '`/nhk` - NHK速報・気象庁情報チャンネル設定',
+          '`/report-channel` - 報告されたメッセージの送信先チャンネル設定（タイムアウト・キック・BANのボタン付き）',
           '`/join-notice` / `/leveling` / `/chatwork` / `/bbs` / `/admin` / `/log` - チャンネル設定',
         ];
         await reply(lines.join('\n'), {title:'コマンド一覧'}); return;
@@ -2693,6 +2856,7 @@ if(DISCORD_BOT_TOKEN){
       const CH_CMD_MAP = {
         'eew': {label:'地震情報', type:'eew'},
         'nhk': {label:'NHK速報', type:'nhk'},
+        'report-channel': {label:'報告されたメッセージの送信先', type:'report'},
         'join-notice': {label:'入室通知', type:'join_notice'},
         'leveling': {label:'レベルアップ通知', type:'leveling'},
         'chatwork': {label:'Chatwork連携', type:'chatwork'},
@@ -3203,6 +3367,14 @@ if(DISCORD_BOT_TOKEN){
         value: s.id,
       })));
     }catch(e){ console.error('[楽曲検索] オートコンプリートエラー:', e.message); }
+  });
+
+  // メッセージのこっそり報告（コンテキストメニュー）と、報告メッセージのボタン
+  discordClient.on(Events.InteractionCreate, async(interaction)=>{
+    try{
+      if(interaction.isMessageContextMenuCommand() && interaction.commandName===REPORT_CTX_NAME){ await handleMessageReport(interaction); return; }
+      if(interaction.isButton() && interaction.customId.startsWith('rpt:')){ await handleReportButton(interaction); }
+    }catch(e){ console.error('[報告] リスナーエラー:', e.message); }
   });
 
   discordClient.on(Events.MessageUpdate, async(oldMsg, newMsg)=>{
